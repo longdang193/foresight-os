@@ -1,0 +1,244 @@
+{
+  "investigation_id": "case-001",
+  "revision": 1,
+  "evidence": [
+    {
+      "id": "evidence-northern-europe-demand_index-2024",
+      "source_locator": {
+        "file_version": "case-001-v1",
+        "sheet": "Demand",
+        "range": "A2:F2",
+        "units": "index",
+        "transformation": "none",
+        "calculation": "source value"
+      },
+      "version": "case-001-v1",
+      "date": "2024-01-01",
+      "excerpt": "Northern Europe 2024 demand_index=100 index (observed).",
+      "limitations": [
+        "Synthetic case; capacity expansion cost is not included."
+      ]
+    },
+    {
+      "id": "evidence-northern-europe-demand_index-2030",
+      "source_locator": {
+        "file_version": "case-001-v1",
+        "sheet": "Demand",
+        "range": "A3:F3",
+        "units": "index",
+        "transformation": "none",
+        "calculation": "source value"
+      },
+      "version": "case-001-v1",
+      "date": "2030-01-01",
+      "excerpt": "Northern Europe 2030 demand_index=140 index (forecast).",
+      "limitations": [
+        "Synthetic case; capacity expansion cost is not included."
+      ]
+    },
+    {
+      "id": "evidence-northern-europe-capacity_index-2030",
+      "source_locator": {
+        "file_version": "case-001-v1",
+        "sheet": "Demand",
+        "range": "A4:F4",
+        "units": "index",
+        "transformation": "none",
+        "calculation": "source value"
+      },
+      "version": "case-001-v1",
+      "date": "2030-01-01",
+      "excerpt": "Northern Europe 2030 capacity_index=115 index (forecast).",
+      "limitations": [
+        "Synthetic case; capacity expansion cost is not included."
+      ]
+    },
+    {
+      "id": "evidence-southern-europe-demand_index-2024",
+      "source_locator": {
+        "file_version": "case-001-v1",
+        "sheet": "Demand",
+        "range": "A5:F5",
+        "units": "index",
+        "transformation": "none",
+        "calculation": "source value"
+      },
+      "version": "case-001-v1",
+      "date": "2024-01-01",
+      "excerpt": "Southern Europe 2024 demand_index=100 index (observed).",
+      "limitations": [
+        "Synthetic case; capacity expansion cost is not included."
+      ]
+    },
+    {
+      "id": "evidence-southern-europe-demand_index-2030",
+      "source_locator": {
+        "file_version": "case-001-v1",
+        "sheet": "Demand",
+        "range": "A6:F6",
+        "units": "index",
+        "transformation": "none",
+        "calculation": "source value"
+      },
+      "version": "case-001-v1",
+      "date": "2030-01-01",
+      "excerpt": "Southern Europe 2030 demand_index=112 index (forecast).",
+      "limitations": [
+        "Synthetic case; capacity expansion cost is not included."
+      ]
+    },
+    {
+      "id": "evidence-southern-europe-capacity_index-2030",
+      "source_locator": {
+        "file_version": "case-001-v1",
+        "sheet": "Demand",
+        "range": "A7:F7",
+        "units": "index",
+        "transformation": "none",
+        "calculation": "source value"
+      },
+      "version": "case-001-v1",
+      "date": "2030-01-01",
+      "excerpt": "Southern Europe 2030 capacity_index=120 index (forecast).",
+      "limitations": [
+        "Synthetic case; capacity expansion cost is not included."
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "id": "claim-northern-demand-growth",
+      "statement": "Northern Europe demand is forecast to rise from index 100 in 2024 to 140 in 2030.",
+      "basis": "DERIVED",
+      "assessment": "SUPPORTED",
+      "lifecycle": "CURRENT",
+      "evidence_ids": [
+        "evidence-northern-europe-demand_index-2024",
+        "evidence-northern-europe-demand_index-2030"
+      ],
+      "relationship_ids": [
+        "relationship-demand-growth"
+      ]
+    },
+    {
+      "id": "claim-northern-capacity-gap",
+      "statement": "Northern Europe capacity is forecast to reach index 115 in 2030, below forecast demand of 140.",
+      "basis": "DERIVED",
+      "assessment": "SUPPORTED",
+      "lifecycle": "CURRENT",
+      "evidence_ids": [
+        "evidence-northern-europe-demand_index-2030",
+        "evidence-northern-europe-capacity_index-2030"
+      ],
+      "relationship_ids": [
+        "relationship-capacity-gap"
+      ]
+    }
+  ],
+  "implications": [
+    {
+      "id": "implication-capacity-constrained-growth",
+      "statement": "Growth creates a capacity constraint that must be resolved before scaling service commitments.",
+      "basis": "DERIVED",
+      "assessment": "SUPPORTED",
+      "lifecycle": "CURRENT",
+      "evidence_ids": [
+        "evidence-northern-europe-demand_index-2030",
+        "evidence-northern-europe-capacity_index-2030"
+      ],
+      "relationship_ids": [
+        "relationship-claim-implication"
+      ]
+    }
+  ],
+  "recommendations": [
+    {
+      "id": "recommendation-northern-attention",
+      "statement": "Increase strategic attention on Northern Europe, conditional on validating expansion cost.",
+      "basis": "DERIVED",
+      "assessment": "SUPPORTED",
+      "lifecycle": "CURRENT",
+      "evidence_ids": [
+        "evidence-northern-europe-demand_index-2030",
+        "evidence-northern-europe-capacity_index-2030"
+      ],
+      "relationship_ids": [
+        "relationship-implication-recommendation",
+        "relationship-recommendation-artifact"
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "artifact-executive-report",
+      "kind": "executive-report",
+      "path": "work\\case-001\\artifacts\\executive-report.md",
+      "lifecycle": "CURRENT",
+      "relationship_ids": [
+        "relationship-recommendation-artifact"
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "id": "relationship-demand-growth",
+      "from_id": "evidence-northern-europe-demand_index-2030",
+      "to_id": "claim-northern-demand-growth",
+      "relation_type": "supports"
+    },
+    {
+      "id": "relationship-capacity-gap",
+      "from_id": "evidence-northern-europe-capacity_index-2030",
+      "to_id": "claim-northern-capacity-gap",
+      "relation_type": "supports"
+    },
+    {
+      "id": "relationship-claim-implication",
+      "from_id": "claim-northern-capacity-gap",
+      "to_id": "implication-capacity-constrained-growth",
+      "relation_type": "informs"
+    },
+    {
+      "id": "relationship-implication-recommendation",
+      "from_id": "implication-capacity-constrained-growth",
+      "to_id": "recommendation-northern-attention",
+      "relation_type": "supports"
+    },
+    {
+      "id": "relationship-recommendation-artifact",
+      "from_id": "recommendation-northern-attention",
+      "to_id": "artifact-executive-report",
+      "relation_type": "produces"
+    }
+  ],
+  "revisions": [
+    {
+      "id": "revision-1",
+      "number": 1,
+      "change_reason": "accepted benchmark analysis",
+      "record_ids": [
+        "evidence-northern-europe-demand_index-2024",
+        "evidence-northern-europe-demand_index-2030",
+        "evidence-northern-europe-capacity_index-2030",
+        "evidence-southern-europe-demand_index-2024",
+        "evidence-southern-europe-demand_index-2030",
+        "evidence-southern-europe-capacity_index-2030",
+        "claim-northern-demand-growth",
+        "claim-northern-capacity-gap",
+        "implication-capacity-constrained-growth",
+        "recommendation-northern-attention",
+        "artifact-executive-report",
+        "relationship-demand-growth",
+        "relationship-capacity-gap",
+        "relationship-claim-implication",
+        "relationship-implication-recommendation",
+        "relationship-recommendation-artifact"
+      ]
+    }
+  ],
+  "invalidation": {
+    "stale_artifact_ids": [],
+    "reassessment_ids": [],
+    "reasons": []
+  }
+}

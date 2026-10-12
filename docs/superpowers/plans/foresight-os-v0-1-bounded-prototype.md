@@ -2,7 +2,7 @@
 artifact_type: plan
 template_id: implementation-plan
 contract_version: "1"
-status: proposed
+status: completed
 layer: change
 name: foresight-os-v0-1-bounded-prototype
 targets:
@@ -89,22 +89,22 @@ README owns stable product architecture and the runtime vocabulary. A small `doc
 
 - Coordination owner: `single Implementation Controller`
 - Coordination schema: `2`
-- Branch: `unresolved — current workspace is not a Git checkout`
-- Base commit: `unresolved — no Git metadata is available`
-- Expected workspace: `current workspace after Git checkout or attachment is established; no unrelated preserved changes`
-- Next action: `establish or attach the intended Git checkout, then begin Task 1`
-- Blockers: `Git workspace identity and MAF runtime/dependency availability must be resolved before activation`
+- Branch: `main`
+- Base commit: `4b158458b0c63522d71cde69e34632164a6d292a`
+- Expected workspace: `current workspace; no unrelated preserved changes`
+- Next action: `none — Implementation Plan verified`
+- Blockers: `none`
 
 | Task | State | Workspace | Executor | Depends On | Required Proof | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| Task 1 | `pending` | current | `unresolved` | none | `python -m pytest tests/test_evaluation_contract.py` | pending |
-| Task 2 | `pending` | current | `unresolved` | Task 1 | `python -m pytest tests/test_maf_fit.py` | pending |
-| Task 3 | `pending` | current | `unresolved` | Tasks 1–2 | `python -m pytest tests/test_analysis_schema.py tests/test_persistence.py` | pending |
-| Task 4 | `pending` | current | `unresolved` | Tasks 1–3 | `python -m pytest tests/test_vertical_slice.py tests/test_report_fidelity.py` | pending |
-| Task 5 | `pending` | current | `unresolved` | Task 4 | `python -m pytest tests/test_recovery.py tests/test_invalidation.py` | pending |
-| Task 6 | `pending` | current | `unresolved` | Tasks 1–5 | `python -m pytest tests/test_controller_selection.py` | pending |
-| Task 7 | `pending` | current | `unresolved` | Tasks 5–6 | `python -m pytest tests/test_client_continuation.py` | pending |
-| Task 8 | `pending` | current | `unresolved` | Tasks 1–7 | `python -m pytest` plus evaluation report | pending |
+| Task 1 | `completed` | current | `Codex` | none | `python -m pytest tests/test_evaluation_contract.py` | `4 passed` |
+| Task 2 | `completed` | current | `Codex` | Task 1 | `python -m pytest tests/test_maf_fit.py` | `4 passed; agent-framework==1.21.0; provider boundary recorded` |
+| Task 3 | `completed` | current | `Codex` | Tasks 1–2 | `python -m pytest tests/test_analysis_schema.py tests/test_persistence.py` | `6 passed; validated work/case-001 fixture` |
+| Task 4 | `completed` | current | `Codex` | Tasks 1–3 | `python -m pytest tests/test_vertical_slice.py tests/test_report_fidelity.py` | `5 passed; native MAF sequence and CLI smoke passed` |
+| Task 5 | `completed` | current | `Codex` | Task 4 | `python -m pytest tests/test_recovery.py tests/test_invalidation.py` | `5 passed; stale artifact and topology boundaries proven` |
+| Task 6 | `completed` | current | `Codex` | Tasks 1–5 | `python -m pytest tests/test_controller_selection.py` | `3 passed; A/B/C report and Concurrent/Handoff probes deferred both` |
+| Task 7 | `completed` | current | `Codex` | Tasks 5–6 | `python -m pytest tests/test_client_continuation.py` | `2 passed; CLI four-flow smoke passed; second client deferred to v0.2` |
+| Task 8 | `completed` | current | `Codex` | Tasks 1–7 | `python -m pytest` plus evaluation report | `30 passed; compileall passed; evaluation/report/validator passed` |
 
 ## Task Breakdown
 
@@ -150,17 +150,17 @@ README owns stable product architecture and the runtime vocabulary. A small `doc
 - Stop for: missing or unapproved workbook data, external dataset access, a change to the decision question or acceptance rubric, or any request to optimize for coordination metrics.
 
 **Steps:**
-- [ ] Step 1: Choose one decision-anchored question with owner, horizon, and materiality criteria; record provisional assumptions and unresolved dependencies.
-- [ ] Step 2: Create one frozen workbook case with reproducible source locators, expected traps, reference findings, and a human-verification protocol.
-- [ ] Step 3: Define scoring for supported-claim precision, coverage, contradiction precision/recall, traceability, cost per accepted finding, verification effort, recovery success, and maintainability cost.
-- [ ] Step 4: Define level A, level B, and level C inputs, common scoring/adjudication, and acceptance gates; level A remains ordinary-prompt only, while levels B/C share the same evidence contract and C differs from B only by coordination.
+- [x] Step 1: Choose one decision-anchored question with owner, horizon, and materiality criteria; record provisional assumptions and unresolved dependencies.
+- [x] Step 2: Create one frozen workbook case with reproducible source locators, expected traps, reference findings, and a human-verification protocol.
+- [x] Step 3: Define scoring for supported-claim precision, coverage, contradiction precision/recall, traceability, cost per accepted finding, verification effort, recovery success, and maintainability cost.
+- [x] Step 4: Define level A, level B, and level C inputs, common scoring/adjudication, and acceptance gates; level A remains ordinary-prompt only, while levels B/C share the same evidence contract and C differs from B only by coordination.
 
 **Verification:**
-- [ ] `python -m pytest tests/test_evaluation_contract.py`
+- [x] `python -m pytest tests/test_evaluation_contract.py`
 - Expected: the case, rubric, reference findings, three comparison levels, and baseline contracts are present, schema-valid, deterministic, and do not contain hidden customer data.
 
 **Exit Criteria:**
-- Evaluation can be rerun by another engineer without inventing the question, traps, reference findings, scoring rules, or baseline constraints.
+- Evaluation can be rerun by another engineer without inventing the question, traps, reference findings, scoring rules, or baseline constraints. Evidence: `tests/test_evaluation_contract.py` passed with 4 tests.
 
 ### Task 2: Prove MAF fit with native capabilities
 
@@ -202,25 +202,25 @@ README owns stable product architecture and the runtime vocabulary. A small `doc
 - Stop for: dependency installation, authentication, network/model access, undocumented checkpoint semantics, or any need for a custom orchestration primitive.
 
 **Steps:**
-- [ ] Step 1: Pin the runtime and MAF package versions in `pyproject.toml`; record why the selected runtime is the smallest viable prototype surface.
-- [ ] Step 2: Implement a probe for single-agent execution, sequential review, human input, structured output, and compatible checkpoint/restart.
-- [ ] Step 3: Record observed success, failure, state, and side-effect behavior, including how a changed topology must start a new workflow instead of resuming an incompatible checkpoint.
-- [ ] Step 4: For every tested capability, record exactly one decision: `USE_NATIVE`, `ADAPT_AT_BOUNDARY`, `DEFER`, or `UNSUPPORTED`.
-- [ ] Step 5: Record the minimal vertical-slice guardrail contract: `max_agent_steps: 5` per role, `max_correction_rounds: 1`, `max_total_agent_calls: 3`, and exhaustion behavior of no accepted recommendation plus a human decision/review boundary.
-- [ ] Step 6: Record only the MAF capability decision, guardrail contract, and implementation boundary in `docs/intent/maf-capability-decision.md`; keep stable product architecture in `README.md`.
+- [x] Step 1: Pin the runtime and MAF package versions in `pyproject.toml`; record why the selected runtime is the smallest viable prototype surface.
+- [x] Step 2: Implement a probe for single-agent execution, sequential review, human input, structured output, and compatible checkpoint/restart.
+- [x] Step 3: Record observed success, failure, state, and side-effect behavior, including how a changed topology must start a new workflow instead of resuming an incompatible checkpoint.
+- [x] Step 4: For every tested capability, record exactly one decision: `USE_NATIVE`, `ADAPT_AT_BOUNDARY`, `DEFER`, or `UNSUPPORTED`.
+- [x] Step 5: Record the minimal vertical-slice guardrail contract: `max_agent_steps: 5` per role, `max_correction_rounds: 1`, `max_total_agent_calls: 3`, and exhaustion behavior of no accepted recommendation plus a human decision/review boundary.
+- [x] Step 6: Record only the MAF capability decision, guardrail contract, and implementation boundary in `docs/intent/maf-capability-decision.md`; keep stable product architecture in `README.md`.
 
 **Verification:**
-- [ ] `python -m pytest tests/test_maf_fit.py`
+- [x] `python -m pytest tests/test_maf_fit.py`
 - Expected: every required capability has a reproducible pass or a concrete blocker; unsupported capabilities are not represented as implemented.
-- [ ] Inspect `docs/intent/maf-capability-decision.md`.
+- [x] Inspect `docs/intent/maf-capability-decision.md`.
 - Expected: every tested capability has one of the four decision values, with evidence and known limits; Group Chat and Magentic are explicitly `DEFER` unless a later benchmark changes scope.
-- [ ] Inspect the vertical-slice guardrail contract.
+- [x] Inspect the vertical-slice guardrail contract.
 - Expected: the shared preset is explicit and enforceable (`max_agent_steps: 5` per role, `max_correction_rounds: 1`, `max_total_agent_calls: 3`), and Task 4 can consume it without inventing its own correction or call limits.
-- [ ] Direct boundary trace from probe input to MAF run/checkpoint output is retained as a disposable or documented local test artifact.
+- [x] Direct boundary trace from probe input to MAF run/checkpoint output is retained as a disposable or documented local test artifact.
 - Expected: failure and restart behavior are observable without relying on chat history.
 
 **Exit Criteria:**
-- The supported MAF capability matrix is pinned, the runtime is known, and no downstream task depends on unproven framework behavior.
+- The supported MAF capability matrix is pinned, the runtime is known, and no downstream task depends on unproven framework behavior. Evidence: `tests/test_maf_fit.py` passed with 4 tests; provider/model execution remains an explicit boundary.
 
 ### Task 3: Define durable evidence and analytical state
 
@@ -268,19 +268,19 @@ README owns stable product architecture and the runtime vocabulary. A small `doc
 - Stop for: introducing a graph database, adding a second durable state store, storing secrets or customer data, or changing the epistemic vocabulary without updating the evaluation contract.
 
 **Steps:**
-- [ ] Step 1: Define the Work Brief schema and typed domain records for evidence, claims, implications, recommendations, artifacts, relationships, revisions, and invalidation metadata; do not add Scenario, Driver, Signal, Indicator, or Trigger records without a demonstrated vertical-slice need.
-- [ ] Step 2: Implement validation and deterministic persistence with revision history; preserve source locators and relationship IDs rather than flattening them into report text.
-- [ ] Step 3: Add idempotent load/save behavior and duplicate-ID rejection; ensure malformed or incomplete evidence fails at the trust boundary.
-- [ ] Step 4: Create a minimal persisted Investigation fixture with a validated Work Brief in `brief.md` and machine-readable Analysis State in `analysis.json`.
+- [x] Step 1: Define the Work Brief schema and typed domain records for evidence, claims, implications, recommendations, artifacts, relationships, revisions, and invalidation metadata; do not add Scenario, Driver, Signal, Indicator, or Trigger records without a demonstrated vertical-slice need.
+- [x] Step 2: Implement validation and deterministic persistence with revision history; preserve source locators and relationship IDs rather than flattening them into report text.
+- [x] Step 3: Add idempotent load/save behavior and duplicate-ID rejection; ensure malformed or incomplete evidence fails at the trust boundary.
+- [x] Step 4: Create a minimal persisted Investigation fixture with a validated Work Brief in `brief.md` and machine-readable Analysis State in `analysis.json`.
 
 **Verification:**
-- [ ] `python -m pytest tests/test_analysis_schema.py tests/test_persistence.py`
+- [x] `python -m pytest tests/test_analysis_schema.py tests/test_persistence.py`
 - Expected: valid records round-trip; invalid locators, missing relationships, duplicate IDs, unsupported states, and malformed revisions fail clearly without partial writes.
-- [ ] Inspect a persisted fixture and reconstruct one evidence-to-claim-to-recommendation lineage.
+- [x] Inspect a persisted fixture and reconstruct one evidence-to-claim-to-recommendation lineage.
 - Expected: every relationship is recoverable from IDs and revision metadata.
 
 **Exit Criteria:**
-- Durable analytical state is versioned, validated, reproducible, and small enough to inspect without a graph database.
+- Durable analytical state is versioned, validated, reproducible, and small enough to inspect without a graph database. Evidence: six schema/persistence tests passed and `work/case-001/` round-trips.
 
 ### Task 4: Build the workbook-to-report vertical slice
 
@@ -322,21 +322,21 @@ README owns stable product architecture and the runtime vocabulary. A small `doc
 - Stop for: external data access, unbounded agent loops, unsupported workbook formats, report claims without evidence IDs, or the human decision/review boundary being bypassed for consequential recommendations.
 
 **Steps:**
-- [ ] Step 1: Have Wayfinding maintain the Work Brief with decision question, owner, horizon, criteria, scope, assumptions, deliverables, unresolved dependencies, and next useful step; allow provisional values without blocking unless materially necessary.
-- [ ] Step 2: Extract reproducible workbook evidence locators and create draft claims, implications, and recommendation rationale with explicit basis and assessment.
-- [ ] Step 3: Run evidence and reasoning review for period, units, population, calculation, opposing evidence, alternative explanations, assumptions, and recommendation sensitivity.
-- [ ] Step 4: Consume the Task 2 vertical-slice guardrail (`max_agent_steps: 5` per role, `max_correction_rounds: 1`, `max_total_agent_calls: 3`), exercise correction and call exhaustion, and then exercise the human decision/review boundary; require acceptance for the benchmark case, persist the accepted revision, and generate a report whose material statements retain source record IDs.
+- [x] Step 1: Have Wayfinding maintain the Work Brief with decision question, owner, horizon, criteria, scope, assumptions, deliverables, unresolved dependencies, and next useful step; allow provisional values without blocking unless materially necessary.
+- [x] Step 2: Extract reproducible workbook evidence locators and create draft claims, implications, and recommendation rationale with explicit basis and assessment.
+- [x] Step 3: Run evidence and reasoning review for period, units, population, calculation, opposing evidence, alternative explanations, assumptions, and recommendation sensitivity.
+- [x] Step 4: Consume the Task 2 vertical-slice guardrail (`max_agent_steps: 5` per role, `max_correction_rounds: 1`, `max_total_agent_calls: 3`), exercise correction and call exhaustion, and then exercise the human decision/review boundary; require acceptance for the benchmark case, persist the accepted revision, and generate a report whose material statements retain source record IDs.
 
 **Verification:**
-- [ ] `python -m pytest tests/test_vertical_slice.py tests/test_report_fidelity.py`
+- [x] `python -m pytest tests/test_vertical_slice.py tests/test_report_fidelity.py`
 - Expected: the frozen case produces a valid analysis, rejected unsupported claims remain rejected or uncertain, accepted benchmark claims retain traceable locators, report wording matches the validated analysis, and assertions prove the shared step, correction, and total-call limits plus the exhaustion outcome and human-boundary routing.
-- [ ] Direct boundary test with an invalid workbook locator and a contradictory evidence record.
+- [x] Direct boundary test with an invalid workbook locator and a contradictory evidence record.
 - Expected: the run returns actionable validation/review results, does not silently accept the finding, and leaves no partial accepted recommendation.
-- [ ] Reconstruct one representative operation from run ID, analysis revision, evidence IDs, and artifact metadata.
+- [x] Reconstruct one representative operation from run ID, analysis revision, evidence IDs, and artifact metadata.
 - Expected: the trace identifies the source, review decision, accepted revision, and generated artifact.
 
 **Exit Criteria:**
-- The vertical slice proves decision usefulness, evidence integrity, traceability, uncertainty, the benchmark’s formal acceptance gate, and report fidelity for one workbook case.
+- The vertical slice proves decision usefulness, evidence integrity, traceability, uncertainty, the benchmark’s formal acceptance gate, and report fidelity for one workbook case. Evidence: five focused slice/report tests passed; native MAF sequence and CLI acceptance smoke passed.
 
 ### Task 5: Add analytical continuation and dependency invalidation
 
@@ -378,24 +378,24 @@ README owns stable product architecture and the runtime vocabulary. A small `doc
 - Stop for: deleting historical evidence, silently rewriting prior revisions, resuming after topology change, or introducing a second runtime-state store.
 
 **Steps:**
-- [ ] Step 1: Record dependency edges from evidence through claims, implications, recommendations, and artifacts.
-- [ ] Step 2: On material evidence, assumption, or scope change, mark dependent outputs for reassessment and artifacts stale while preserving prior revisions.
-- [ ] Step 3: Implement separate commands or entry points for analytical continuation and compatible runtime checkpoint resumption.
-- [ ] Step 4: Execute the Session-1/Session-2 scenario in a fresh process: analyze, close, load the Work Brief and Analysis State, add evidence, change scope, and start a new Run to regenerate the report.
-- [ ] Step 5: Change an upstream assumption without changing supporting evidence; verify semantic reassessment of dependent outputs while the original evidence remains current.
+- [x] Step 1: Record dependency edges from evidence through claims, implications, recommendations, and artifacts.
+- [x] Step 2: On material evidence, assumption, or scope change, mark dependent outputs for reassessment and artifacts stale while preserving prior revisions.
+- [x] Step 3: Implement separate commands or entry points for analytical continuation and compatible runtime checkpoint resumption.
+- [x] Step 4: Execute the Session-1/Session-2 scenario in a fresh process: analyze, close, load the Work Brief and Analysis State, add evidence, change scope, and start a new Run to regenerate the report.
+- [x] Step 5: Change an upstream assumption without changing supporting evidence; verify semantic reassessment of dependent outputs while the original evidence remains current.
 
 **Verification:**
-- [ ] `python -m pytest tests/test_recovery.py tests/test_invalidation.py`
+- [x] `python -m pytest tests/test_recovery.py tests/test_invalidation.py`
 - Expected: changed source evidence invalidates all reachable dependent outputs; unaffected branches remain current; historical revisions remain readable.
-- [ ] Run the continuation flow in a fresh Session with no prior chat/session state.
+- [x] Run the continuation flow in a fresh Session with no prior chat/session state.
 - Expected: evidence and accepted decisions survive, stale outputs are not silently reused, and repeated recovery does not duplicate records.
-- [ ] Change an upstream assumption without changing its evidence.
+- [x] Change an upstream assumption without changing its evidence.
 - Expected: dependent implications and recommendations require reassessment, dependent artifacts are stale, and the original evidence remains unchanged/current.
-- [ ] Exercise duplicate delivery and interrupted execution.
+- [x] Exercise duplicate delivery and interrupted execution.
 - Expected: persistence is idempotent and compatible checkpoints resume only when topology and contract match.
 
 **Exit Criteria:**
-- The prototype can continue an Investigation across Sessions and can explain why any dependent Recommendation or Artifact must be reassessed.
+- The prototype can continue an Investigation across Sessions and can explain why any dependent Recommendation or Artifact must be reassessed. Evidence: five recovery/invalidation tests passed, including stale-artifact and incompatible-topology failures.
 
 ### Task 6: Add bounded Foresight Controller selection and benchmark one extra pattern
 
@@ -440,24 +440,24 @@ README owns stable product architecture and the runtime vocabulary. A small `doc
 - Stop for: adding Group Chat or Magentic, unbounded dynamic orchestration, a new recipe without benchmark evidence, or a budget change that invalidates prior comparisons.
 
 **Steps:**
-- [ ] Step 1: Have the Foresight Controller read the Work Brief and produce an Execution Recipe, then implement `DIRECT`, `ANALYZE`, and `ANALYZE_REVIEW` with explicit bounds and partial-result contracts.
-- [ ] Step 2: Implement only coarse presets such as normal/high/xhigh correction and step limits; consume provider/runtime telemetry where available and do not add custom token accounting.
-- [ ] Step 3: Run level A with ordinary-prompt inputs and levels B/C with identical level-B inputs and evidence requirements through capable single-agent, semantic single-agent, bounded sequential-review, and Foresight Controller-selected paths; apply the common rubric and adjudication to all results.
-- [ ] Step 4: Run a bounded, evaluation-only candidate probe for both `Concurrent` and `Handoff` using the same level-B inputs and acceptance rubric; compare each candidate against the semantic single-agent and sequential-review baselines without production admission, then admit at most one pattern only if its result passes the acceptance gate for measurable accepted-finding quality or recovery value within the accepted cost/latency budget; otherwise defer both.
-- [ ] Step 5: Record the decision and defer unsupported patterns rather than creating speculative abstractions.
+- [x] Step 1: Have the Foresight Controller read the Work Brief and produce an Execution Recipe, then implement `DIRECT`, `ANALYZE`, and `ANALYZE_REVIEW` with explicit bounds and partial-result contracts.
+- [x] Step 2: Implement only coarse presets such as normal/high/xhigh correction and step limits; consume provider/runtime telemetry where available and do not add custom token accounting.
+- [x] Step 3: Run level A with ordinary-prompt inputs and levels B/C with identical level-B inputs and evidence requirements through capable single-agent, semantic single-agent, bounded sequential-review, and Foresight Controller-selected paths; apply the common rubric and adjudication to all results.
+- [x] Step 4: Run a bounded, evaluation-only candidate probe for both `Concurrent` and `Handoff` using the same level-B inputs and acceptance rubric; compare each candidate against the semantic single-agent and sequential-review baselines without production admission, then admit at most one pattern only if its result passes the acceptance gate for measurable accepted-finding quality or recovery value within the accepted cost/latency budget; otherwise defer both.
+- [x] Step 5: Record the decision and defer unsupported patterns rather than creating speculative abstractions.
 
 **Verification:**
-- [ ] `python -m pytest tests/test_controller_selection.py`
+- [x] `python -m pytest tests/test_controller_selection.py`
 - Expected: every run terminates within declared call, correction, and coarse profile bounds and reports completion, escalation, or partial-result state explicitly.
-- [ ] `python evaluation/run.py --case evaluation/cases/case-001 --compare ordinary,semantic,sequential,controller`
+- [x] `python evaluation/run.py --case evaluation/cases/case-001 --compare ordinary,semantic,sequential,controller`
 - Expected: comparative results isolate ordinary-prompt value, Foresight semantic/governance value, sequential-review value, and additional coordination value.
-- [ ] `python evaluation/run.py --case evaluation/cases/case-001 --probe-patterns concurrent,handoff --evaluation-only --compare semantic,sequential`
+- [x] `python evaluation/run.py --case evaluation/cases/case-001 --probe-patterns concurrent,handoff --evaluation-only --compare semantic,sequential`
 - Expected: both candidate probes run against the same level-B inputs and rubric, neither candidate is production-selectable before the gate, the report records both candidate results and their baseline comparison, at most one candidate is admitted only after passing the gate, and a failed or unsupported probe leaves both candidates deferred.
-- [ ] Direct failure tests for budget exhaustion, review rejection, and partial upstream output.
+- [x] Direct failure tests for budget exhaustion, review rejection, and partial upstream output.
 - Expected: no accepted recommendation is emitted when required evidence or review conditions are unmet.
 
 **Exit Criteria:**
-- The Foresight Controller can choose one agent and can justify any additional coordination with reproducible evidence; no orchestration feature is included merely because MAF supports it.
+- The Foresight Controller can choose one agent and can justify any additional coordination with reproducible evidence; no orchestration feature is included merely because MAF supports it. Evidence: three Controller tests passed; comparison report generated; both optional patterns remain deferred.
 
 ### Task 7: Expose one required client and gate the second as stretch
 
@@ -498,19 +498,19 @@ README owns stable product architecture and the runtime vocabulary. A small `doc
 - Stop for: credentials, external publication, client-specific duplicate schemas, client-specific workflow logic, or a client boundary that cannot preserve evidence IDs and revision semantics.
 
 **Steps:**
-- [ ] Step 1: Expose the canonical local commands for continue, challenge, scope-change/reassess, and report generation.
-- [ ] Step 2: Integrate one selected client and prove all four flows from a fresh Session.
-- [ ] Step 3: If portability is an explicit v0.1 objective, add the second client only after the first client’s evidence and continuation contract is stable; otherwise record it as a v0.2 stretch item.
-- [ ] Step 4: Document that all clients consume the same durable state and do not own analytical truth.
+- [x] Step 1: Expose the canonical local commands for continue, challenge, scope-change/reassess, and report generation.
+- [x] Step 2: Integrate one selected client and prove all four flows from a fresh Session.
+- [x] Step 3: If portability is an explicit v0.1 objective, add the second client only after the first client’s evidence and continuation contract is stable; otherwise record it as a v0.2 stretch item.
+- [x] Step 4: Document that all clients consume the same durable state and do not own analytical truth.
 
 **Verification:**
-- [ ] `python -m pytest tests/test_client_continuation.py`
+- [x] `python -m pytest tests/test_client_continuation.py`
 - Expected: the required client invokes the canonical state and commands, preserves IDs and revisions, and continues without the original chat transcript; a second client is tested only when the stretch gate is accepted.
-- [ ] Direct failure test with stale artifact and unsupported scope change.
+- [x] Direct failure test with stale artifact and unsupported scope change.
 - Expected: the client surfaces reassessment rather than presenting stale output as current.
 
 **Exit Criteria:**
-- One client is proven through the canonical durable-state contract; a second client is either proven under the explicit portability gate or recorded as a v0.2 stretch item.
+- One client is proven through the canonical durable-state contract; a second client is either proven under the explicit portability gate or recorded as a v0.2 stretch item. Evidence: two client tests passed and the CLI smoke routed stale report generation to failure.
 
 ### Task 8: Reconcile documentation, deferrals, and final evidence
 
@@ -549,21 +549,21 @@ README owns stable product architecture and the runtime vocabulary. A small `doc
 - Stop for: failed required checks, missing evaluation results, stale task states, unverified external integrations, or any need to claim production readiness.
 
 **Steps:**
-- [ ] Step 1: Compare documentation, schemas, tests, fixtures, and implemented behavior; remove claims not supported by source or fresh evidence.
-- [ ] Step 2: Keep `README.md` as stable product architecture, keep `docs/intent/maf-capability-decision.md` limited to the empirical MAF decision record, keep this plan as temporary implementation truth, and keep evaluation results as empirical evidence.
-- [ ] Step 3: Record benchmark results, known gaps, selected/deferred MAF patterns, and recovery limitations.
-- [ ] Step 4: Run the final verification set and update this Implementation Plan only after evidence exists; do not mark it completed from checked boxes alone.
+- [x] Step 1: Compare documentation, schemas, tests, fixtures, and implemented behavior; remove claims not supported by source or fresh evidence.
+- [x] Step 2: Keep `README.md` as stable product architecture, keep `docs/intent/maf-capability-decision.md` limited to the empirical MAF decision record, keep this plan as temporary implementation truth, and keep evaluation results as empirical evidence.
+- [x] Step 3: Record benchmark results, known gaps, selected/deferred MAF patterns, and recovery limitations.
+- [x] Step 4: Run the final verification set and update this Implementation Plan only after evidence exists; do not mark it completed from checked boxes alone.
 
 **Verification:**
-- [ ] `python -m pytest`
+- [x] `python -m pytest`
 - Expected: all required tests pass with failures and skips recorded.
-- [ ] `python evaluation/run.py --case evaluation/cases/case-001 --compare ordinary,semantic,sequential,controller --write-report evaluation/results/case-001.md`
+- [x] `python evaluation/run.py --case evaluation/cases/case-001 --compare ordinary,semantic,sequential,controller --write-report evaluation/results/case-001.md`
 - Expected: the report contains reproducible A/B/C metrics, comparison inputs, accepted limitations, and recovery results.
-- [ ] `python -m compileall src tests`
+- [x] `python -m compileall src tests`
 - Expected: the implemented runtime compiles cleanly.
 
 **Exit Criteria:**
-- Every outcome and task is proven, all deviations and deferrals are recorded, documentation matches repository truth, and final verification returns `verified` before the plan status changes to `completed`.
+- Every outcome and task is proven, all deviations and deferrals are recorded, documentation matches repository truth, and final verification returns `verified` before the plan status changes to `completed`. Evidence: 30 tests passed; compileall passed; evaluation report includes A/B/C metrics and recovery; repository contract validation passed; provider/model execution limitation and deferred optional patterns are documented.
 
 ## Verification
 

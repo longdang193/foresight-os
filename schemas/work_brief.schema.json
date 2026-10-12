@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foresight-os.local/schemas/work-brief.schema.json",
+  "title": "Foresight OS Work Brief",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "investigation_id",
+    "decision_question",
+    "scope",
+    "desired_deliverables",
+    "assumptions",
+    "open_dependencies",
+    "current_direction",
+    "next_useful_step"
+  ],
+  "properties": {
+    "investigation_id": { "type": "string", "minLength": 1 },
+    "decision_question": { "type": "string", "minLength": 1 },
+    "scope": { "type": "array", "items": { "type": "string" } },
+    "desired_deliverables": { "type": "array", "items": { "type": "string" } },
+    "assumptions": { "type": "array", "items": { "type": "string" } },
+    "open_dependencies": { "type": "array", "items": { "type": "string" } },
+    "current_direction": { "type": "string" },
+    "next_useful_step": { "type": "string" }
+  }
+}

@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foresight-os.local/schemas/analysis.schema.json",
+  "title": "Foresight OS Analysis State",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["investigation_id", "revision", "evidence", "claims", "implications", "recommendations", "artifacts", "relationships", "revisions", "invalidation"],
+  "properties": {
+    "investigation_id": { "type": "string", "minLength": 1 },
+    "revision": { "type": "integer", "minimum": 1 },
+    "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } },
+    "claims": { "type": "array", "items": { "$ref": "#/$defs/analytical_record" } },
+    "implications": { "type": "array", "items": { "$ref": "#/$defs/analytical_record" } },
+    "recommendations": { "type": "array", "items": { "$ref": "#/$defs/analytical_record" } },
+    "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact" } },
+    "relationships": { "type": "array", "items": { "$ref": "#/$defs/relationship" } },
+    "revisions": { "type": "array", "items": { "$ref": "#/$defs/revision" } },
+    "invalidation": { "$ref": "#/$defs/invalidation" }
+  },
+  "$defs": {
+    "source_locator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file_version", "sheet", "range", "units", "transformation", "calculation"],
+      "properties": {
+        "file_version": { "type": "string", "minLength": 1 },
+        "sheet": { "type": "string", "minLength": 1 },
+        "range": { "type": "string", "minLength": 1 },
+        "units": { "type": "string", "minLength": 1 },
+        "transformation": { "type": "string", "minLength": 1 },
+        "calculation": { "type": "string", "minLength": 1 }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "source_locator", "version", "date", "excerpt", "limitations"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "source_locator": { "$ref": "#/$defs/source_locator" },
+        "version": { "type": "string", "minLength": 1 },
+        "date": { "type": "string", "minLength": 1 },
+        "excerpt": { "type": "string", "minLength": 1 },
+        "limitations": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "analytical_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "statement", "basis", "assessment", "lifecycle", "evidence_ids", "relationship_ids"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "statement": { "type": "string", "minLength": 1 },
+        "basis": { "enum": ["OBSERVED", "DERIVED", "ASSUMED"] },
+        "assessment": { "enum": ["UNASSESSED", "SUPPORTED", "UNCERTAIN", "CONTESTED", "REFUTED"] },
+        "lifecycle": { "enum": ["CURRENT", "SUPERSEDED"] },
+        "evidence_ids": { "type": "array", "items": { "type": "string" } },
+        "relationship_ids": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "path", "lifecycle", "relationship_ids"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "lifecycle": { "enum": ["CURRENT", "SUPERSEDED"] },
+        "relationship_ids": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "relationship": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "from_id", "to_id", "relation_type"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "from_id": { "type": "string", "minLength": 1 },
+        "to_id": { "type": "string", "minLength": 1 },
+        "relation_type": { "type": "string", "minLength": 1 }
+      }
+    },
+    "revision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "number", "change_reason", "record_ids"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "number": { "type": "integer", "minimum": 1 },
+        "change_reason": { "type": "string", "minLength": 1 },
+        "record_ids": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "invalidation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stale_artifact_ids", "reassessment_ids", "reasons"],
+      "properties": {
+        "stale_artifact_ids": { "type": "array", "items": { "type": "string" } },
+        "reassessment_ids": { "type": "array", "items": { "type": "string" } },
+        "reasons": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}
