@@ -46,6 +46,10 @@ class RunMetrics:
     cancellation_failures: int = 0
     budget_failures: int = 0
     cleanup_failures: int = 0
+    cleanup_failure_message: str | None = None
+    provider_requests: int | None = None
+    primary_failure_class: str | None = None
+    primary_failure_message: str | None = None
     capability_reuses: int = 0
     human_correction: int = 0
     input_tokens: int | None = None
@@ -61,9 +65,16 @@ class RunMetrics:
     settled: bool = False
 
     def record_failure(self, failure_class: FailureClass, error: BaseException) -> None:
-        self.failure_class = failure_class.value
-        self.failure_message = str(error)
-        self.failure_counts[self.failure_class] = self.failure_counts.get(self.failure_class, 0) + 1
+        if failure_class == FailureClass.CLEANUP and self.failure_class is not None:
+            self.cleanup_failure_message = str(error)
+        else:
+            self.failure_class = failure_class.value
+            self.failure_message = str(error)
+            if failure_class != FailureClass.CLEANUP:
+                self.primary_failure_class = failure_class.value
+                self.primary_failure_message = str(error)
+        key = failure_class.value
+        self.failure_counts[key] = self.failure_counts.get(key, 0) + 1
         if failure_class == FailureClass.PROVIDER:
             self.provider_failures += 1
         elif failure_class == FailureClass.TOOL:
@@ -78,6 +89,8 @@ class RunMetrics:
             self.budget_failures += 1
         elif failure_class == FailureClass.CLEANUP:
             self.cleanup_failures += 1
+            if self.cleanup_failure_message is None:
+                self.cleanup_failure_message = str(error)
 
 
 @dataclass(frozen=True)

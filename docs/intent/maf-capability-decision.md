@@ -24,6 +24,7 @@ MAF only supports OpenAI or Anthropic.
 | Human input | `ADAPT_AT_BOUNDARY` | `AgentExecutorRequest` imports; user interaction remains a client boundary. |
 | Structured output | `ADAPT_AT_BOUNDARY` | Live `9router` call returned the typed `ProbeReply` through MAF response-format handling. |
 | Checkpoint/restart | `USE_NATIVE` | `WorkflowCheckpoint` round-trips through native `FileCheckpointStorage`; process-boundary resume remains recipe-owned. |
+| Web search | `ADAPT_AT_BOUNDARY` | First-class `web_search` capability uses an injected provider adapter, public-scope authorization, runtime instrumentation, and validated `EvidenceCandidate` results; provider availability remains environment-owned. |
 | Magentic | `DEFER` | Explicitly outside the current bounded scope; it is not part of the supported pattern contract. |
 
 ## Shared vertical-slice guardrail
@@ -77,3 +78,14 @@ budgets and defaults, but cannot downgrade an implemented pattern or change
 capability admission. Candidate scoring consumes the selected recipe output and
 records sanitized quality, latency, model/tool, reuse, correction, and cleanup
 dimensions only.
+
+## External proof tiers
+
+The disposable MCP fixture is the credential-free protocol proof. The hosted-web
+probe exercises the first-class `web_search` capability through its configured
+provider adapter; real MCP remains a separate boundary. Each external provider
+requires its own approved environment configuration and actual invocation.
+Missing configuration is `BLOCKED_EXTERNAL`, not a synthetic success. Reports
+retain only endpoint host, source identity, retrieval time, typed candidate
+metadata, metrics, and cleanup status; credentials, prompts, headers, and raw
+payloads are excluded.

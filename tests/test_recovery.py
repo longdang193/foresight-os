@@ -1,4 +1,7 @@
 from pathlib import Path
+import json
+import subprocess
+import sys
 
 import pytest
 from agent_framework import WorkflowCheckpoint
@@ -31,6 +34,32 @@ def test_incompatible_checkpoint_topology_is_rejected():
     assert resume_checkpoint(checkpoint, "workflow-a", "topology-a") == checkpoint
     with pytest.raises(ValueError, match="incompatible workflow topology"):
         resume_checkpoint(checkpoint, "workflow-b", "topology-b")
+
+
+def test_pending_review_recovers_from_analysis_state_in_fresh_process(tmp_path: Path):
+    work_dir = tmp_path / "case-001"
+    run_vertical_slice(WORKBOOK, work_dir, human_accept=True)
+    store = AnalysisStore(work_dir)
+    pending = store.save_pending(store.load_analysis())
+    script = """
+import json, sys
+from pathlib import Path
+from foresight_os.persistence.analysis_store import AnalysisStore
+state = AnalysisStore(Path(sys.argv[1])).load_analysis()
+print(json.dumps({'revision': state.revision, 'status': state.revision_status.value, 'evidence': sorted(item.id for item in state.evidence)}))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(work_dir)],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={**__import__("os").environ, "PYTHONPATH": str(Path.cwd() / "src")},
+    )
+    restored = json.loads(result.stdout)
+
+    assert pending.revision == restored["revision"]
+    assert restored["status"] == "PENDING_REVIEW"
+    assert restored["evidence"] == sorted(item.id for item in pending.evidence)
 
 
 def test_stale_artifact_cannot_be_rendered_as_current(tmp_path: Path):
