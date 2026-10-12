@@ -2,7 +2,7 @@
 layer: change
 artifact_type: plan
 contract_version: "1"
-status: active
+status: completed
 template_id: implementation-plan
 name: foresight-os-recommended-next-delivery
 targets:
@@ -91,18 +91,34 @@ contract without treating benchmark measurements as capability admission.
 - Branch: `main`
 - Base commit: `5bf8031c9941f3cbdce2bbd7887eb59620a6259a`
 - Expected workspace: `clean except this proposed untracked plan`
-- Next action: `finish remaining Task 3 native-builder execution and then reconcile Tasks 4–7`
+- Next action: `preserve the completed delivery through the authorized commit and pull-request review workflow`
 - Blockers: `none`
 
 | Task | State | Workspace | Executor | Depends On | Required Proof | Evidence |
 |---|---|---|---|---|---|---|
 | Task 1 | `completed` | current | `codex` | none | persistence, migration, and calculation tests | `40 passed`; live probe pending final reconciliation |
 | Task 2 | `completed` | current | `codex` | Task 1 | vocabulary and capability contract tests | `tests/test_controller_selection.py tests/test_analysis_schema.py` passed |
-| Task 3 | `active` | current | `codex` | Tasks 1–2 | native builder and runtime-boundary tests | runtime boundary tests pass; native builder execution still open |
-| Task 4 | `pending` | current | `codex` | Tasks 2–3 | controller selection and composition tests | pending |
-| Task 5 | `pending` | current | `codex` | Tasks 1–3 | relationship, invalidation, and graph tests | pending |
-| Task 6 | `pending` | current | `codex` | Tasks 3–5 | contract, controller, quality, and live-probe matrices | pending |
-| Task 7 | `pending` | current | `codex` | Tasks 1–6 | source-truth and documentation consistency checks | pending |
+| Task 3 | `completed` | current | `codex` | Tasks 1–2 | native builder and runtime-boundary tests | `50 passed`; native Sequential/Concurrent/Group Chat execution, Handoff topology, fresh-process FileCheckpointStorage, cleanup, and sanitized 9router smokes passed |
+| Task 4 | `completed` | current | `codex` | Tasks 2–3 | controller selection and composition tests | deterministic five-shape matrix at `1.0` accuracy; override/review and bounded composition tests passed |
+| Task 5 | `completed` | current | `codex` | Tasks 1–3 | relationship, invalidation, and graph tests | revision-scoped GraphView, complete impact traversal, bounded context metadata, cycle protection, and regression tests passed |
+| Task 6 | `completed` | current | `codex` | Tasks 3–5 | contract, controller, quality, and live-probe matrices | contract/controller matrices, five case comparisons, candidate-state score mutation regression, and four live native pattern smokes passed |
+| Task 7 | `completed` | current | `codex` | Tasks 1–6 | source-truth and documentation consistency checks | README/capability/evaluation terminology reconciled; packaged schema/import smoke passed |
+
+### Execution Evidence
+
+- `python -m pytest -q`: `50 passed`.
+- `python -m compileall -q src tests` and `git diff --check`: passed.
+- Fresh wheel built and installed into a newly allocated external target; exactly
+  one wheel was found, both packaged schemas parsed, and all four native MAF
+  builders plus `run_recipe_async` imported from the installed package.
+- Configured live boundary used repository `.env` and `$HOME/.codex/config.toml`:
+  provider `9router`, model `combo-high`, endpoint
+  `http://127.0.0.1:17667/v1`, `agent-framework==1.21.0`.
+- Live native smokes for Sequential, Concurrent, Handoff, and Group Chat all
+  returned sanitized success records with settled cleanup metrics.
+- Fresh subprocess checkpoint load restored completed-stage state without
+  duplicating it; graph cycles terminated and bounded context reported
+  revision/investigation metadata.
 
 ## Decision Review
 

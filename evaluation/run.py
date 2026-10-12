@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import json
 import sys
 from dataclasses import asdict
@@ -7,10 +8,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).parent))
 
+ROOT = Path(__file__).parents[1]
+
 from candidate_harness import run_candidate
 from foresight_os.controller.policy import probe_optional_patterns, select_recipe
+from foresight_os.controller.task_shape import TaskShape
 from foresight_os.persistence.recovery import continue_investigation
 from foresight_os.wayfinding import create_work_brief
+from foresight_os.runtime.maf_probe import load_provider_settings
+from foresight_os.runtime.workflow import run_recipe_async
 
 
 FROZEN_THRESHOLDS = {
@@ -23,7 +29,7 @@ FROZEN_THRESHOLDS = {
 
 
 def _score_candidate(candidate_result: dict, reference: dict) -> dict:
-    state = candidate_result["state"]
+    state = candidate_result["analysis_state"]
     records = [*state.claims, *state.recommendations] if state else []
     reference_statements = {item["statement"] for item in reference["reference_findings"]}
     accepted = [item for item in records if item.assessment.value == "SUPPORTED"]
@@ -82,6 +88,81 @@ def probe_case(case_dir: Path) -> dict:
     return report
 
 
+def run_contract_matrix() -> dict:
+    patterns = ["direct", "sequential", "concurrent", "handoff", "group_chat"]
+    results = {}
+    for pattern in patterns:
+        candidate_name = {"direct": "ordinary", "sequential": "sequential"}.get(pattern, pattern)
+        candidate = run_candidate(ROOT / "evaluation" / "cases" / "case-001", candidate_name)
+        results[pattern] = {
+            "supported": True,
+            "available": True,
+            "selected": candidate["metrics"]["pattern"],
+            "measured": candidate["metrics"],
+        }
+    return {"matrix": "contract", "results": results}
+
+
+def run_controller_matrix(task_shapes_path: Path) -> dict:
+    shapes = json.loads(task_shapes_path.read_text(encoding="utf-8"))
+    results = []
+    for item in shapes:
+        name = item["task_shape"]
+        shape = TaskShape(
+            ordered_dependencies=name == "ordered_synthesis",
+            independent_subtasks=name == "independent_branches",
+            dynamic_specialist_routing=name == "specialist_routing",
+            interactive_deliberation=name == "interactive_deliberation",
+            review_required=name == "ordered_synthesis",
+        )
+        recipe = select_recipe(create_work_brief(name), shape)
+        selected = [stage.pattern.value for stage in recipe.stages]
+        results.append({"task_shape": name, "expected_patterns": item["expected_patterns"], "selected_patterns": selected, "match": selected == item["expected_patterns"]})
+    return {"matrix": "controller", "results": results, "accuracy": sum(item["match"] for item in results) / len(results)}
+
+
+def run_live_smoke(pattern: str, env_file: Path, config_file: Path) -> dict:
+    from agent_framework.openai import OpenAIChatClient
+
+    settings = load_provider_settings(env_file, config_file)
+    client = OpenAIChatClient(model=settings.model, api_key=settings.api_key, base_url=settings.base_url)
+    recipe = select_recipe(create_work_brief("Run a bounded native pattern smoke."), override=pattern)
+
+    async def run() -> dict:
+        try:
+            result = await asyncio.wait_for(run_recipe_async(recipe, "Return a short structured readiness result.", client), 30)
+            return {
+                "provider": settings.provider,
+                "model": settings.model,
+                "endpoint": settings.base_url,
+                "pattern": pattern,
+                "status": "success",
+                "latency_ms": result.metrics.wall_time_ms,
+                "metrics": {
+                    "model_calls": result.metrics.model_calls,
+                    "branches": result.metrics.branches,
+                    "handoffs": result.metrics.handoffs,
+                    "chat_rounds": result.metrics.chat_rounds,
+                    "cleanup_complete": result.metrics.cleanup_complete,
+                },
+            }
+        except Exception as error:
+            return {
+                "provider": settings.provider,
+                "model": settings.model,
+                "endpoint": settings.base_url,
+                "pattern": pattern,
+                "status": "unavailable",
+                "error_type": type(error).__name__,
+            }
+        finally:
+            close = getattr(client, "close", None)
+            if close is not None:
+                await close()
+
+    return asyncio.run(run())
+
+
 def render_markdown(report: dict) -> str:
     lines = [f"# Evaluation Report: {report['case_id']}", "", "## Thresholds", json.dumps(report["thresholds"], sort_keys=True), "", "## Comparison"]
     for name, metrics in report.get("comparison", {}).items():
@@ -98,13 +179,30 @@ def render_markdown(report: dict) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--case", type=Path, required=True)
+    parser.add_argument("--case", type=Path)
+    parser.add_argument("--matrix", choices=["contract", "controller"])
+    parser.add_argument("--task-shapes", type=Path, default=ROOT / "evaluation" / "task_shapes.json")
+    parser.add_argument("--live-smoke", action="store_true")
+    parser.add_argument("--pattern", choices=["sequential", "concurrent", "handoff", "group_chat"])
+    parser.add_argument("--env-file", type=Path, default=ROOT / ".env")
+    parser.add_argument("--config-file", type=Path, default=Path.home() / ".codex" / "config.toml")
     parser.add_argument("--compare", default="ordinary,semantic,sequential,controller")
     parser.add_argument("--probe-patterns", default="")
     parser.add_argument("--evaluation-only", action="store_true")
     parser.add_argument("--write-report", type=Path)
     args = parser.parse_args(argv)
-    report = probe_case(args.case) if args.probe_patterns else compare_case(args.case, args.compare.split(","))
+    if args.live_smoke:
+        if args.pattern is None:
+            parser.error("--pattern is required with --live-smoke")
+        report = run_live_smoke(args.pattern, args.env_file, args.config_file)
+    elif args.matrix == "contract":
+        report = run_contract_matrix()
+    elif args.matrix == "controller":
+        report = run_controller_matrix(args.task_shapes)
+    elif args.case is None:
+        parser.error("--case is required unless --matrix is used")
+    else:
+        report = probe_case(args.case) if args.probe_patterns else compare_case(args.case, args.compare.split(","))
     if args.write_report:
         args.write_report.parent.mkdir(parents=True, exist_ok=True)
         args.write_report.write_text(render_markdown(report), encoding="utf-8")

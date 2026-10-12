@@ -2,9 +2,12 @@ from dataclasses import asdict
 from pathlib import Path
 
 from foresight_os.controller.recipes import RecipeName, make_recipe
+from foresight_os.controller.policy import select_recipe
+from foresight_os.controller.task_shape import TaskShape
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.runtime.workflow import run_recipe
 from foresight_os.vertical_slice import run_vertical_slice
+from foresight_os.wayfinding import create_work_brief
 
 
 def run_candidate(case_dir: Path, candidate: str, work_dir: Path | None = None) -> dict:
@@ -12,6 +15,7 @@ def run_candidate(case_dir: Path, candidate: str, work_dir: Path | None = None) 
     outcome = run_vertical_slice(case_dir / "workbook.csv", work_dir, human_accept=True)
     state = AnalysisStore(work_dir).load_analysis() if outcome.accepted else None
     recipe_name = {
+        "direct": RecipeName.DIRECT,
         "ordinary": RecipeName.DIRECT,
         "semantic": RecipeName.ANALYZE,
         "sequential": RecipeName.ANALYZE_REVIEW,
@@ -19,11 +23,22 @@ def run_candidate(case_dir: Path, candidate: str, work_dir: Path | None = None) 
         "concurrent": RecipeName.CONCURRENT,
         "handoff": RecipeName.HANDOFF,
         "group_chat": RecipeName.CHALLENGE_RECOMMENDATION,
-    }[candidate]
-    result = run_recipe(make_recipe(recipe_name), f"Evaluate {case_dir.name}.")
+    }.get(candidate)
+    recipe = (
+        select_recipe(
+            create_work_brief(f"Evaluate {case_dir.name}."),
+            TaskShape(independent_subtasks=True, interactive_deliberation=True, review_required=True),
+        )
+        if candidate == "composed"
+        else make_recipe(recipe_name)
+    )
+    result = run_recipe(recipe, f"Evaluate {case_dir.name}.")
     return {
         "candidate": candidate,
         "outcome": outcome,
         "state": state,
+        "analysis_state": state,
+        "artifact": outcome.report_path if outcome.accepted else None,
+        "run_id": result.metrics.run_id,
         "metrics": asdict(result.metrics),
     }

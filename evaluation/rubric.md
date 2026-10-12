@@ -1,5 +1,8 @@
 # Frozen Scoring Rubric
 
+The rubric measures a candidate Run and its own persisted `AnalysisState` and
+artifact. It does not decide whether a runtime pattern is supported.
+
 Scores use a 0–1 scale unless otherwise stated. A finding is accepted only
 when its decision relevance, source support, and contradiction handling pass
 human/reference adjudication.

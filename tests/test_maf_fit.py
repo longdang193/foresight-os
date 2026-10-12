@@ -12,6 +12,8 @@ from foresight_os.runtime.maf_probe import (
 )
 from foresight_os.runtime.workflow import run_sequential_steps
 import pytest
+import subprocess
+import sys
 
 
 def test_provider_settings_load_custom_provider_from_env_and_codex_config(tmp_path):
@@ -80,9 +82,33 @@ def test_checkpoint_round_trip_uses_maf_storage():
     assert checkpoint_round_trip()
 
 
-def test_group_chat_and_magentic_are_deferred():
+def test_native_checkpoint_state_survives_a_fresh_process(tmp_path):
+    storage = tmp_path / "checkpoints"
+    write = """
+import asyncio, sys
+from agent_framework import FileCheckpointStorage, WorkflowCheckpoint
+async def main(path):
+    checkpoint = WorkflowCheckpoint('foresight', 'native-v1', state={'completed_stages': ['stage-1']})
+    checkpoint_id = await FileCheckpointStorage(path).save(checkpoint)
+    print(checkpoint_id)
+asyncio.run(main(sys.argv[1]))
+"""
+    checkpoint_id = subprocess.check_output([sys.executable, "-c", write, str(storage)], text=True).strip()
+    read = """
+import asyncio, sys
+from agent_framework import FileCheckpointStorage
+async def main(path, checkpoint_id):
+    checkpoint = await FileCheckpointStorage(path).load(checkpoint_id)
+    assert checkpoint.state == {'completed_stages': ['stage-1']}
+asyncio.run(main(sys.argv[1], sys.argv[2]))
+"""
+    subprocess.run([sys.executable, "-c", read, str(storage), checkpoint_id], check=True)
+
+
+def test_group_chat_is_native_and_magentic_is_deferred():
     results = {result.name: result for result in probe_capabilities()}
 
+    assert results["pattern_group_chat"].decision == CapabilityDecision.USE_NATIVE
     assert all(results[name].decision == CapabilityDecision.DEFER for name in DEFERRED_CAPABILITIES)
 
 

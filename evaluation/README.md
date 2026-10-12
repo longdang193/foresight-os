@@ -1,5 +1,17 @@
 # Evaluation Contract
 
+Evaluation has three independent records:
+
+- **Capability**: whether a native pattern is implemented and available in the
+  current runtime.
+- **Selection**: which ordered `RecipeStage` sequence the Controller chose for
+  a Work Brief.
+- **Measurement**: what one candidate Run measured for quality, latency, calls,
+  retries, failures, and human correction.
+
+Measurement can tune defaults and budgets; it never changes the capability
+record or makes a slower pattern unsupported.
+
 The v0.1 benchmark uses one synthetic workbook case and one frozen rubric. It
 compares three levels without changing the decision question:
 

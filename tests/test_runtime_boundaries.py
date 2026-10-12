@@ -1,23 +1,19 @@
 import asyncio
 
+from agent_framework import Agent, ChatResponse, Message
 from foresight_os.controller.recipes import RecipeName, make_recipe
 from foresight_os.runtime.metrics import RunMetrics
 from foresight_os.runtime.workflow import run_recipe_async
 
 
-class FakeResponse:
-    value = {"status": "ok"}
-    text = "ok"
-
-
-class FakeAgent:
-    async def run(self, prompt: str):
-        return FakeResponse()
-
-
 class FakeClient:
+    additional_properties = {}
+
+    async def get_response(self, messages, **kwargs):
+        return ChatResponse(messages=[Message("assistant", ["ok"])])
+
     def as_agent(self, instructions: str):
-        return FakeAgent()
+        return Agent(self, instructions=instructions)
 
 
 def test_run_recipe_returns_typed_metrics_and_real_executor_calls():

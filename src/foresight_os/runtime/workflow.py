@@ -10,26 +10,56 @@ from foresight_os.runtime.executors import AnalystExecutor, ReviewerExecutor
 from foresight_os.runtime.metrics import RunMetrics, RunResult
 
 
-async def _run_native_stage(pattern: ExecutionPattern, prompt: str, client: Any, roles: list[dict[str, str]]) -> list[object] | None:
-    from agent_framework import Agent
+async def _run_native_stage(pattern: ExecutionPattern, prompt: str, client: Any, roles: list[dict[str, str]]) -> list[object]:
     from agent_framework.orchestrations import ConcurrentBuilder, GroupChatBuilder, HandoffBuilder, SequentialBuilder
 
-    agents = [client.as_agent(instructions=f"Act as the {role.get('purpose', 'participant')} participant and return a structured result.") for role in roles]
-    if not agents or not all(isinstance(agent, Agent) for agent in agents):
-        return None
+    if not hasattr(client, "as_agent"):
+        raise RuntimeError("a native MAF client with as_agent() is required for this pattern")
+    agents = []
+    for index, role in enumerate(roles or [{"purpose": "participant"}], 1):
+        instructions = f"Act as the {role.get('purpose', 'participant')} participant and return a structured result."
+        try:
+            agent = client.as_agent(
+                id=f"participant-{index}",
+                name=f"participant-{index}",
+                instructions=instructions,
+                require_per_service_call_history_persistence=pattern == ExecutionPattern.HANDOFF,
+            )
+        except TypeError:
+            agent = client.as_agent(instructions=instructions)
+        agents.append(agent)
     if pattern == ExecutionPattern.SEQUENTIAL:
         workflow = SequentialBuilder(participants=agents, output_from="all").build()
     elif pattern == ExecutionPattern.CONCURRENT:
         workflow = ConcurrentBuilder(participants=agents, output_from="all").build()
     elif pattern == ExecutionPattern.HANDOFF:
-        workflow = HandoffBuilder(participants=agents, output_from="all").with_start_agent(agents[0]).build()
+        builder = HandoffBuilder(participants=agents, output_from="all").with_start_agent(agents[0])
+        for source in agents:
+            targets = [target for target in agents if target is not source]
+            if targets:
+                builder.add_handoff(source, targets)
+        workflow = builder.build()
     elif pattern == ExecutionPattern.GROUP_CHAT:
-        workflow = GroupChatBuilder(participants=agents, max_rounds=4, output_from="all").build()
+        async def select_speaker(state: Any) -> str:
+            return agents[state.current_round % len(agents)].id
+
+        workflow = GroupChatBuilder(
+            participants=agents,
+            selection_func=select_speaker,
+            max_rounds=4,
+            output_from="all",
+        ).build()
     else:
         return [await agents[0].run(prompt)]
-    result = await workflow.run(prompt)
-    outputs = result.get_outputs()
-    return list(outputs) if outputs else [result]
+    try:
+        result = await workflow.run(prompt)
+        outputs = result.get_outputs()
+        return list(outputs) if outputs else [result]
+    finally:
+        for agent in agents:
+            close = getattr(agent, "close", None)
+            if close is not None:
+                await close()
 
 
 def _make_stage(stage_name: str):
@@ -84,13 +114,15 @@ async def run_recipe_async(
             participants = list(stage.participants)
             if client is not None and pattern != ExecutionPattern.DIRECT:
                 native_outputs = await _run_native_stage(pattern, str(current), client, participants)
-                if native_outputs is not None:
-                    outputs.extend(native_outputs)
-                    current = native_outputs[-1]
-                    metrics.model_calls += len(participants)
-                    metrics.handoffs += int(pattern == ExecutionPattern.HANDOFF)
-                    metrics.chat_rounds += int(pattern == ExecutionPattern.GROUP_CHAT)
-                    continue
+                outputs.extend(native_outputs)
+                current = native_outputs[-1]
+                metrics.model_calls += len(participants)
+                if pattern == ExecutionPattern.CONCURRENT:
+                    metrics.branches = len(participants)
+                    metrics.parallelism = metrics.branches
+                metrics.handoffs += int(pattern == ExecutionPattern.HANDOFF)
+                metrics.chat_rounds += int(pattern == ExecutionPattern.GROUP_CHAT)
+                continue
             if pattern == ExecutionPattern.DIRECT:
                 stage_outputs = [await AnalystExecutor(client).execute(str(current))]
             elif pattern == ExecutionPattern.CONCURRENT:

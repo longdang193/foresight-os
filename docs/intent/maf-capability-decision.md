@@ -23,8 +23,8 @@ MAF only supports OpenAI or Anthropic.
 | Group Chat | `USE_NATIVE` | `agent_framework.orchestrations.GroupChatBuilder` imports; round and termination limits remain recipe-owned. |
 | Human input | `ADAPT_AT_BOUNDARY` | `AgentExecutorRequest` imports; user interaction remains a client boundary. |
 | Structured output | `ADAPT_AT_BOUNDARY` | Live `9router` call returned the typed `ProbeReply` through MAF response-format handling. |
-| Checkpoint/restart | `USE_NATIVE` | `WorkflowCheckpoint` round-trips through `InMemoryCheckpointStorage`. |
-| Magentic | `DEFER` | Explicitly outside the v0.1 scope. |
+| Checkpoint/restart | `USE_NATIVE` | `WorkflowCheckpoint` round-trips through native `FileCheckpointStorage`; process-boundary resume remains recipe-owned. |
+| Magentic | `DEFER` | Explicitly outside the current bounded scope; it is not part of the supported pattern contract. |
 
 ## Shared vertical-slice guardrail
 

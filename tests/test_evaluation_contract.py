@@ -1,5 +1,6 @@
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 
@@ -55,3 +56,24 @@ def test_case_is_deterministic_and_contains_no_customer_data_markers():
     assert first == second
     assert "customer" not in content.lower()
     assert "confidential" not in content.lower()
+
+
+def test_candidate_score_reads_the_candidate_run_analysis_state(tmp_path: Path):
+    import sys
+
+    sys.path.insert(0, str(ROOT / "evaluation"))
+    from candidate_harness import run_candidate
+    from run import _score_candidate
+
+    reference = json.loads((CASE / "reference.json").read_text(encoding="utf-8"))
+    candidate = run_candidate(CASE, "sequential", tmp_path / "candidate")
+    baseline = _score_candidate(candidate, reference)
+    claim = candidate["analysis_state"].claims[0]
+    candidate["analysis_state"] = replace(
+        candidate["analysis_state"],
+        claims=[replace(claim, statement="mutated candidate output")],
+    )
+
+    changed = _score_candidate(candidate, reference)
+
+    assert changed["finding_coverage"] < baseline["finding_coverage"]

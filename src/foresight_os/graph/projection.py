@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Any
 
 try:
@@ -10,7 +11,17 @@ from foresight_os.domain.models import AnalysisState
 from foresight_os.domain.relationships import relationship_rule
 
 
-def build_graph(state: AnalysisState) -> Any:
+@dataclass(frozen=True)
+class GraphView:
+    graph: Any
+    investigation_id: str
+    analysis_revision: int
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.graph, name)
+
+
+def build_graph(state: AnalysisState) -> GraphView:
     if nx is None:
         raise RuntimeError("NetworkX is required only for graph projection queries") from _IMPORT_ERROR
     graph = nx.MultiDiGraph()
@@ -40,4 +51,4 @@ def build_graph(state: AnalysisState) -> Any:
             provenance_direction=relationship_rule(relation.relation_type).provenance_direction,
             evidence_role=relationship_rule(relation.relation_type).evidence_role,
         )
-    return graph
+    return GraphView(graph, state.investigation_id, state.revision)

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from foresight_os.graph import build_graph, get_context, get_impacted_records, trace_provenance
+from foresight_os.graph import build_graph, get_context, get_impacted_records, get_impacted_records_complete, trace_provenance
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.vertical_slice import run_vertical_slice
 
@@ -23,3 +23,18 @@ def test_graph_rebuild_and_queries_are_deterministic(tmp_path: Path):
     assert get_context(first, recommendation)["evidence"]
     changed = next(item.id for item in state.evidence if "capacity_index-2030" in item.id)
     assert recommendation in get_impacted_records(first, changed)
+    context = get_context(first, recommendation, limit=1)
+    assert context["investigation_id"] == state.investigation_id
+    assert context["analysis_revision"] == state.revision
+    assert context["limit"] == 1
+    assert context["truncated"] is True or len(context["impacted"]) <= 1
+
+
+def test_graph_cycle_terminates_and_complete_query_excludes_starting_node():
+    import networkx as nx
+
+    graph = nx.MultiDiGraph()
+    for source, target in (("a", "b"), ("b", "c"), ("c", "a")):
+        graph.add_edge(source, target, impact="forward")
+
+    assert get_impacted_records_complete(graph, "a") == ["b", "c"]

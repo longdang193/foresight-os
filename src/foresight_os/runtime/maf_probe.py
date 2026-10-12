@@ -4,6 +4,7 @@ import importlib.metadata
 import json
 import time
 import tomllib
+import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -129,18 +130,19 @@ def run_live_provider_probe(
 
 
 def checkpoint_round_trip() -> bool:
-    from agent_framework import InMemoryCheckpointStorage, WorkflowCheckpoint
+    from agent_framework import FileCheckpointStorage, WorkflowCheckpoint
 
     async def run() -> bool:
-        storage = InMemoryCheckpointStorage()
-        checkpoint = WorkflowCheckpoint(
-            workflow_name="foresight-probe",
-            graph_signature_hash="probe-topology-v1",
-            state={"probe": "ok"},
-        )
-        checkpoint_id = await storage.save(checkpoint)
-        restored = await storage.load(checkpoint_id)
-        return restored.state == checkpoint.state
+        with tempfile.TemporaryDirectory(prefix="foresight-maf-checkpoint-") as directory:
+            storage = FileCheckpointStorage(directory)
+            checkpoint = WorkflowCheckpoint(
+                workflow_name="foresight-probe",
+                graph_signature_hash="probe-topology-v1",
+                state={"probe": "ok"},
+            )
+            checkpoint_id = await storage.save(checkpoint)
+            restored = await storage.load(checkpoint_id)
+            return restored.state == checkpoint.state
 
     return asyncio.run(run())
 
@@ -203,6 +205,7 @@ def probe_capabilities() -> tuple[CapabilityResult, ...]:
             "pattern_group_chat": CapabilityResult("pattern_group_chat", CapabilityDecision.USE_NATIVE, True, GroupChatBuilder.__name__),
         })
         required = tuple(native[name] for name in REQUIRED_CAPABILITIES)
+        patterns = tuple(native[name] for name in ("pattern_sequential", "pattern_concurrent", "pattern_handoff", "pattern_group_chat"))
     deferred = tuple(
         CapabilityResult(
             name,
@@ -212,7 +215,7 @@ def probe_capabilities() -> tuple[CapabilityResult, ...]:
         )
         for name in DEFERRED_CAPABILITIES
     )
-    return required + deferred
+    return required + patterns + deferred
 
 
 def vertical_slice_guardrail() -> VerticalSliceGuardrail:

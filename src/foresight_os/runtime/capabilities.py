@@ -41,7 +41,7 @@ REQUIRED_CAPABILITIES = (
     "checkpoint_restart",
 )
 
-DEFERRED_CAPABILITIES = ("group_chat", "magentic")
+DEFERRED_CAPABILITIES = ("magentic",)
 
 PATTERN_CAPABILITIES = {
     "direct": PatternCapability("direct", True, True, "bounded direct execution"),
