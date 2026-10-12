@@ -59,3 +59,6 @@ requiring a real provider call must retain the explicit provider, model,
 endpoint, authentication, timeout, and bounded-call boundary. Providers that
 implement the OpenAI-compatible API can use the same MAF client path; provider
 specific extensions remain outside this probe.
+
+The completed delivery also exercised sanitized native smokes for Sequential,
+Concurrent, Handoff, and Group Chat, each with settled cleanup metrics.
