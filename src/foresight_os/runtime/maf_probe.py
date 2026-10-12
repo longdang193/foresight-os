@@ -25,6 +25,7 @@ class ProviderSettings:
     provider: str
     model: str
     base_url: str
+    credential_env: str
     api_key: str = field(repr=False)
 
 
@@ -42,7 +43,7 @@ class LiveProviderProbe:
 
 
 def load_provider_settings(env_file: Path, config_file: Path) -> ProviderSettings:
-    assignments = []
+    assignments: dict[str, str] = {}
     for raw_line in env_file.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -50,19 +51,21 @@ def load_provider_settings(env_file: Path, config_file: Path) -> ProviderSetting
         name, value = line.split("=", 1)
         name = name.removeprefix("export ").strip()
         value = value.strip().strip('"').strip("'")
-        if value and ("API_KEY" in name.upper() or "TOKEN" in name.upper()):
-            assignments.append(value)
-    if not assignments:
-        raise ValueError("no API key or token assignment found in env file")
+        if value:
+            assignments[name] = value
 
     config = tomllib.loads(config_file.read_text(encoding="utf-8"))
     provider_name = config.get("model_provider")
     model = config.get("model")
     provider = config.get("model_providers", {}).get(provider_name, {})
     base_url = provider.get("base_url")
+    credential_env = provider.get("credential_env") or f"{provider_name.upper().replace('-', '_')}_API_KEY"
     if not provider_name or not model or not base_url:
         raise ValueError("Codex config lacks model provider, model, or provider base URL")
-    return ProviderSettings(provider_name, model, base_url, assignments[0])
+    api_key = assignments.get(credential_env)
+    if not api_key:
+        raise ValueError(f"configured credential environment variable is missing: {credential_env}")
+    return ProviderSettings(provider_name, model, base_url, credential_env, api_key)
 
 
 def run_live_provider_probe(

@@ -1,21 +1,35 @@
 import json
-from pathlib import Path
+from importlib.resources import files
 from typing import Any
 
 from jsonschema import Draft202012Validator
 
 from .models import AnalysisState, WorkBrief
-
-
-ROOT = Path(__file__).parents[3]
+from .relationships import RecordKind, relationship_rule
 
 
 class ValidationError(ValueError):
     """Raised when a durable Foresight OS record violates its trust boundary."""
 
 
+CURRENT_SCHEMA_VERSION = 1
+
+
+def migrate_analysis_dict(value: dict[str, Any]) -> dict[str, Any]:
+    migrated = dict(value)
+    version = migrated.get("schema_version", 0)
+    if version > CURRENT_SCHEMA_VERSION:
+        raise ValidationError(f"unsupported future analysis schema version: {version}")
+    if version == 0:
+        migrated["schema_version"] = CURRENT_SCHEMA_VERSION
+        migrated.setdefault("revision_status", "ACCEPTED")
+    elif version == CURRENT_SCHEMA_VERSION:
+        migrated.setdefault("revision_status", "ACCEPTED")
+    return migrated
+
+
 def _validate_schema(value: dict[str, Any], schema_name: str) -> None:
-    schema = json.loads((ROOT / "schemas" / schema_name).read_text(encoding="utf-8"))
+    schema = json.loads(files("foresight_os.schemas").joinpath(schema_name).read_text(encoding="utf-8"))
     errors = sorted(Draft202012Validator(schema).iter_errors(value), key=lambda error: list(error.path))
     if errors:
         raise ValidationError("; ".join(error.message for error in errors))
@@ -46,9 +60,25 @@ def validate_analysis(state: AnalysisState | dict[str, Any]) -> dict[str, Any]:
 
     record_ids = set(ids)
     relationship_ids = {relationship["id"] for relationship in value["relationships"]}
+    kinds = {
+        **{item["id"]: RecordKind.EVIDENCE for item in value["evidence"]},
+        **{item["id"]: RecordKind.CLAIM for item in value["claims"]},
+        **{item["id"]: RecordKind.IMPLICATION for item in value["implications"]},
+        **{item["id"]: RecordKind.RECOMMENDATION for item in value["recommendations"]},
+        **{item["id"]: RecordKind.ARTIFACT for item in value["artifacts"]},
+    }
     for relationship in value["relationships"]:
         if relationship["from_id"] not in record_ids or relationship["to_id"] not in record_ids:
             raise ValidationError("relationship endpoints must reference existing records")
+        try:
+            rule = relationship_rule(relationship["relation_type"])
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
+        if kinds[relationship["from_id"]] not in rule.sources or kinds[relationship["to_id"]] not in rule.targets:
+            raise ValidationError(
+                f"invalid endpoints for relationship {relationship['relation_type']}: "
+                f"{kinds[relationship['from_id']]} -> {kinds[relationship['to_id']]}"
+            )
 
     for record in (*value["claims"], *value["implications"], *value["recommendations"]):
         if not set(record["evidence_ids"]).issubset({item["id"] for item in value["evidence"]}):

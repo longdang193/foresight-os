@@ -9,6 +9,9 @@ class RecipeName(StrEnum):
     DIRECT = "DIRECT"
     ANALYZE = "ANALYZE"
     ANALYZE_REVIEW = "ANALYZE_REVIEW"
+    CONCURRENT = "CONCURRENT"
+    HANDOFF = "HANDOFF"
+    CHALLENGE_RECOMMENDATION = "CHALLENGE_RECOMMENDATION"
 
 
 @dataclass(frozen=True)
@@ -36,6 +39,24 @@ def make_recipe(name: RecipeName) -> ExecutionRecipe:
         roles = [
             {"purpose": "execute", "profile": Profile.NORMAL.value},
             {"purpose": "review", "profile": Profile.NORMAL.value},
+        ]
+    if name == RecipeName.CONCURRENT:
+        pattern = "concurrent"
+        roles = [
+            {"purpose": "scan-a", "profile": Profile.NORMAL.value},
+            {"purpose": "scan-b", "profile": Profile.NORMAL.value},
+        ]
+    if name == RecipeName.HANDOFF:
+        pattern = "handoff"
+        roles = [
+            {"purpose": "analyst", "profile": Profile.NORMAL.value},
+            {"purpose": "reviewer", "profile": Profile.NORMAL.value},
+        ]
+    if name == RecipeName.CHALLENGE_RECOMMENDATION:
+        pattern = "group_chat"
+        roles = [
+            {"purpose": "analyst", "profile": Profile.NORMAL.value},
+            {"purpose": "skeptic", "profile": Profile.NORMAL.value},
         ]
     return ExecutionRecipe(
         name,

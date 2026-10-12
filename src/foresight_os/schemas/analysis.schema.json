@@ -4,10 +4,12 @@
   "title": "Foresight OS Analysis State",
   "type": "object",
   "additionalProperties": false,
-  "required": ["investigation_id", "revision", "evidence", "claims", "implications", "recommendations", "artifacts", "relationships", "revisions", "invalidation"],
+  "required": ["investigation_id", "revision", "schema_version", "revision_status", "evidence", "claims", "implications", "recommendations", "artifacts", "relationships", "revisions", "invalidation"],
   "properties": {
     "investigation_id": { "type": "string", "minLength": 1 },
     "revision": { "type": "integer", "minimum": 1 },
+    "schema_version": { "type": "integer", "const": 1 },
+    "revision_status": { "enum": ["DRAFT", "PENDING_REVIEW", "ACCEPTED", "REJECTED", "SUPERSEDED"] },
     "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } },
     "claims": { "type": "array", "items": { "$ref": "#/$defs/analytical_record" } },
     "implications": { "type": "array", "items": { "$ref": "#/$defs/analytical_record" } },

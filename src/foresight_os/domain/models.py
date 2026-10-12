@@ -22,6 +22,14 @@ class Lifecycle(StrEnum):
     SUPERSEDED = "SUPERSEDED"
 
 
+class RevisionStatus(StrEnum):
+    DRAFT = "DRAFT"
+    PENDING_REVIEW = "PENDING_REVIEW"
+    ACCEPTED = "ACCEPTED"
+    REJECTED = "REJECTED"
+    SUPERSEDED = "SUPERSEDED"
+
+
 @dataclass(frozen=True)
 class SourceLocator:
     file_version: str
@@ -97,6 +105,8 @@ class AnalysisState:
     relationships: list[Relationship] = field(default_factory=list)
     revisions: list[Revision] = field(default_factory=list)
     invalidation: Invalidation = field(default_factory=Invalidation)
+    schema_version: int = 1
+    revision_status: RevisionStatus = RevisionStatus.ACCEPTED
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -11,6 +11,7 @@ from foresight_os.runtime.maf_probe import (
     vertical_slice_guardrail,
 )
 from foresight_os.runtime.workflow import run_sequential_steps
+import pytest
 
 
 def test_provider_settings_load_custom_provider_from_env_and_codex_config(tmp_path):
@@ -19,7 +20,7 @@ def test_provider_settings_load_custom_provider_from_env_and_codex_config(tmp_pa
     config_file = tmp_path / "config.toml"
     config_file.write_text(
         'model_provider = "custom"\nmodel = "router-model"\n'
-        '[model_providers.custom]\nbase_url = "http://127.0.0.1:9999/v1"\n',
+        '[model_providers.custom]\nbase_url = "http://127.0.0.1:9999/v1"\ncredential_env = "CUSTOM_ROUTER_API_KEY"\n',
         encoding="utf-8",
     )
 
@@ -42,6 +43,36 @@ def test_probe_returns_one_decision_for_every_required_capability():
         assert results["single_agent"].decision == CapabilityDecision.ADAPT_AT_BOUNDARY
         assert results["sequential_review"].decision == CapabilityDecision.USE_NATIVE
         assert results["checkpoint_restart"].decision == CapabilityDecision.USE_NATIVE
+
+
+def test_provider_settings_selects_only_configured_credential(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("OTHER_API_KEY=wrong\nCUSTOM_ROUTER_API_KEY=right\n", encoding="utf-8")
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        'model_provider = "custom"\nmodel = "router-model"\n'
+        '[model_providers.custom]\nbase_url = "http://127.0.0.1:9999/v1"\ncredential_env = "CUSTOM_ROUTER_API_KEY"\n',
+        encoding="utf-8",
+    )
+
+    settings = load_provider_settings(env_file, config_file)
+
+    assert settings.credential_env == "CUSTOM_ROUTER_API_KEY"
+    assert settings.api_key == "right"
+
+
+def test_provider_settings_rejects_missing_configured_credential(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("OTHER_API_KEY=wrong\n", encoding="utf-8")
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        'model_provider = "custom"\nmodel = "router-model"\n'
+        '[model_providers.custom]\nbase_url = "http://127.0.0.1:9999/v1"\ncredential_env = "CUSTOM_ROUTER_API_KEY"\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="CUSTOM_ROUTER_API_KEY"):
+        load_provider_settings(env_file, config_file)
 
 
 def test_checkpoint_round_trip_uses_maf_storage():

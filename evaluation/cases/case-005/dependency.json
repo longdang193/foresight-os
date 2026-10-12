@@ -1,0 +1,5 @@
+{
+  "changed_ids": ["evidence-northern-europe-capacity_index-2030"],
+  "expected_reassessment": ["claim-northern-capacity-gap", "implication-capacity-constrained-growth", "recommendation-northern-attention"],
+  "expected_stale_artifacts": ["artifact-executive-report"]
+}

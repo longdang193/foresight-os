@@ -1,0 +1,57 @@
+{
+  "case_id": "case-004",
+  "source_version": "case-004-v1",
+  "reference_findings": [
+    {
+      "id": "finding-demand-growth",
+      "type": "claim",
+      "statement": "Northern Europe demand is forecast to rise from index 100 in 2024 to 140 in 2030.",
+      "basis": "DERIVED",
+      "assessment": "SUPPORTED",
+      "source_locator": {
+        "file_version": "case-004-v1",
+        "sheet": "Demand",
+        "range": "A2:F3",
+        "units": "index",
+        "transformation": "none",
+        "calculation": "2030 demand_index - 2024 demand_index"
+      }
+    },
+    {
+      "id": "finding-capacity-constraint",
+      "type": "claim",
+      "statement": "Northern Europe capacity is forecast to reach index 115 in 2030, below forecast demand of 140.",
+      "basis": "DERIVED",
+      "assessment": "SUPPORTED",
+      "source_locator": {
+        "file_version": "case-004-v1",
+        "sheet": "Capacity",
+        "range": "A2:F3",
+        "units": "index",
+        "transformation": "none",
+        "calculation": "capacity_index - demand_index"
+      }
+    },
+    {
+      "id": "finding-recommendation",
+      "type": "recommendation",
+      "statement": "Increase strategic attention on Northern Europe, conditional on validating expansion cost.",
+      "basis": "DERIVED",
+      "assessment": "SUPPORTED",
+      "source_locator": {
+        "file_version": "case-004-v1",
+        "sheet": "Capacity",
+        "range": "A2:F3",
+        "units": "index",
+        "transformation": "none",
+        "calculation": "demand_index > capacity_index"
+      }
+    }
+  ],
+  "contradictions": [
+    {
+      "id": "contradiction-capacity-gap",
+      "statement": "High demand growth does not by itself prove investment readiness because capacity trails demand."
+    }
+  ]
+}

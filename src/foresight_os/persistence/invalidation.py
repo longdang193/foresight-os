@@ -2,6 +2,7 @@ from collections import defaultdict, deque
 from dataclasses import replace
 
 from foresight_os.domain.models import AnalysisState, Assessment, Invalidation, Lifecycle, Revision
+from foresight_os.domain.relationships import ImpactDirection, relationship_rule
 
 
 def invalidate_dependencies(state: AnalysisState, changed_ids: list[str], reason: str) -> AnalysisState:
@@ -10,7 +11,11 @@ def invalidate_dependencies(state: AnalysisState, changed_ids: list[str], reason
 
     edges = defaultdict(list)
     for relationship in state.relationships:
-        edges[relationship.from_id].append(relationship.to_id)
+        direction = relationship_rule(relationship.relation_type).impact
+        if direction == ImpactDirection.FORWARD:
+            edges[relationship.from_id].append(relationship.to_id)
+        elif direction == ImpactDirection.REVERSE:
+            edges[relationship.to_id].append(relationship.from_id)
 
     known_ids = {
         item.id

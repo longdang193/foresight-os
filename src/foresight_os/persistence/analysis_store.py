@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 
 import yaml
+from dataclasses import replace
 
 from foresight_os.domain.models import (
     AnalysisState,
@@ -16,10 +17,11 @@ from foresight_os.domain.models import (
     Lifecycle,
     Relationship,
     Revision,
+    RevisionStatus,
     SourceLocator,
     WorkBrief,
 )
-from foresight_os.domain.validation import validate_analysis, validate_work_brief
+from foresight_os.domain.validation import migrate_analysis_dict, validate_analysis, validate_work_brief
 
 
 class AnalysisStore:
@@ -51,8 +53,23 @@ class AnalysisStore:
         value = validate_analysis(state)
         self._atomic_write(self.analysis_path, json.dumps(value, indent=2) + "\n")
 
+    def commit_revision(self, state: AnalysisState, expected_revision: int, accepted: bool) -> AnalysisState:
+        current = self.load_analysis() if self.analysis_path.exists() else None
+        if current is not None and current.revision != expected_revision:
+            raise ValueError(f"stale revision: expected {expected_revision}, current {current.revision}")
+        status = RevisionStatus.ACCEPTED if accepted else RevisionStatus.REJECTED
+        committed = replace(state, revision_status=status)
+        self.save_analysis(committed)
+        return committed
+
+    def save_pending(self, state: AnalysisState) -> AnalysisState:
+        pending = replace(state, revision_status=RevisionStatus.PENDING_REVIEW)
+        self.save_analysis(pending)
+        return pending
+
     def load_analysis(self) -> AnalysisState:
-        value = validate_analysis(json.loads(self.analysis_path.read_text(encoding="utf-8")))
+        value = migrate_analysis_dict(json.loads(self.analysis_path.read_text(encoding="utf-8")))
+        value = validate_analysis(value)
         evidence = [
             Evidence(
                 item["id"],
@@ -96,6 +113,8 @@ class AnalysisStore:
             [Relationship(**item) for item in value["relationships"]],
             [Revision(**item) for item in value["revisions"]],
             Invalidation(**value["invalidation"]),
+            value["schema_version"],
+            RevisionStatus(value["revision_status"]),
         )
 
     @staticmethod

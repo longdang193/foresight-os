@@ -7,6 +7,7 @@ from foresight_os.domain.models import (
     Evidence,
     Relationship,
 )
+from foresight_os.analysis.workbook import calculate_case_metrics
 
 
 @dataclass(frozen=True)
@@ -25,16 +26,24 @@ def draft_analysis(evidence: list[Evidence]) -> DraftAnalysis:
     capacity_2030 = next(item for item in northern if "capacity_index" in item.id and "2030" in item.id)
     demand_2024 = next(item for item in northern if "demand_index" in item.id and "2024" in item.id)
 
+    calculate_case_metrics(evidence)
+    demand_start = next(item for item in evidence if "demand_index" in item.id and "2024" in item.id)
+    demand_end = next(item for item in evidence if "demand_index" in item.id and "2030" in item.id)
+    capacity_end = next(item for item in evidence if "capacity_index" in item.id and "2030" in item.id)
+    demand_start_value = demand_start.excerpt.split("=")[1].split()[0]
+    demand_end_value = demand_end.excerpt.split("=")[1].split()[0]
+    capacity_end_value = capacity_end.excerpt.split("=")[1].split()[0]
+
     growth_claim = AnalyticalRecord(
         "claim-northern-demand-growth",
-        "Northern Europe demand is forecast to rise from index 100 in 2024 to 140 in 2030.",
+        f"Northern Europe demand is forecast to rise from index {demand_start_value} in 2024 to {demand_end_value} in 2030.",
         Basis.DERIVED,
         Assessment.SUPPORTED,
         evidence_ids=[demand_2024.id, demand_2030.id],
     )
     capacity_claim = AnalyticalRecord(
         "claim-northern-capacity-gap",
-        "Northern Europe capacity is forecast to reach index 115 in 2030, below forecast demand of 140.",
+        f"Northern Europe capacity is forecast to reach index {capacity_end_value} in 2030, below forecast demand of {demand_end_value}.",
         Basis.DERIVED,
         Assessment.SUPPORTED,
         evidence_ids=[demand_2030.id, capacity_2030.id],

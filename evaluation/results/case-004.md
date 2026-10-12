@@ -1,0 +1,19 @@
+# Evaluation Report: case-004
+
+## Thresholds
+{"contradiction_precision": 0.8, "contradiction_recall": 0.8, "finding_coverage": 0.8, "supported_claim_precision": 0.9, "traceability": 1.0}
+
+## Comparison
+- `ordinary`: {"admitted": true, "contradiction_precision": 1.0, "contradiction_recall": 1.0, "finding_coverage": 1.0, "human_correction_effort": 1, "recovery_success": true, "run_metrics": {"correction_rounds": 0, "input_tokens": null, "model_calls": 0, "output_tokens": null, "pattern": "direct", "provider_failures": 0, "recipe": "DIRECT", "retries": 0, "run_id": "run-66477e9c1f1d48ac9606498498709ad9", "wall_time_ms": 0}, "supported_claim_precision": 1.0, "traceability": 1.0}
+- `semantic`: {"admitted": true, "contradiction_precision": 1.0, "contradiction_recall": 1.0, "finding_coverage": 1.0, "human_correction_effort": 1, "recovery_success": true, "run_metrics": {"correction_rounds": 0, "input_tokens": null, "model_calls": 0, "output_tokens": null, "pattern": "sequential", "provider_failures": 0, "recipe": "ANALYZE", "retries": 0, "run_id": "run-7b748e5947ba4b98ab3abce187cad8ad", "wall_time_ms": 0}, "supported_claim_precision": 1.0, "traceability": 1.0}
+- `sequential`: {"admitted": true, "contradiction_precision": 1.0, "contradiction_recall": 1.0, "finding_coverage": 1.0, "human_correction_effort": 1, "recovery_success": true, "run_metrics": {"correction_rounds": 0, "input_tokens": null, "model_calls": 0, "output_tokens": null, "pattern": "sequential", "provider_failures": 0, "recipe": "ANALYZE_REVIEW", "retries": 0, "run_id": "run-06613a1aa58a4aff94c1510707286f2b", "wall_time_ms": 0}, "supported_claim_precision": 1.0, "traceability": 1.0}
+- `controller`: {"admitted": true, "contradiction_precision": 1.0, "contradiction_recall": 1.0, "finding_coverage": 1.0, "human_correction_effort": 1, "recovery_success": true, "run_metrics": {"correction_rounds": 0, "input_tokens": null, "model_calls": 0, "output_tokens": null, "pattern": "sequential", "provider_failures": 0, "recipe": "ANALYZE_REVIEW", "retries": 0, "run_id": "run-4c69292b78dc4c95b218abf73186658b", "wall_time_ms": 0}, "supported_claim_precision": 1.0, "traceability": 1.0}
+- `concurrent`: {"admitted": true, "contradiction_precision": 1.0, "contradiction_recall": 1.0, "finding_coverage": 1.0, "human_correction_effort": 1, "recovery_success": true, "run_metrics": {"correction_rounds": 0, "input_tokens": null, "model_calls": 0, "output_tokens": null, "pattern": "concurrent", "provider_failures": 0, "recipe": "CONCURRENT", "retries": 0, "run_id": "run-8a75458e6fcf49cd8413a65619418345", "wall_time_ms": 0}, "supported_claim_precision": 1.0, "traceability": 1.0}
+- `handoff`: {"admitted": true, "contradiction_precision": 1.0, "contradiction_recall": 1.0, "finding_coverage": 1.0, "human_correction_effort": 1, "recovery_success": true, "run_metrics": {"correction_rounds": 0, "input_tokens": null, "model_calls": 0, "output_tokens": null, "pattern": "handoff", "provider_failures": 0, "recipe": "HANDOFF", "retries": 0, "run_id": "run-b1549b7ea54e4251a363ccfd3c031131", "wall_time_ms": 0}, "supported_claim_precision": 1.0, "traceability": 1.0}
+- `group_chat`: {"admitted": true, "contradiction_precision": 1.0, "contradiction_recall": 1.0, "finding_coverage": 1.0, "human_correction_effort": 1, "recovery_success": true, "run_metrics": {"correction_rounds": 0, "input_tokens": null, "model_calls": 0, "output_tokens": null, "pattern": "group_chat", "provider_failures": 0, "recipe": "CHALLENGE_RECOMMENDATION", "retries": 0, "run_id": "run-9ee35f73f8db4837aaf34a99987c2076", "wall_time_ms": 0}, "supported_claim_precision": 1.0, "traceability": 1.0}
+
+- Controller recipe: `ANALYZE_REVIEW`
+- Admitted pattern: `ordinary`
+
+## Limitations
+- Provider-backed calls are environment-gated; deterministic domain execution remains the local comparison baseline.
