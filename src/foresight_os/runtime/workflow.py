@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import time
 from uuid import uuid4
 from typing import Any
@@ -10,56 +11,98 @@ from foresight_os.runtime.executors import AnalystExecutor, ReviewerExecutor
 from foresight_os.runtime.metrics import RunMetrics, RunResult
 
 
-async def _run_native_stage(pattern: ExecutionPattern, prompt: str, client: Any, roles: list[dict[str, str]]) -> list[object]:
+async def _close_agents(agents: list[object]) -> list[BaseException]:
+    errors: list[BaseException] = []
+    for agent in agents:
+        close = getattr(agent, "close", None)
+        if close is None:
+            continue
+        try:
+            result = close()
+            if inspect.isawaitable(result):
+                await result
+        except BaseException as error:
+            errors.append(error)
+    return errors
+
+
+async def _run_native_stage(
+    pattern: ExecutionPattern,
+    prompt: str,
+    client: Any,
+    roles: list[dict[str, str]],
+    metrics: RunMetrics | None = None,
+) -> list[object]:
     from agent_framework.orchestrations import ConcurrentBuilder, GroupChatBuilder, HandoffBuilder, SequentialBuilder
 
-    if not hasattr(client, "as_agent"):
-        raise RuntimeError("a native MAF client with as_agent() is required for this pattern")
     agents = []
-    for index, role in enumerate(roles or [{"purpose": "participant"}], 1):
-        instructions = f"Act as the {role.get('purpose', 'participant')} participant and return a structured result."
-        try:
-            agent = client.as_agent(
-                id=f"participant-{index}",
-                name=f"participant-{index}",
-                instructions=instructions,
-                require_per_service_call_history_persistence=pattern == ExecutionPattern.HANDOFF,
-            )
-        except TypeError:
-            agent = client.as_agent(instructions=instructions)
-        agents.append(agent)
-    if pattern == ExecutionPattern.SEQUENTIAL:
-        workflow = SequentialBuilder(participants=agents, output_from="all").build()
-    elif pattern == ExecutionPattern.CONCURRENT:
-        workflow = ConcurrentBuilder(participants=agents, output_from="all").build()
-    elif pattern == ExecutionPattern.HANDOFF:
-        builder = HandoffBuilder(participants=agents, output_from="all").with_start_agent(agents[0])
-        for source in agents:
-            targets = [target for target in agents if target is not source]
-            if targets:
-                builder.add_handoff(source, targets)
-        workflow = builder.build()
-    elif pattern == ExecutionPattern.GROUP_CHAT:
-        async def select_speaker(state: Any) -> str:
-            return agents[state.current_round % len(agents)].id
-
-        workflow = GroupChatBuilder(
-            participants=agents,
-            selection_func=select_speaker,
-            max_rounds=4,
-            output_from="all",
-        ).build()
-    else:
-        return [await agents[0].run(prompt)]
+    run_error: BaseException | None = None
     try:
-        result = await workflow.run(prompt)
+        if not hasattr(client, "as_agent"):
+            raise RuntimeError("a native MAF client with as_agent() is required for this pattern")
+        for index, role in enumerate(roles or [{"purpose": "participant"}], 1):
+            instructions = f"Act as the {role.get('purpose', 'participant')} participant and return a structured result."
+            try:
+                agent = client.as_agent(
+                    id=f"participant-{index}",
+                    name=f"participant-{index}",
+                    instructions=instructions,
+                    require_per_service_call_history_persistence=pattern == ExecutionPattern.HANDOFF,
+                )
+            except TypeError:
+                agent = client.as_agent(instructions=instructions)
+            agents.append(agent)
+        if pattern == ExecutionPattern.SEQUENTIAL:
+            workflow = SequentialBuilder(participants=agents, output_from="all").build()
+        elif pattern == ExecutionPattern.CONCURRENT:
+            workflow = ConcurrentBuilder(participants=agents, output_from="all").build()
+        elif pattern == ExecutionPattern.HANDOFF:
+            builder = HandoffBuilder(participants=agents, output_from="all").with_start_agent(agents[0])
+            for source in agents:
+                targets = [target for target in agents if target is not source]
+                if targets:
+                    builder.add_handoff(source, targets)
+            workflow = builder.build()
+        elif pattern == ExecutionPattern.GROUP_CHAT:
+            async def select_speaker(state: Any) -> str:
+                return agents[state.current_round % len(agents)].id
+
+            workflow = GroupChatBuilder(
+                participants=agents,
+                selection_func=select_speaker,
+                max_rounds=4,
+                output_from="all",
+            ).build()
+        else:
+            return [await agents[0].run(prompt)]
+        if metrics is None:
+            result = await workflow.run(prompt)
+        else:
+            agent_ids = {getattr(agent, "id", None) for agent in agents}
+            observed_rounds: set[int] = set()
+            stream = await workflow.run(prompt, stream=True)
+            async for event in stream:
+                if event.type == "executor_invoked" and event.executor_id in agent_ids:
+                    metrics.model_calls += 1
+                elif event.type == "handoff_sent":
+                    metrics.handoffs += 1
+                elif pattern == ExecutionPattern.GROUP_CHAT and event.type == "group_chat":
+                    data = event.data
+                    if type(data).__name__ == "GroupChatRequestSentEvent":
+                        observed_rounds.add(getattr(data, "round_index", len(observed_rounds)))
+            result = await stream.get_final_response()
+            metrics.chat_rounds += len(observed_rounds)
         outputs = result.get_outputs()
         return list(outputs) if outputs else [result]
+    except BaseException as error:
+        run_error = error
+        raise
     finally:
-        for agent in agents:
-            close = getattr(agent, "close", None)
-            if close is not None:
-                await close()
+        close_errors = await _close_agents(agents)
+        if metrics is not None and close_errors:
+            metrics.cleanup_complete = False
+        if close_errors and run_error is None:
+            raise RuntimeError(f"failed to close {len(close_errors)} native agent(s)") from close_errors[0]
 
 
 def _make_stage(stage_name: str):
@@ -104,6 +147,7 @@ async def run_recipe_async(
     started = time.perf_counter()
     metrics = RunMetrics(run_id or f"run-{uuid4().hex}", recipe.name.value, recipe.pattern)
     outputs: list[object] = []
+    metrics.cleanup_complete = True
     try:
         stages = recipe.stages or ()
         if not stages:
@@ -113,15 +157,12 @@ async def run_recipe_async(
             pattern = ExecutionPattern(stage.pattern)
             participants = list(stage.participants)
             if client is not None and pattern != ExecutionPattern.DIRECT:
-                native_outputs = await _run_native_stage(pattern, str(current), client, participants)
+                native_outputs = await _run_native_stage(pattern, str(current), client, participants, metrics)
                 outputs.extend(native_outputs)
                 current = native_outputs[-1]
-                metrics.model_calls += len(participants)
                 if pattern == ExecutionPattern.CONCURRENT:
                     metrics.branches = len(participants)
                     metrics.parallelism = metrics.branches
-                metrics.handoffs += int(pattern == ExecutionPattern.HANDOFF)
-                metrics.chat_rounds += int(pattern == ExecutionPattern.GROUP_CHAT)
                 continue
             if pattern == ExecutionPattern.DIRECT:
                 stage_outputs = [await AnalystExecutor(client).execute(str(current))]
@@ -142,17 +183,15 @@ async def run_recipe_async(
                     reviewer_prompt = f"Review this proposal:\n{stage_outputs[-1]}"
                     stage_outputs.append(await ReviewerExecutor(client).execute(reviewer_prompt))
                     metrics.model_calls += 1 if client is not None else 0
-                    metrics.handoffs += int(pattern == ExecutionPattern.HANDOFF)
             metrics.model_calls += sum(1 for _ in stage_outputs) if client is not None and pattern in {ExecutionPattern.DIRECT, ExecutionPattern.CONCURRENT, ExecutionPattern.GROUP_CHAT} else 0
             outputs.extend(stage_outputs)
             current = stage_outputs[-1]
         return RunResult(metrics.run_id, tuple(outputs), metrics)
-    except Exception:
+    except BaseException:
         metrics.provider_failures += 1
         raise
     finally:
         metrics.wall_time_ms = round((time.perf_counter() - started) * 1000)
-        metrics.cleanup_complete = True
 
 
 def run_recipe(recipe: ExecutionRecipe, prompt: str, client: Any | None = None, run_id: str | None = None) -> RunResult:

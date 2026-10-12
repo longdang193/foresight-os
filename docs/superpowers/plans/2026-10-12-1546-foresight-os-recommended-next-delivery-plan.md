@@ -115,10 +115,11 @@ contract without treating benchmark measurements as capability admission.
   provider `9router`, model `combo-high`, endpoint
   `http://127.0.0.1:17667/v1`, `agent-framework==1.21.0`.
 - Live native smokes for Sequential, Concurrent, Handoff, and Group Chat all
-  returned sanitized bounded-completion records. Their current `RunMetrics`
-  values are runtime estimates/finalization signals rather than independent
-  provider-event or per-agent settlement receipts; the Handoff smoke therefore
-  does not by itself prove that a transfer occurred.
+  returned sanitized bounded-completion records. Native `RunMetrics` counters
+  are derived from MAF workflow events, and cleanup is marked complete only
+  after every agent close attempt succeeds. A Handoff smoke can still report
+  zero transfers when the provider does not select one, and cleanup remains
+  an application-level close check rather than an independent provider receipt.
 - Fresh subprocess checkpoint load restored completed-stage state without
   duplicating it; graph cycles terminated and bounded context reported
   revision/investigation metadata.

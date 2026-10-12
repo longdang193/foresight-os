@@ -62,9 +62,10 @@ specific extensions remain outside this probe.
 
 The completed delivery also exercised sanitized native smokes for Sequential,
 Concurrent, Handoff, and Group Chat. These records establish bounded completion
-against the configured provider boundary; the current `RunMetrics` values for
-model calls, handoffs, chat rounds, and cleanup are runtime estimates/finalization
-signals, not independent provider-event or per-agent settlement receipts. In
-particular, a successful Handoff smoke does not prove that the provider selected
-a transfer. Treat these results as capability smoke evidence, not exact
-execution telemetry.
+against the configured provider boundary; native `RunMetrics` model-call,
+handoff, and chat-round counters now come from MAF workflow events. The cleanup
+flag is set only after every agent close attempt completes without error, but it
+is not an independent provider settlement receipt. In particular, a successful
+Handoff smoke can still report zero transfers when the provider does not select
+one. Treat these results as capability smoke evidence, not a guarantee of
+provider-specific behavior.
