@@ -77,10 +77,12 @@ def run_vertical_slice(
         [recommendation],
         [artifact],
         [*draft.relationships, artifact_link],
-        [Revision("revision-1", 1, "accepted benchmark analysis", [item.id for item in [*draft.evidence, *draft.claims, *draft.implications, recommendation, artifact, *[*draft.relationships, artifact_link]]])],
+        [Revision("revision-1", 1, "accepted benchmark analysis", [item.id for item in [*draft.evidence, *draft.claims, *draft.implications, recommendation, artifact, *draft.calculations, *[*draft.relationships, artifact_link]]])],
         Invalidation(),
+        calculations=draft.calculations,
     )
     store = AnalysisStore(Path(work_dir))
-    store.save_analysis(analysis)
-    write_report(report_path, analysis)
-    return VerticalSliceOutcome(True, ReviewResult(True, []), analysis, report_path, "accepted")
+    pending = store.save_pending(analysis)
+    committed = store.commit_revision(pending, expected_revision=pending.revision, accepted=True)
+    write_report(report_path, committed)
+    return VerticalSliceOutcome(True, ReviewResult(True, []), committed, report_path, "accepted")

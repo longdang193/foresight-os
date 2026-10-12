@@ -22,6 +22,13 @@
     "assumptions": { "type": "array", "items": { "type": "string" } },
     "open_dependencies": { "type": "array", "items": { "type": "string" } },
     "current_direction": { "type": "string" },
-    "next_useful_step": { "type": "string" }
+    "next_useful_step": { "type": "string" },
+    "execution_pattern_override": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "string", "enum": ["direct", "sequential", "concurrent", "handoff", "group_chat"] },
+        { "type": "array", "maxItems": 4, "items": { "type": "string", "enum": ["direct", "sequential", "concurrent", "handoff", "group_chat"] } }
+      ]
+    }
   }
 }

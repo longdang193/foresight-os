@@ -15,14 +15,12 @@ class LocalClient:
     def challenge(self, work_dir: Path, record_id: str, reason: str):
         store = AnalysisStore(work_dir)
         state = invalidate_dependencies(store.load_analysis(), [record_id], f"challenge: {reason}")
-        store.save_analysis(state)
-        return state
+        return store.commit_revision(state, expected_revision=store.load_analysis().revision, accepted=False)
 
     def scope_change(self, work_dir: Path, reason: str):
         store = AnalysisStore(work_dir)
         state = invalidate_dependencies(store.load_analysis(), ["scope-change"], f"scope change: {reason}")
-        store.save_analysis(state)
-        return state
+        return store.commit_revision(state, expected_revision=store.load_analysis().revision, accepted=False)
 
     def report(self, work_dir: Path) -> Path:
         store = AnalysisStore(work_dir)

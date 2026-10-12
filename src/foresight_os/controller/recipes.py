@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
 from foresight_os.controller.profiles import Profile
 from foresight_os.runtime.maf_probe import vertical_slice_guardrail
@@ -14,6 +15,24 @@ class RecipeName(StrEnum):
     CHALLENGE_RECOMMENDATION = "CHALLENGE_RECOMMENDATION"
 
 
+class ExecutionPattern(StrEnum):
+    DIRECT = "direct"
+    SEQUENTIAL = "sequential"
+    CONCURRENT = "concurrent"
+    HANDOFF = "handoff"
+    GROUP_CHAT = "group_chat"
+
+
+@dataclass(frozen=True)
+class RecipeStage:
+    stage_id: str
+    pattern: ExecutionPattern
+    participants: tuple[dict[str, str], ...]
+    input_type: str
+    output_type: str
+    limits: dict[str, int | str]
+
+
 @dataclass(frozen=True)
 class ExecutionRecipe:
     name: RecipeName
@@ -26,6 +45,8 @@ class ExecutionRecipe:
     escalation: str
     partial_result: str
     metadata: dict[str, str] = field(default_factory=dict)
+    purpose: str = "execute"
+    stages: tuple[RecipeStage, ...] = ()
 
 
 def make_recipe(name: RecipeName) -> ExecutionRecipe:
@@ -58,6 +79,14 @@ def make_recipe(name: RecipeName) -> ExecutionRecipe:
             {"purpose": "analyst", "profile": Profile.NORMAL.value},
             {"purpose": "skeptic", "profile": Profile.NORMAL.value},
         ]
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern(pattern),
+        tuple(roles),
+        "prompt",
+        "typed-result",
+        {"max_agent_steps": guardrail.max_agent_steps, "max_total_agent_calls": guardrail.max_total_agent_calls},
+    )
     return ExecutionRecipe(
         name,
         pattern,
@@ -68,4 +97,6 @@ def make_recipe(name: RecipeName) -> ExecutionRecipe:
         "accepted recommendation after required evidence and review",
         "route to human decision/review boundary",
         "no accepted recommendation; preserve partial state",
+        purpose=name.value,
+        stages=(stage,),
     )

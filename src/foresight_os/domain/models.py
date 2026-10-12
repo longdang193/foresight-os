@@ -31,6 +31,16 @@ class RevisionStatus(StrEnum):
 
 
 @dataclass(frozen=True)
+class MeasurementKey:
+    region: str
+    measure: str
+    period: str
+    units: str
+    scenario: str = "default"
+    version: str = "v1"
+
+
+@dataclass(frozen=True)
 class SourceLocator:
     file_version: str
     sheet: str
@@ -48,6 +58,18 @@ class Evidence:
     date: str
     excerpt: str
     limitations: list[str] = field(default_factory=list)
+    measurement_key: MeasurementKey | None = None
+
+
+@dataclass(frozen=True)
+class CalculationRecord:
+    id: str
+    key: MeasurementKey
+    formula: str
+    input_ids: list[str]
+    output: float
+    units: str
+    source_locators: list[str]
 
 
 @dataclass(frozen=True)
@@ -107,6 +129,7 @@ class AnalysisState:
     invalidation: Invalidation = field(default_factory=Invalidation)
     schema_version: int = 1
     revision_status: RevisionStatus = RevisionStatus.ACCEPTED
+    calculations: list[CalculationRecord] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -122,6 +145,7 @@ class WorkBrief:
     open_dependencies: list[str]
     current_direction: str
     next_useful_step: str
+    execution_pattern_override: str | list[str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

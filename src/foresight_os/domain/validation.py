@@ -23,8 +23,10 @@ def migrate_analysis_dict(value: dict[str, Any]) -> dict[str, Any]:
     if version == 0:
         migrated["schema_version"] = CURRENT_SCHEMA_VERSION
         migrated.setdefault("revision_status", "ACCEPTED")
+        migrated.setdefault("calculations", [])
     elif version == CURRENT_SCHEMA_VERSION:
         migrated.setdefault("revision_status", "ACCEPTED")
+        migrated.setdefault("calculations", [])
     return migrated
 
 
@@ -55,10 +57,16 @@ def validate_analysis(state: AnalysisState | dict[str, Any]) -> dict[str, Any]:
         value["revisions"],
     )
     ids = [record["id"] for collection in collections for record in collection]
+    calculation_ids = [record["id"] for record in value.get("calculations", [])]
+    ids.extend(calculation_ids)
     if len(ids) != len(set(ids)):
         raise ValidationError("record IDs must be unique")
 
     record_ids = set(ids)
+    evidence_ids = {item["id"] for item in value["evidence"]}
+    for calculation in value.get("calculations", []):
+        if not set(calculation["input_ids"]).issubset(evidence_ids | set(calculation_ids)):
+            raise ValidationError("calculations must reference existing evidence or calculations")
     relationship_ids = {relationship["id"] for relationship in value["relationships"]}
     kinds = {
         **{item["id"]: RecordKind.EVIDENCE for item in value["evidence"]},

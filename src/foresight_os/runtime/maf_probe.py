@@ -159,6 +159,7 @@ def probe_capabilities() -> tuple[CapabilityResult, ...]:
         )
     else:
         from agent_framework import Agent, AgentExecutorRequest, WorkflowBuilder
+        from agent_framework.orchestrations import ConcurrentBuilder, GroupChatBuilder, HandoffBuilder, SequentialBuilder
 
         checkpoint_ok = checkpoint_round_trip()
         native = {
@@ -195,6 +196,12 @@ def probe_capabilities() -> tuple[CapabilityResult, ...]:
                 else "WorkflowCheckpoint round-trip failed.",
             ),
         }
+        native.update({
+            "pattern_sequential": CapabilityResult("pattern_sequential", CapabilityDecision.USE_NATIVE, True, SequentialBuilder.__name__),
+            "pattern_concurrent": CapabilityResult("pattern_concurrent", CapabilityDecision.USE_NATIVE, True, ConcurrentBuilder.__name__),
+            "pattern_handoff": CapabilityResult("pattern_handoff", CapabilityDecision.USE_NATIVE, True, HandoffBuilder.__name__),
+            "pattern_group_chat": CapabilityResult("pattern_group_chat", CapabilityDecision.USE_NATIVE, True, GroupChatBuilder.__name__),
+        })
         required = tuple(native[name] for name in REQUIRED_CAPABILITIES)
     deferred = tuple(
         CapabilityResult(

@@ -21,6 +21,9 @@ class RelationshipRule:
     sources: frozenset[RecordKind]
     targets: frozenset[RecordKind]
     impact: ImpactDirection
+    semantic_direction: str = "forward"
+    provenance_direction: str = "forward"
+    evidence_role: str = "context"
 
 
 ANALYTICAL = frozenset({RecordKind.CLAIM, RecordKind.IMPLICATION, RecordKind.RECOMMENDATION})

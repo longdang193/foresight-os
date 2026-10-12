@@ -1,7 +1,7 @@
 from collections import defaultdict, deque
 from dataclasses import replace
 
-from foresight_os.domain.models import AnalysisState, Assessment, Invalidation, Lifecycle, Revision
+from foresight_os.domain.models import AnalysisState, Invalidation, Revision
 from foresight_os.domain.relationships import ImpactDirection, relationship_rule
 
 

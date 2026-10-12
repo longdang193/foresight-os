@@ -1,0 +1,32 @@
+[
+  {
+    "task_shape": "direct_operation",
+    "participant_input_contract": "prompt -> typed result",
+    "expected_patterns": ["direct"],
+    "quality_cases": ["case-001"]
+  },
+  {
+    "task_shape": "ordered_synthesis",
+    "participant_input_contract": "prompt -> typed proposal -> typed review",
+    "expected_patterns": ["sequential"],
+    "quality_cases": ["case-001"]
+  },
+  {
+    "task_shape": "independent_branches",
+    "participant_input_contract": "prompt -> branch results -> typed aggregate",
+    "expected_patterns": ["concurrent"],
+    "quality_cases": ["case-002"]
+  },
+  {
+    "task_shape": "specialist_routing",
+    "participant_input_contract": "prompt -> specialist handoff -> typed result",
+    "expected_patterns": ["handoff"],
+    "quality_cases": ["case-003"]
+  },
+  {
+    "task_shape": "interactive_deliberation",
+    "participant_input_contract": "prompt -> shared context -> terminated challenge",
+    "expected_patterns": ["group_chat"],
+    "quality_cases": ["case-004"]
+  }
+]

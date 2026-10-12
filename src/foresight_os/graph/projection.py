@@ -36,5 +36,8 @@ def build_graph(state: AnalysisState) -> Any:
             key=relation.id,
             relation_type=relation.relation_type.lower(),
             impact=relationship_rule(relation.relation_type).impact.value,
+            semantic_direction=relationship_rule(relation.relation_type).semantic_direction,
+            provenance_direction=relationship_rule(relation.relation_type).provenance_direction,
+            evidence_role=relationship_rule(relation.relation_type).evidence_role,
         )
     return graph

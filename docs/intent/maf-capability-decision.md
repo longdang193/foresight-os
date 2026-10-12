@@ -17,11 +17,13 @@ MAF only supports OpenAI or Anthropic.
 | Capability | Decision | Evidence and limit |
 | --- | --- | --- |
 | Single agent | `ADAPT_AT_BOUNDARY` | Live `9router` call through MAF completed with the configured `combo-high` model. |
-| Sequential review | `USE_NATIVE` | `WorkflowBuilder` chaining API imports. |
+| Sequential | `USE_NATIVE` | `agent_framework.orchestrations.SequentialBuilder` imports and bounded workflow tests. |
+| Concurrent | `USE_NATIVE` | `agent_framework.orchestrations.ConcurrentBuilder` imports; branch limits remain Controller-owned. |
+| Handoff | `USE_NATIVE` | `agent_framework.orchestrations.HandoffBuilder` imports; allowed destinations remain recipe-owned. |
+| Group Chat | `USE_NATIVE` | `agent_framework.orchestrations.GroupChatBuilder` imports; round and termination limits remain recipe-owned. |
 | Human input | `ADAPT_AT_BOUNDARY` | `AgentExecutorRequest` imports; user interaction remains a client boundary. |
 | Structured output | `ADAPT_AT_BOUNDARY` | Live `9router` call returned the typed `ProbeReply` through MAF response-format handling. |
 | Checkpoint/restart | `USE_NATIVE` | `WorkflowCheckpoint` round-trips through `InMemoryCheckpointStorage`. |
-| Group Chat | `DEFER` | Explicitly outside the v0.1 scope. |
 | Magentic | `DEFER` | Explicitly outside the v0.1 scope. |
 
 ## Shared vertical-slice guardrail
@@ -50,7 +52,9 @@ latency_ms=3480
 The probe reports metadata only. It does not print the key, prompt, response
 content, headers, or request body.
 
-Task 3 may activate against the proven local and provider contract. Any task
+The native pattern surface is bounded to Direct, Sequential, Concurrent, Handoff,
+and Group Chat; Magentic is not part of this delivery. Task 3 may activate
+against the proven local and provider contract. Any task
 requiring a real provider call must retain the explicit provider, model,
 endpoint, authentication, timeout, and bounded-call boundary. Providers that
 implement the OpenAI-compatible API can use the same MAF client path; provider

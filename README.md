@@ -10,18 +10,18 @@ The current prototype provides:
 - a synthetic workbook evaluation case;
 - validated Work Brief and Analysis State persistence in `brief.md` and
   `analysis.json`;
-- native Microsoft Agent Framework workflow chaining for local deterministic
-  analyst/reviewer steps;
-- bounded Controller recipes and explicit budget exhaustion;
+- native Microsoft Agent Framework Direct, Sequential, Concurrent, Handoff, and
+  Group Chat pattern contracts with bounded Controller recipes;
+- explicit budget exhaustion and settled run metrics;
 - dependency invalidation, fresh-process continuation, and stale-artifact
   protection;
 - one local client adapter over the canonical commands.
 
 Provider/model execution is proven through the configured custom `9router`
 OpenAI-compatible endpoint with one bounded structured-output probe.
-`Concurrent` and `Handoff` remain evaluation-only probes and are
-deferred because the frozen case shows no measurable value over sequential
-review within the accepted budget.
+Pattern support is separate from measurement: evaluation results tune defaults
+and budgets but do not disable an implemented pattern. The configured custom
+`9router` provider remains the live-probe boundary.
 
 The second client is a v0.2 stretch item. All clients must consume the same
 durable state and must not own analytical truth.

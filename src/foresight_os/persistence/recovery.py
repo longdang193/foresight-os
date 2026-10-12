@@ -16,7 +16,7 @@ def continue_investigation(
     state = store.load_analysis()
     if changed_ids and reason:
         state = invalidate_dependencies(state, changed_ids, reason)
-        store.save_analysis(state)
+        state = store.commit_revision(state, expected_revision=store.load_analysis().revision, accepted=False)
     return state
 
 

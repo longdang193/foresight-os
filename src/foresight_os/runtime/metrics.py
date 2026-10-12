@@ -13,6 +13,11 @@ class RunMetrics:
     provider_failures: int = 0
     input_tokens: int | None = None
     output_tokens: int | None = None
+    branches: int = 0
+    parallelism: int = 0
+    handoffs: int = 0
+    chat_rounds: int = 0
+    cleanup_complete: bool = False
 
 
 @dataclass(frozen=True)

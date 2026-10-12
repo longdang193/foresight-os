@@ -5,6 +5,7 @@ from pathlib import Path
 
 import yaml
 from dataclasses import replace
+from filelock import FileLock
 
 from foresight_os.domain.models import (
     AnalysisState,
@@ -13,11 +14,13 @@ from foresight_os.domain.models import (
     Assessment,
     Basis,
     Evidence,
+    CalculationRecord,
     Invalidation,
     Lifecycle,
     Relationship,
     Revision,
     RevisionStatus,
+    MeasurementKey,
     SourceLocator,
     WorkBrief,
 )
@@ -36,6 +39,10 @@ class AnalysisStore:
     def analysis_path(self) -> Path:
         return self.root / "analysis.json"
 
+    @property
+    def lock_path(self) -> Path:
+        return self.root / ".analysis.lock"
+
     def save_brief(self, brief: WorkBrief) -> None:
         value = validate_work_brief(brief)
         body = "# Work Brief\n\n" + value["current_direction"] + "\n"
@@ -51,20 +58,32 @@ class AnalysisStore:
 
     def save_analysis(self, state: AnalysisState) -> None:
         value = validate_analysis(state)
-        self._atomic_write(self.analysis_path, json.dumps(value, indent=2) + "\n")
+        with FileLock(str(self.lock_path)):
+            self._write_validated(value)
 
     def commit_revision(self, state: AnalysisState, expected_revision: int, accepted: bool) -> AnalysisState:
-        current = self.load_analysis() if self.analysis_path.exists() else None
-        if current is not None and current.revision != expected_revision:
-            raise ValueError(f"stale revision: expected {expected_revision}, current {current.revision}")
-        status = RevisionStatus.ACCEPTED if accepted else RevisionStatus.REJECTED
-        committed = replace(state, revision_status=status)
-        self.save_analysis(committed)
-        return committed
+        with FileLock(str(self.lock_path)):
+            current = self.load_analysis() if self.analysis_path.exists() else None
+            if current is not None and current.revision != expected_revision:
+                raise ValueError(f"stale revision: expected {expected_revision}, current {current.revision}")
+            status = RevisionStatus.ACCEPTED if accepted else RevisionStatus.REJECTED
+            committed = replace(state, revision_status=status)
+            if current is not None and committed.revision <= current.revision and current.revision_status != RevisionStatus.PENDING_REVIEW:
+                number = current.revision + 1
+                revision = Revision(
+                    f"revision-{number}",
+                    number,
+                    "accepted mutation",
+                    [item.id for collection in [committed.evidence, committed.claims, committed.implications, committed.recommendations, committed.artifacts] for item in collection],
+                )
+                committed = replace(committed, revision=number, revisions=[*current.revisions, revision])
+            self._write_validated(validate_analysis(committed))
+            return committed
 
     def save_pending(self, state: AnalysisState) -> AnalysisState:
         pending = replace(state, revision_status=RevisionStatus.PENDING_REVIEW)
-        self.save_analysis(pending)
+        with FileLock(str(self.lock_path)):
+            self._write_validated(validate_analysis(pending))
         return pending
 
     def load_analysis(self) -> AnalysisState:
@@ -78,6 +97,7 @@ class AnalysisStore:
                 item["date"],
                 item["excerpt"],
                 item["limitations"],
+                MeasurementKey(**item["measurement_key"]) if item.get("measurement_key") else None,
             )
             for item in value["evidence"]
         ]
@@ -93,14 +113,26 @@ class AnalysisStore:
                 item["relationship_ids"],
             )
 
+        calculations = [
+            CalculationRecord(
+                item["id"],
+                MeasurementKey(**item["key"]),
+                item["formula"],
+                item["input_ids"],
+                item["output"],
+                item["units"],
+                item["source_locators"],
+            )
+            for item in value.get("calculations", [])
+        ]
         return AnalysisState(
-            value["investigation_id"],
-            value["revision"],
-            evidence,
-            [record(item) for item in value["claims"]],
-            [record(item) for item in value["implications"]],
-            [record(item) for item in value["recommendations"]],
-            [
+            investigation_id=value["investigation_id"],
+            revision=value["revision"],
+            evidence=evidence,
+            claims=[record(item) for item in value["claims"]],
+            implications=[record(item) for item in value["implications"]],
+            recommendations=[record(item) for item in value["recommendations"]],
+            artifacts=[
                 Artifact(
                     item["id"],
                     item["kind"],
@@ -110,12 +142,16 @@ class AnalysisStore:
                 )
                 for item in value["artifacts"]
             ],
-            [Relationship(**item) for item in value["relationships"]],
-            [Revision(**item) for item in value["revisions"]],
-            Invalidation(**value["invalidation"]),
-            value["schema_version"],
-            RevisionStatus(value["revision_status"]),
+            relationships=[Relationship(**item) for item in value["relationships"]],
+            revisions=[Revision(**item) for item in value["revisions"]],
+            invalidation=Invalidation(**value["invalidation"]),
+            schema_version=value["schema_version"],
+            revision_status=RevisionStatus(value["revision_status"]),
+            calculations=calculations,
         )
+
+    def _write_validated(self, value: dict) -> None:
+        self._atomic_write(self.analysis_path, json.dumps(value, indent=2) + "\n")
 
     @staticmethod
     def _atomic_write(path: Path, content: str) -> None:

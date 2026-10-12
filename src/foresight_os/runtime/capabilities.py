@@ -18,6 +18,14 @@ class CapabilityResult:
 
 
 @dataclass(frozen=True)
+class PatternCapability:
+    pattern: str
+    supported: bool
+    available: bool
+    reason: str
+
+
+@dataclass(frozen=True)
 class VerticalSliceGuardrail:
     max_agent_steps: int = 5
     max_correction_rounds: int = 1
@@ -34,3 +42,11 @@ REQUIRED_CAPABILITIES = (
 )
 
 DEFERRED_CAPABILITIES = ("group_chat", "magentic")
+
+PATTERN_CAPABILITIES = {
+    "direct": PatternCapability("direct", True, True, "bounded direct execution"),
+    "sequential": PatternCapability("sequential", True, True, "native sequential workflow"),
+    "concurrent": PatternCapability("concurrent", True, True, "native concurrent workflow"),
+    "handoff": PatternCapability("handoff", True, True, "native handoff workflow"),
+    "group_chat": PatternCapability("group_chat", True, True, "native group chat workflow"),
+}
