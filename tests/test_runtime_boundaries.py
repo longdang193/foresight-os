@@ -4,6 +4,8 @@ import pytest
 from agent_framework import Agent, ChatResponse, ChatResponseUpdate, Content, Message, ResponseStream
 from foresight_os.controller.recipes import ExecutionPattern, RecipeName, ExecutionRecipe, RecipeStage, make_recipe
 from foresight_os.runtime.metrics import BudgetExceededError, FailureClass, RunMetrics
+from foresight_os.runtime.capabilities import CapabilityDefinition, instrument_tool
+from foresight_os.controller.budgets import BudgetState
 from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
 from foresight_os.runtime.workflow import run_recipe_async
 
@@ -85,3 +87,48 @@ def test_agent_factory_preserves_participant_identity_and_profile_options():
     assert client.kwargs["id"] == "scout"
     assert client.kwargs["default_options"]["model"] == "configured-model"
     assert client.kwargs["default_options"]["response_format"] == {"type": "json"}
+
+
+def test_tool_budget_fails_before_dispatch_and_reports_budget():
+    calls = []
+
+    async def tool():
+        calls.append(True)
+        return "ok"
+
+    metrics = RunMetrics("tool-budget", "DIRECT", "direct")
+    wrapped = instrument_tool(
+        tool,
+        CapabilityDefinition("tool", "local_deterministic", max_parallelism=1),
+        {"budget": BudgetState(5, 1, 5, max_tool_calls=1), "metrics": metrics},
+    )
+
+    asyncio.run(wrapped())
+    with pytest.raises(BudgetExceededError):
+        asyncio.run(wrapped())
+
+    assert len(calls) == 1
+    assert metrics.tool_calls == 1
+    assert metrics.budget_failures == 1
+    assert metrics.tool_failures == 0
+
+
+def test_tool_semaphore_enforces_declared_parallelism():
+    active = 0
+    peak = 0
+
+    async def tool():
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return "ok"
+
+    wrapped = instrument_tool(tool, CapabilityDefinition("tool", "local_deterministic", max_parallelism=1), {})
+    async def run_both():
+        await asyncio.gather(wrapped(), wrapped())
+
+    asyncio.run(run_both())
+
+    assert peak == 1

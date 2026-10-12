@@ -88,4 +88,4 @@ def test_candidate_score_fails_closed_without_recipe_output():
     reference = json.loads((CASE / "reference.json").read_text(encoding="utf-8"))
     score = _score_candidate({"metrics": {"pattern": "sequential"}}, reference)
 
-    assert not score["admitted"]
+    assert not score["quality_passed"]

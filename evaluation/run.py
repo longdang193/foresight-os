@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 ROOT = Path(__file__).parents[1]
 
 from candidate_harness import run_candidate
-from foresight_os.controller.policy import probe_optional_patterns, select_recipe
+from foresight_os.controller.policy import probe_pattern_status, select_recipe
 from foresight_os.controller.task_shape import TaskShape
 from foresight_os.persistence.recovery import continue_investigation
 from foresight_os.runtime.capabilities import PATTERN_CAPABILITIES
@@ -87,7 +87,7 @@ def _score_candidate(candidate_result: dict, reference: dict) -> dict:
         "human_correction_effort": 1 if outcome is not None and outcome.accepted else 0,
         "run_metrics": metrics,
         "measurement": measurement,
-        "admitted": all(
+        "quality_passed": all(
             [
                 recipe_completed,
                 supported_claim_precision >= FROZEN_THRESHOLDS["supported_claim_precision"],
@@ -114,14 +114,14 @@ def compare_case(case_dir: Path, names: list[str], output_root: Path | None = No
         "comparison": comparison,
         "controller_recipe": recipe.name.value,
         "controller_pattern": recipe.pattern,
-        "admitted_pattern": next((name for name, metrics in comparison.items() if metrics["admitted"]), None),
+        "quality_pattern": next((name for name, metrics in comparison.items() if metrics["quality_passed"]), None),
         "limitations": ["Provider-backed calls are environment-gated; deterministic domain execution remains the local comparison baseline."],
     }
 
 
 def probe_case(case_dir: Path, output_root: Path | None = None) -> dict:
     report = compare_case(case_dir, ["semantic", "sequential"], output_root)
-    report["candidate_probes"] = [asdict(probe) for probe in probe_optional_patterns()]
+    report["candidate_probes"] = [asdict(probe) for probe in probe_pattern_status()]
     return report
 
 
@@ -172,7 +172,13 @@ def run_live_smoke(pattern: str, env_file: Path, config_file: Path) -> dict:
 
     async def run() -> dict:
         try:
-            result = await asyncio.wait_for(run_recipe_async(recipe, "Return a short structured readiness result.", client), 30)
+            prompt = (
+                "Starting with participant-1, perform exactly one handoff to participant-2 "
+                "and then return a short structured readiness result."
+                if pattern == "handoff"
+                else "Return a short structured readiness result."
+            )
+            result = await asyncio.wait_for(run_recipe_async(recipe, prompt, client), 30)
             return {
                 "provider": settings.provider,
                 "model": settings.model,
@@ -212,7 +218,7 @@ def render_markdown(report: dict) -> str:
     lines.extend([
         "",
         f"- Controller recipe: `{report['controller_recipe']}`",
-        f"- Admitted pattern: `{report['admitted_pattern']}`",
+        f"- Quality-passed pattern: `{report['quality_pattern']}`",
     ])
     lines.append("\n## Limitations")
     lines.extend(f"- {item}" for item in report["limitations"])
@@ -225,7 +231,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--matrix", choices=["contract", "controller"])
     parser.add_argument("--task-shapes", type=Path, default=ROOT / "evaluation" / "task_shapes.json")
     parser.add_argument("--live-smoke", action="store_true")
-    parser.add_argument("--pattern", choices=["sequential", "concurrent", "handoff", "group_chat"])
+    parser.add_argument("--pattern", choices=["direct", "sequential", "concurrent", "handoff", "group_chat"])
     parser.add_argument("--env-file", type=Path, default=ROOT / ".env")
     parser.add_argument("--config-file", type=Path, default=Path.home() / ".codex" / "config.toml")
     parser.add_argument("--compare", default="ordinary,semantic,sequential,controller")

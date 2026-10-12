@@ -70,8 +70,8 @@ def make_recipe(name: RecipeName) -> ExecutionRecipe:
     if name == RecipeName.HANDOFF:
         pattern = "handoff"
         roles = [
-            {"purpose": "analyst", "profile": Profile.NORMAL.value},
-            {"purpose": "reviewer", "profile": Profile.NORMAL.value},
+            {"purpose": "analyst", "profile": Profile.NORMAL.value, "handoff_targets": ("participant-2",)},
+            {"purpose": "reviewer", "profile": Profile.NORMAL.value, "handoff_targets": ()},
         ]
     if name == RecipeName.CHALLENGE_RECOMMENDATION:
         pattern = "group_chat"

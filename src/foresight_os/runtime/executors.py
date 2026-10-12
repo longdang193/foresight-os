@@ -2,7 +2,6 @@ from dataclasses import dataclass
 import inspect
 from typing import Any, Mapping
 
-from foresight_os.runtime.metrics import CleanupError
 from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
 
 
@@ -28,20 +27,8 @@ class AnalystExecutor:
         factory = self.factory or AgentFactory(self.client)
         participant = self.participant or ParticipantConfig("analyst", "analyst", "structured analytical proposal")
         agent = factory.create(participant, self.run_context or {})
-        try:
-            response = await agent.run(prompt)
-            return getattr(response, "value", None) or getattr(response, "text", "")
-        except BaseException as error:
-            try:
-                await _close_agent(agent)
-            except BaseException:
-                raise error
-            raise
-        else:
-            try:
-                await _close_agent(agent)
-            except BaseException as error:
-                raise CleanupError("failed to close analyst agent") from error
+        response = await agent.run(prompt)
+        return getattr(response, "value", None) or getattr(response, "text", "")
 
 
 @dataclass
@@ -57,17 +44,5 @@ class ReviewerExecutor:
         factory = self.factory or AgentFactory(self.client)
         participant = self.participant or ParticipantConfig("reviewer", "reviewer", "structured review of the proposal")
         agent = factory.create(participant, self.run_context or {})
-        try:
-            response = await agent.run(prompt)
-            return getattr(response, "value", None) or getattr(response, "text", "")
-        except BaseException as error:
-            try:
-                await _close_agent(agent)
-            except BaseException:
-                raise error
-            raise
-        else:
-            try:
-                await _close_agent(agent)
-            except BaseException as error:
-                raise CleanupError("failed to close reviewer agent") from error
+        response = await agent.run(prompt)
+        return getattr(response, "value", None) or getattr(response, "text", "")

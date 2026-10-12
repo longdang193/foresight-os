@@ -38,3 +38,23 @@ def test_graph_cycle_terminates_and_complete_query_excludes_starting_node():
         graph.add_edge(source, target, impact="forward")
 
     assert get_impacted_records_complete(graph, "a") == ["b", "c"]
+
+
+def test_bounded_context_does_not_scan_all_edges():
+    import networkx as nx
+
+    class NoGlobalEdgeScan(nx.MultiDiGraph):
+        def edges(self, *args, **kwargs):
+            raise AssertionError("bounded context performed a global edge scan")
+
+    graph = NoGlobalEdgeScan()
+    graph.add_node("root", kind="recommendation")
+    for index in range(100):
+        graph.add_node(f"evidence-{index}", kind="evidence")
+        graph.add_edge(f"evidence-{index}", "root", relation_type="supports", impact="forward")
+
+    context = get_context(graph, "root", limit=2)
+
+    assert context["limit"] == 2
+    assert len(context["provenance"]) == 2
+    assert context["truncated_provenance"]

@@ -8,19 +8,29 @@ from foresight_os.domain.models import WorkBrief
 @dataclass(frozen=True)
 class CandidateProbe:
     name: str
-    accepted: bool
     supported: bool
     available: bool
+    selected: bool
+    measured: bool
+    contract_passed: bool
+    quality_passed: bool
     rationale: str
 
     @property
-    def production_admitted(self) -> bool:
-        return self.accepted and self.supported and self.available
-
-    @property
-    def available_for_execution(self) -> bool:
-        return self.supported and self.available
-
+    def status(self) -> str:
+        if not self.supported:
+            return "unsupported"
+        if not self.available:
+            return "unavailable"
+        if self.quality_passed:
+            return "quality_passed"
+        if self.contract_passed:
+            return "contract_passed"
+        if self.measured:
+            return "measured"
+        if self.selected:
+            return "selected"
+        return "available"
 
 @dataclass(frozen=True)
 class PatternSelection:
@@ -53,6 +63,11 @@ def _recipe_for_patterns(
         raise ValueError("at least one execution pattern is required")
     if review_required and patterns == (ExecutionPattern.DIRECT,):
         raise ValueError("review_required cannot be satisfied by a direct topology")
+    for index, stage in enumerate(work_stages, 1):
+        known = {getattr(item, "stage_id", "") for item in work_stages[: index - 1]}
+        invalid = [dependency for dependency in getattr(stage, "dependencies", ()) if dependency not in known]
+        if invalid:
+            raise ValueError(f"stage {stage.stage_id} depends on missing or later stage(s): {', '.join(invalid)}")
     base = make_recipe(RecipeName.ANALYZE_REVIEW if ExecutionPattern.SEQUENTIAL in patterns else RecipeName.DIRECT)
     recipe_names = {
         ExecutionPattern.DIRECT: RecipeName.DIRECT,
@@ -61,12 +76,45 @@ def _recipe_for_patterns(
         ExecutionPattern.HANDOFF: RecipeName.HANDOFF,
         ExecutionPattern.GROUP_CHAT: RecipeName.CHALLENGE_RECOMMENDATION,
     }
+    capability_map = {
+        "external_research": "web_search",
+        "web": "web_search",
+        "search": "web_search",
+        "source_detail": "page_retrieval",
+        "page": "page_retrieval",
+        "existing_evidence": "graph_context",
+        "graph": "graph_context",
+        "quantitative_work": "calculation",
+        "cost": "calculation",
+        "quality_check": "domain_validation",
+        "validate": "domain_validation",
+    }
+
+    def stage_capabilities(stage: object) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        capabilities: list[str] = []
+        unresolved: list[str] = []
+        for need in getattr(stage, "research_needs", ()):
+            text = str(need).lower()
+            matches = [capability for key, capability in capability_map.items() if key in text]
+            if matches:
+                capabilities.extend(matches)
+            else:
+                unresolved.append(str(need))
+        return tuple(dict.fromkeys(capabilities)), tuple(unresolved)
+
     stages = tuple(
         RecipeStage(
             getattr(work_stages[index - 1], "stage_id", f"stage-{index}") if index <= len(work_stages) else f"stage-{index}",
             pattern,
             tuple(
-                make_recipe(recipe_names[pattern]).roles
+                [
+                    {
+                        **role,
+                        "capability_ids": stage_capabilities(work_stages[index - 1])[0] if index <= len(work_stages) and role.get("purpose") != "review" else (),
+                        "unresolved_capabilities": stage_capabilities(work_stages[index - 1])[1] if index <= len(work_stages) and role.get("purpose") != "review" else (),
+                    }
+                    for role in make_recipe(recipe_names[pattern]).roles
+                ]
                 + ([{"id": "reviewer", "role": "reviewer", "purpose": "review", "profile": "normal"}] if review_required and index == len(patterns) and pattern != ExecutionPattern.DIRECT else [])
             ),
             "typed-result",
@@ -89,6 +137,11 @@ def _recipe_for_patterns(
             "selection_source": source,
             "selection_rationale": rationale,
             "selected_patterns": ",".join(pattern.value for pattern in patterns),
+            "unresolved_capabilities": ";".join(
+                need
+                for stage in work_stages
+                for need in stage_capabilities(stage)[1]
+            ),
         },
         purpose=base.purpose,
         stages=stages,
@@ -133,20 +186,26 @@ def select_recipe(brief: WorkBrief, task_shape: TaskShape | None = None, overrid
     return make_recipe(RecipeName.DIRECT)
 
 
-def probe_optional_patterns() -> list[CandidateProbe]:
+def probe_pattern_status() -> list[CandidateProbe]:
     return [
         CandidateProbe(
             "Concurrent",
+            True,
+            True,
             False,
             True,
             True,
+            False,
             "No measurable accepted-finding or recovery improvement over sequential review within budget.",
         ),
         CandidateProbe(
             "Handoff",
+            True,
+            True,
             False,
             True,
             True,
+            False,
             "No measurable accepted-finding or recovery improvement over sequential review within budget.",
         ),
     ]

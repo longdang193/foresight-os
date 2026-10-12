@@ -18,6 +18,8 @@ from foresight_os.runtime.metrics import (
     RunMetrics,
     RunResult,
 )
+from foresight_os.runtime.capabilities import CapabilityResolver, CapabilityScope, ScopeOwnership
+from foresight_os.runtime.web_search import bind_web_search
 from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
 
 
@@ -48,67 +50,61 @@ async def _run_native_stage(
 
     agents = []
     factory = AgentFactory(client)
-    run_error: BaseException | None = None
-    try:
-        if not hasattr(client, "as_agent"):
-            raise RuntimeError("a native MAF client with as_agent() is required for this pattern")
-        for index, role in enumerate(roles or [{"purpose": "participant"}], 1):
-            participant = ParticipantConfig.from_mapping(role, f"participant-{index}")
-            context = dict(run_context or {})
-            context["handoff"] = pattern == ExecutionPattern.HANDOFF
-            agent = factory.create(participant, context)
-            agents.append(agent)
-        if pattern == ExecutionPattern.SEQUENTIAL:
-            workflow = SequentialBuilder(participants=agents, output_from="all").build()
-        elif pattern == ExecutionPattern.CONCURRENT:
-            workflow = ConcurrentBuilder(participants=agents, output_from="all").build()
-        elif pattern == ExecutionPattern.HANDOFF:
-            builder = HandoffBuilder(participants=agents, output_from="all").with_start_agent(agents[0])
-            for source in agents:
-                targets = [target for target in agents if target is not source]
-                if targets:
-                    builder.add_handoff(source, targets)
-            workflow = builder.build()
-        elif pattern == ExecutionPattern.GROUP_CHAT:
-            async def select_speaker(state: Any) -> str:
-                return agents[state.current_round % len(agents)].id
+    if not hasattr(client, "as_agent"):
+        raise RuntimeError("a native MAF client with as_agent() is required for this pattern")
+    context = dict(run_context or {})
+    context["handoff"] = pattern == ExecutionPattern.HANDOFF
+    for index, role in enumerate(roles or [{"purpose": "participant"}], 1):
+        participant = ParticipantConfig.from_mapping(role, f"participant-{index}")
+        agent = factory.create(participant, context)
+        agents.append(agent)
+    if pattern == ExecutionPattern.SEQUENTIAL:
+        workflow = SequentialBuilder(participants=agents, output_from="all").build()
+    elif pattern == ExecutionPattern.CONCURRENT:
+        workflow = ConcurrentBuilder(participants=agents, output_from="all").build()
+    elif pattern == ExecutionPattern.HANDOFF:
+        builder = HandoffBuilder(participants=agents, output_from="all").with_start_agent(agents[0])
+        for source, role in zip(agents, roles, strict=False):
+            allowed_targets = set(
+                role.get("handoff_targets", ())
+                if isinstance(role, dict)
+                else getattr(role, "handoff_targets", ())
+            )
+            targets = [target for target in agents if target.id in allowed_targets]
+            if targets:
+                builder.add_handoff(source, targets)
+        workflow = builder.build()
+    elif pattern == ExecutionPattern.GROUP_CHAT:
+        async def select_speaker(state: Any) -> str:
+            return agents[state.current_round % len(agents)].id
 
-            workflow = GroupChatBuilder(
-                participants=agents,
-                selection_func=select_speaker,
-                max_rounds=4,
-                output_from="all",
-            ).build()
-        else:
-            return [await agents[0].run(prompt)]
-        if metrics is None:
-            result = await workflow.run(prompt)
-        else:
-            agent_ids = {getattr(agent, "id", None) for agent in agents}
-            observed_rounds: set[int] = set()
-            stream = await workflow.run(prompt, stream=True)
-            async for event in stream:
-                if event.type == "executor_invoked" and event.executor_id in agent_ids:
-                    metrics.model_calls += 1
-                elif event.type == "handoff_sent":
-                    metrics.handoffs += 1
-                elif pattern == ExecutionPattern.GROUP_CHAT and event.type == "group_chat":
-                    data = event.data
-                    if type(data).__name__ == "GroupChatRequestSentEvent":
-                        observed_rounds.add(getattr(data, "round_index", len(observed_rounds)))
-            result = await stream.get_final_response()
-            metrics.chat_rounds += len(observed_rounds)
-        outputs = result.get_outputs()
-        return list(outputs) if outputs else [result]
-    except BaseException as error:
-        run_error = error
-        raise
-    finally:
-        close_errors = await _close_agents(agents)
-        if metrics is not None and close_errors:
-            metrics.cleanup_complete = False
-        if close_errors and run_error is None:
-            raise CleanupError(f"failed to close {len(close_errors)} native agent(s)") from close_errors[0]
+        workflow = GroupChatBuilder(
+            participants=agents,
+            selection_func=select_speaker,
+            max_rounds=4,
+            output_from="all",
+        ).build()
+    else:
+        return [await agents[0].run(prompt)]
+    if metrics is None:
+        result = await workflow.run(prompt)
+    else:
+        agent_ids = {getattr(agent, "id", None) for agent in agents}
+        observed_rounds: set[int] = set()
+        stream = await workflow.run(prompt, stream=True)
+        async for event in stream:
+            if event.type == "executor_invoked" and event.executor_id in agent_ids:
+                metrics.model_calls += 1
+            elif event.type == "handoff_sent":
+                metrics.handoffs += 1
+            elif pattern == ExecutionPattern.GROUP_CHAT and event.type == "group_chat":
+                data = event.data
+                if type(data).__name__ == "GroupChatRequestSentEvent":
+                    observed_rounds.add(getattr(data, "round_index", len(observed_rounds)))
+        result = await stream.get_final_response()
+        metrics.chat_rounds += len(observed_rounds)
+    outputs = result.get_outputs()
+    return list(outputs) if outputs else [result]
 
 
 def _make_stage(stage_name: str):
@@ -158,7 +154,15 @@ async def run_recipe_async(
     budget = BudgetState(recipe.max_agent_steps, recipe.max_correction_rounds, recipe.max_total_agent_calls)
     factory = AgentFactory(client) if client is not None else None
     context = dict(run_context or {})
-    scope = context.get("scope")
+    supplied_scope = context.get("scope")
+    scope = supplied_scope or CapabilityScope(ownership=ScopeOwnership.RUN)
+    owns_scope = supplied_scope is None or getattr(scope, "ownership", ScopeOwnership.BORROWED) == ScopeOwnership.RUN
+    context["scope"] = scope
+    context["metrics"] = metrics
+    context["budget"] = budget
+    if context.get("web_search_provider") is not None:
+        context.setdefault("capability_resolver", CapabilityResolver())
+        context.setdefault("adapters", {}).setdefault("web_search", bind_web_search(context["web_search_provider"]))
 
     def classify(error: BaseException) -> FailureClass:
         if isinstance(error, BudgetExceededError):
@@ -190,6 +194,11 @@ async def run_recipe_async(
         participants = list(stage.participants)
         limits = dict(getattr(stage, "limits", {}) or {})
         max_timeout = limits.get("max_timeout_seconds", limits.get("timeout_seconds"))
+        for field_name in ("max_agent_steps", "max_total_agent_calls", "max_branches", "max_handoffs", "max_rounds", "max_tool_calls"):
+            value = limits.get(field_name)
+            if value is not None:
+                current = getattr(budget, field_name)
+                setattr(budget, field_name, min(current, int(value)) if current is not None else int(value))
         if limits.get("max_agent_steps") is not None and budget.agent_steps + 1 > int(limits["max_agent_steps"]):
             raise BudgetExceededError("maximum agent steps exceeded before dispatch")
         if limits.get("max_total_agent_calls") is not None and budget.total_agent_calls + 1 > int(limits["max_total_agent_calls"]):
@@ -248,6 +257,7 @@ async def run_recipe_async(
             return await asyncio.wait_for(invoke(), float(max_timeout))
         return await invoke()
 
+    primary_error: BaseException | None = None
     try:
         stages = recipe.stages or ()
         if not stages:
@@ -259,19 +269,23 @@ async def run_recipe_async(
         metrics.settled = True
         return RunResult(metrics.run_id, tuple(outputs), metrics)
     except BaseException as error:
+        primary_error = error
         settle_failure(error)
         raise
     finally:
         metrics.wall_time_ms = round((time.perf_counter() - started) * 1000)
-        if scope is not None:
+        if owns_scope:
+            metrics.cleanup_complete = False
             try:
                 await scope.close()
             except BaseException as error:
-                metrics.cleanup_complete = False
-                if metrics.failure_class is None:
+                metrics.record_failure(FailureClass.CLEANUP, error)
+                if primary_error is None:
                     cleanup_error = CleanupError("failed to close capability scope")
                     settle_failure(cleanup_error)
                     raise cleanup_error from error
+            else:
+                metrics.cleanup_complete = True
 
 
 def run_recipe(

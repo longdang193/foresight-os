@@ -81,4 +81,4 @@ def test_native_patterns_receive_only_assigned_capabilities(pattern):
     )
 
     assert result.metrics.cleanup_complete
-    assert [kwargs["tools"][0]["tool"] for kwargs in client.agents] == ["alpha", "beta"]
+    assert [kwargs["tools"][0].capability_id for kwargs in client.agents] == ["alpha", "beta"]

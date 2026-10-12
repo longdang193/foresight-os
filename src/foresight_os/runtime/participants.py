@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
+from foresight_os.runtime.capabilities import instrument_tool
+
 
 @dataclass(frozen=True)
 class ParticipantConfig:
@@ -9,6 +11,7 @@ class ParticipantConfig:
     purpose: str
     profile: str = "normal"
     capability_ids: tuple[str, ...] = ()
+    handoff_targets: tuple[str, ...] = ()
     data_scope: tuple[str, ...] = ()
     limits: dict[str, int | str] = field(default_factory=dict)
     structured_output: bool | dict[str, Any] = False
@@ -23,6 +26,7 @@ class ParticipantConfig:
             purpose=str(value.get("purpose", "participate")),
             profile=str(value.get("profile", "normal")),
             capability_ids=tuple(str(item) for item in value.get("capability_ids", value.get("capabilities", ()))),
+            handoff_targets=tuple(str(item) for item in value.get("handoff_targets", ())),
             data_scope=tuple(str(item) for item in value.get("data_scope", ())),
             limits=dict(value.get("limits", {})),
             structured_output=value.get("structured_output", False),
@@ -50,18 +54,23 @@ class AgentFactory:
             kwargs.setdefault("default_options", {})["response_format"] = config.structured_output
         tools = context.get("tools_by_participant", {}).get(config.id)
         if tools is None and config.capability_ids and context.get("capability_resolver") is not None:
-            resolutions = context["capability_resolver"].resolve(config.capability_ids, context)
+            participant_context = dict(context)
+            participant_context["participant_data_scope"] = config.data_scope
+            resolutions = context["capability_resolver"].resolve(config.capability_ids, participant_context)
             denied = [item.reason for item in resolutions.values() if not item.available]
             if denied:
                 raise RuntimeError(f"participant {config.id} capabilities unavailable: {'; '.join(denied)}")
-            tools = [item.tool for item in resolutions.values() if item.tool is not None]
+            tools = [instrument_tool(item.tool, item.definition, participant_context) for item in resolutions.values() if item.tool is not None]
         if tools is not None:
             kwargs["tools"] = tools
         context_providers = context.get("context_providers_by_participant", {}).get(config.id)
         if context_providers is not None:
             kwargs["context_providers"] = context_providers
         agent = self.client.as_agent(**kwargs)
+        scope = context.get("scope")
+        if scope is not None:
+            scope.register_agent(agent)
         cleanup = context.get("cleanup")
-        if cleanup is not None:
+        if cleanup is not None and scope is None:
             cleanup.append(agent)
         return agent

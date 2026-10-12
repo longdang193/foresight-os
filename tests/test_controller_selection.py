@@ -1,5 +1,5 @@
 from foresight_os.controller.budgets import BudgetState
-from foresight_os.controller.policy import probe_optional_patterns, select_recipe
+from foresight_os.controller.policy import probe_pattern_status, select_recipe
 from foresight_os.controller.recipes import ExecutionPattern, RecipeName
 from foresight_os.controller.task_shape import TaskShape
 from foresight_os.wayfinding import create_work_brief
@@ -25,12 +25,12 @@ def test_budget_exhaustion_prevents_extra_call_or_correction():
 
 
 def test_optional_patterns_are_probe_only_and_deferred():
-    candidates = probe_optional_patterns()
+    candidates = probe_pattern_status()
 
     assert {candidate.name for candidate in candidates} == {"Concurrent", "Handoff"}
-    assert all(not candidate.production_admitted for candidate in candidates)
-    assert all(candidate.supported and candidate.available_for_execution for candidate in candidates)
-    assert all(not candidate.accepted for candidate in candidates)
+    assert all(not candidate.quality_passed for candidate in candidates)
+    assert all(candidate.supported and candidate.available for candidate in candidates)
+    assert all(candidate.status == "contract_passed" for candidate in candidates)
 
 
 def test_task_shape_composition_is_deterministic_and_bounded():
@@ -67,3 +67,14 @@ def test_override_preserves_required_review_and_rejects_only_direct_topology():
         assert "repeat" in str(error)
     else:
         raise AssertionError("duplicate pattern override was accepted")
+
+
+def test_work_stages_assign_capabilities_and_handoff_routes_explicitly():
+    recipe = select_recipe(
+        create_work_brief("review"),
+        TaskShape(dynamic_specialist_routing=True, ordered_dependencies=True),
+    )
+
+    assert recipe.stages[0].stage_id == "assess-capacity"
+    assert recipe.stages[1].participants[0]["capability_ids"] == ("calculation",)
+    assert recipe.stages[0].participants[0]["handoff_targets"] == ("participant-2",)
