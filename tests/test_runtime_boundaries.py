@@ -1,8 +1,10 @@
 import asyncio
+import pytest
 
 from agent_framework import Agent, ChatResponse, ChatResponseUpdate, Content, Message, ResponseStream
-from foresight_os.controller.recipes import RecipeName, make_recipe
-from foresight_os.runtime.metrics import RunMetrics
+from foresight_os.controller.recipes import ExecutionPattern, RecipeName, ExecutionRecipe, RecipeStage, make_recipe
+from foresight_os.runtime.metrics import BudgetExceededError, FailureClass, RunMetrics
+from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
 from foresight_os.runtime.workflow import run_recipe_async
 
 
@@ -24,8 +26,25 @@ class FakeClient:
 
         return response()
 
-    def as_agent(self, instructions: str):
-        return Agent(self, instructions=instructions)
+    def as_agent(self, **kwargs):
+        return Agent(self, **kwargs)
+
+
+def _limited_recipe(**limits):
+    base = make_recipe(RecipeName.DIRECT)
+    stage = RecipeStage("limited", ExecutionPattern.DIRECT, tuple(base.roles), "prompt", "typed-result", limits)
+    return ExecutionRecipe(
+        base.name,
+        base.pattern,
+        base.roles,
+        base.max_agent_steps,
+        base.max_correction_rounds,
+        base.max_total_agent_calls,
+        base.completion,
+        base.escalation,
+        base.partial_result,
+        stages=(stage,),
+    )
 
 
 def test_run_recipe_returns_typed_metrics_and_real_executor_calls():
@@ -35,3 +54,34 @@ def test_run_recipe_returns_typed_metrics_and_real_executor_calls():
     assert result.metrics.model_calls == 2
     assert result.metrics.run_id == "run-test"
     assert len(result.outputs) == 2
+    assert result.metrics.settled
+
+
+def test_budget_failure_is_rejected_before_dispatch_and_keeps_metrics():
+    with pytest.raises(BudgetExceededError) as caught:
+        asyncio.run(run_recipe_async(_limited_recipe(max_agent_steps=0), "analyse", FakeClient(), "budget-test"))
+
+    assert caught.value.metrics.failure_class == FailureClass.BUDGET.value
+    assert caught.value.metrics.settled
+    assert caught.value.metrics.model_calls == 0
+
+
+def test_agent_factory_preserves_participant_identity_and_profile_options():
+    class CapturingClient:
+        def __init__(self):
+            self.kwargs = None
+
+        def as_agent(self, **kwargs):
+            self.kwargs = kwargs
+            return object()
+
+    client = CapturingClient()
+    factory = AgentFactory(client)
+    factory.create(
+        ParticipantConfig("scout", "scout", "find signals", profile="high", structured_output={"type": "json"}),
+        {"profile_options": {"high": {"model": "configured-model"}}},
+    )
+
+    assert client.kwargs["id"] == "scout"
+    assert client.kwargs["default_options"]["model"] == "configured-model"
+    assert client.kwargs["default_options"]["response_format"] == {"type": "json"}

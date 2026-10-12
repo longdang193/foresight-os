@@ -1,10 +1,12 @@
 import asyncio
+from types import SimpleNamespace
 
 from agent_framework import Agent, ChatResponse, ChatResponseUpdate, Content, Message, ResponseStream
 from agent_framework.orchestrations import HandoffBuilder
 
 from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, RecipeName, RecipeStage, make_recipe
 from foresight_os.runtime.workflow import _close_agents, _run_native_stage, run_recipe_async
+from foresight_os.runtime.metrics import RunMetrics
 
 
 class FakeChatClient:
@@ -90,6 +92,54 @@ def test_handoff_metrics_report_observed_transfer_not_recipe_shape():
 
     assert result.metrics.model_calls == 3
     assert result.metrics.handoffs == 0
+
+
+def test_handoff_metrics_count_real_transfer_event(monkeypatch):
+    class TransferAgent:
+        def __init__(self, agent_id):
+            self.id = agent_id
+
+        async def close(self):
+            return None
+
+    class TransferClient:
+        def as_agent(self, **kwargs):
+            return TransferAgent(kwargs["id"])
+
+    class TransferStream:
+        def __aiter__(self):
+            async def events():
+                yield SimpleNamespace(type="executor_invoked", executor_id="participant-1")
+                yield SimpleNamespace(type="handoff_sent", executor_id=None)
+
+            return events()
+
+        async def get_final_response(self):
+            return SimpleNamespace(get_outputs=lambda: ["transferred"])
+
+    class TransferWorkflow:
+        async def run(self, prompt, stream=False):
+            return TransferStream()
+
+    class TransferBuilder:
+        def __init__(self, **kwargs):
+            pass
+
+        def with_start_agent(self, agent):
+            return self
+
+        def add_handoff(self, source, targets):
+            return self
+
+        def build(self):
+            return TransferWorkflow()
+
+    monkeypatch.setattr("agent_framework.orchestrations.HandoffBuilder", TransferBuilder)
+    metrics = RunMetrics("handoff-transfer", "HANDOFF", "handoff")
+    outputs = asyncio.run(_run_native_stage(ExecutionPattern.HANDOFF, "hello", TransferClient(), [{"purpose": "one"}, {"purpose": "two"}], metrics))
+
+    assert outputs == ["transferred"]
+    assert metrics.handoffs == 1
 
 
 def test_group_chat_metrics_report_observed_rounds():

@@ -29,6 +29,7 @@ def test_optional_patterns_are_probe_only_and_deferred():
 
     assert {candidate.name for candidate in candidates} == {"Concurrent", "Handoff"}
     assert all(not candidate.production_admitted for candidate in candidates)
+    assert all(candidate.supported and candidate.available_for_execution for candidate in candidates)
     assert all(not candidate.accepted for candidate in candidates)
 
 
@@ -46,16 +47,19 @@ def test_task_shape_composition_is_deterministic_and_bounded():
     assert recipe.metadata["selection_source"] == "task_shape"
 
 
-def test_override_cannot_remove_required_review_or_repeat_patterns():
+def test_override_preserves_required_review_and_rejects_only_direct_topology():
     brief = create_work_brief("review")
     shape = TaskShape(review_required=True)
 
+    recipe = select_recipe(brief, shape, override="concurrent")
+    assert any(role["purpose"] == "review" for role in recipe.stages[-1].participants)
+
     try:
-        select_recipe(brief, shape, override="concurrent")
+        select_recipe(brief, shape, override="direct")
     except ValueError as error:
         assert "review_required" in str(error)
     else:
-        raise AssertionError("required review override was accepted")
+        raise AssertionError("direct topology bypassed required review")
 
     try:
         select_recipe(brief, override=["concurrent", "concurrent"])

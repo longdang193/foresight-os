@@ -62,6 +62,22 @@ class Evidence:
 
 
 @dataclass(frozen=True)
+class EvidenceCandidate:
+    candidate_id: str
+    capability_id: str
+    source: str
+    request: str
+    excerpt: str
+    provenance: dict[str, str] = field(default_factory=dict)
+    limitations: list[str] = field(default_factory=list)
+    acquisition_kind: str = "unknown"
+    retrieved_at: str = ""
+    query: str = ""
+    context: str = ""
+    raw_result: Any = None
+
+
+@dataclass(frozen=True)
 class CalculationRecord:
     id: str
     key: MeasurementKey
@@ -136,6 +152,17 @@ class AnalysisState:
 
 
 @dataclass(frozen=True)
+class WorkStage:
+    stage_id: str
+    objective: str
+    participants: list[str] = field(default_factory=list)
+    subtasks: list[str] = field(default_factory=list)
+    dependencies: list[str] = field(default_factory=list)
+    expected_result: str = ""
+    research_needs: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class WorkBrief:
     investigation_id: str
     decision_question: str
@@ -146,6 +173,7 @@ class WorkBrief:
     current_direction: str
     next_useful_step: str
     execution_pattern_override: str | list[str] | None = None
+    stages: list[WorkStage] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

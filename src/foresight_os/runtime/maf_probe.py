@@ -15,6 +15,7 @@ from .capabilities import (
     REQUIRED_CAPABILITIES,
     VerticalSliceGuardrail,
 )
+from .participants import AgentFactory, ParticipantConfig
 
 
 def maf_package_available() -> bool:
@@ -91,7 +92,10 @@ def run_live_provider_probe(
             api_key=settings.api_key,
             base_url=settings.base_url,
         )
-        agent = client.as_agent(instructions="Return JSON matching the requested schema.")
+        agent = AgentFactory(client).create(
+            ParticipantConfig("probe", "probe", "structured readiness response", structured_output=True),
+            {},
+        )
         try:
             response = await asyncio.wait_for(
                 agent.run(

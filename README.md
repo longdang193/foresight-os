@@ -13,6 +13,9 @@ The current prototype provides:
 - native Microsoft Agent Framework Direct, Sequential, Concurrent, Handoff, and
   Group Chat pattern contracts with bounded Controller recipes;
 - explicit budget exhaustion and settled run metrics;
+- semantic capability resolution with participant-scoped tools and explicit
+  unavailable/approval results;
+- provenance-bearing `EvidenceCandidate` normalization before durable evidence;
 - dependency invalidation, fresh-process continuation, and stale-artifact
   protection;
 - one local client adapter over the canonical commands.
@@ -22,6 +25,9 @@ OpenAI-compatible endpoint with one bounded structured-output probe.
 Pattern support is separate from measurement: evaluation results tune defaults
 and budgets but do not disable an implemented pattern. The configured custom
 `9router` provider remains the live-probe boundary.
+
+Verification runs accept a disposable `--output-root`; preserved probe outputs
+under `work/` are not used as evaluation storage or rewritten by default.
 
 The second client is a v0.2 stretch item. All clients must consume the same
 durable state and must not own analytical truth.

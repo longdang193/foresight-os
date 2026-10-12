@@ -58,7 +58,7 @@ def test_case_is_deterministic_and_contains_no_customer_data_markers():
     assert "confidential" not in content.lower()
 
 
-def test_candidate_score_reads_the_candidate_run_analysis_state(tmp_path: Path):
+def test_candidate_score_reads_the_selected_recipe_output(tmp_path: Path):
     import sys
 
     sys.path.insert(0, str(ROOT / "evaluation"))
@@ -68,12 +68,24 @@ def test_candidate_score_reads_the_candidate_run_analysis_state(tmp_path: Path):
     reference = json.loads((CASE / "reference.json").read_text(encoding="utf-8"))
     candidate = run_candidate(CASE, "sequential", tmp_path / "candidate")
     baseline = _score_candidate(candidate, reference)
-    claim = candidate["analysis_state"].claims[0]
-    candidate["analysis_state"] = replace(
-        candidate["analysis_state"],
+    claim = candidate["recipe_output"]["analysis_state"].claims[0]
+    candidate["recipe_output"]["analysis_state"] = replace(
+        candidate["recipe_output"]["analysis_state"],
         claims=[replace(claim, statement="mutated candidate output")],
     )
 
     changed = _score_candidate(candidate, reference)
 
     assert changed["finding_coverage"] < baseline["finding_coverage"]
+
+
+def test_candidate_score_fails_closed_without_recipe_output():
+    import sys
+
+    sys.path.insert(0, str(ROOT / "evaluation"))
+    from run import _score_candidate
+
+    reference = json.loads((CASE / "reference.json").read_text(encoding="utf-8"))
+    score = _score_candidate({"metrics": {"pattern": "sequential"}}, reference)
+
+    assert not score["admitted"]

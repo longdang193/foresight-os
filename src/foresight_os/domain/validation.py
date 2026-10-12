@@ -4,7 +4,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from .models import AnalysisState, WorkBrief
+from .models import AnalysisState, EvidenceCandidate, WorkBrief
 from .relationships import RecordKind, relationship_rule
 
 
@@ -40,6 +40,19 @@ def _validate_schema(value: dict[str, Any], schema_name: str) -> None:
 def validate_work_brief(brief: WorkBrief | dict[str, Any]) -> dict[str, Any]:
     value = brief.to_dict() if isinstance(brief, WorkBrief) else brief
     _validate_schema(value, "work_brief.schema.json")
+    return value
+
+
+def validate_evidence_candidate(candidate: EvidenceCandidate | dict[str, Any]) -> EvidenceCandidate:
+    value = candidate if isinstance(candidate, EvidenceCandidate) else EvidenceCandidate(**candidate)
+    if not all((value.candidate_id, value.capability_id, value.source, value.request, value.excerpt)):
+        raise ValidationError("evidence candidates require identity, capability, source, request, and excerpt")
+    if not value.provenance:
+        raise ValidationError("evidence candidates require provenance")
+    unsafe_markers = ("ignore previous instructions", "change capabilities", "change permissions", "grant authority", "increase budget")
+    content = " ".join((value.source, value.request, value.excerpt, value.context)).lower()
+    if any(marker in content for marker in unsafe_markers):
+        raise ValidationError("evidence candidate content cannot modify runtime authority")
     return value
 
 

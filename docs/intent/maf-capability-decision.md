@@ -69,3 +69,11 @@ is not an independent provider settlement receipt. In particular, a successful
 Handoff smoke can still report zero transfers when the provider does not select
 one. Treat these results as capability smoke evidence, not a guarantee of
 provider-specific behavior.
+
+Evaluation records preserve four independent facts: pattern support, runtime
+availability, Controller selection, and measured run output. Contract and
+Controller matrices fail closed on mismatches. Benchmark measurements can tune
+budgets and defaults, but cannot downgrade an implemented pattern or change
+capability admission. Candidate scoring consumes the selected recipe output and
+records sanitized quality, latency, model/tool, reuse, correction, and cleanup
+dimensions only.

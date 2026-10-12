@@ -8,7 +8,17 @@ from agent_framework import FunctionExecutor, WorkflowBuilder, WorkflowContext
 
 from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe
 from foresight_os.runtime.executors import AnalystExecutor, ReviewerExecutor
-from foresight_os.runtime.metrics import RunMetrics, RunResult
+from foresight_os.controller.budgets import BudgetState
+from foresight_os.domain.validation import ValidationError
+from foresight_os.runtime.metrics import (
+    BudgetExceededError,
+    CleanupError,
+    ConcurrentAggregate,
+    FailureClass,
+    RunMetrics,
+    RunResult,
+)
+from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
 
 
 async def _close_agents(agents: list[object]) -> list[BaseException]:
@@ -32,25 +42,21 @@ async def _run_native_stage(
     client: Any,
     roles: list[dict[str, str]],
     metrics: RunMetrics | None = None,
+    run_context: dict[str, Any] | None = None,
 ) -> list[object]:
     from agent_framework.orchestrations import ConcurrentBuilder, GroupChatBuilder, HandoffBuilder, SequentialBuilder
 
     agents = []
+    factory = AgentFactory(client)
     run_error: BaseException | None = None
     try:
         if not hasattr(client, "as_agent"):
             raise RuntimeError("a native MAF client with as_agent() is required for this pattern")
         for index, role in enumerate(roles or [{"purpose": "participant"}], 1):
-            instructions = f"Act as the {role.get('purpose', 'participant')} participant and return a structured result."
-            try:
-                agent = client.as_agent(
-                    id=f"participant-{index}",
-                    name=f"participant-{index}",
-                    instructions=instructions,
-                    require_per_service_call_history_persistence=pattern == ExecutionPattern.HANDOFF,
-                )
-            except TypeError:
-                agent = client.as_agent(instructions=instructions)
+            participant = ParticipantConfig.from_mapping(role, f"participant-{index}")
+            context = dict(run_context or {})
+            context["handoff"] = pattern == ExecutionPattern.HANDOFF
+            agent = factory.create(participant, context)
             agents.append(agent)
         if pattern == ExecutionPattern.SEQUENTIAL:
             workflow = SequentialBuilder(participants=agents, output_from="all").build()
@@ -102,7 +108,7 @@ async def _run_native_stage(
         if metrics is not None and close_errors:
             metrics.cleanup_complete = False
         if close_errors and run_error is None:
-            raise RuntimeError(f"failed to close {len(close_errors)} native agent(s)") from close_errors[0]
+            raise CleanupError(f"failed to close {len(close_errors)} native agent(s)") from close_errors[0]
 
 
 def _make_stage(stage_name: str):
@@ -143,56 +149,136 @@ async def run_recipe_async(
     prompt: str,
     client: Any | None = None,
     run_id: str | None = None,
+    run_context: dict[str, Any] | None = None,
 ) -> RunResult:
     started = time.perf_counter()
     metrics = RunMetrics(run_id or f"run-{uuid4().hex}", recipe.name.value, recipe.pattern)
     outputs: list[object] = []
     metrics.cleanup_complete = True
+    budget = BudgetState(recipe.max_agent_steps, recipe.max_correction_rounds, recipe.max_total_agent_calls)
+    factory = AgentFactory(client) if client is not None else None
+    context = dict(run_context or {})
+    scope = context.get("scope")
+
+    def classify(error: BaseException) -> FailureClass:
+        if isinstance(error, BudgetExceededError):
+            return FailureClass.BUDGET
+        if isinstance(error, CleanupError):
+            return FailureClass.CLEANUP
+        if isinstance(error, asyncio.TimeoutError):
+            return FailureClass.TIMEOUT
+        if isinstance(error, asyncio.CancelledError):
+            return FailureClass.CANCELLATION
+        if isinstance(error, ValidationError):
+            return FailureClass.DOMAIN_VALIDATION
+        name = type(error).__name__.lower()
+        if "tool" in name:
+            return FailureClass.TOOL
+        return FailureClass.PROVIDER
+
+    def settle_failure(error: BaseException) -> None:
+        metrics.record_failure(classify(error), error)
+        metrics.settled = True
+        try:
+            setattr(error, "run_metrics", metrics)
+            setattr(error, "metrics", metrics)
+        except BaseException:
+            pass
+
+    async def dispatch_stage(stage: Any, current: object) -> tuple[list[object], object]:
+        pattern = ExecutionPattern(stage.pattern)
+        participants = list(stage.participants)
+        limits = dict(getattr(stage, "limits", {}) or {})
+        max_timeout = limits.get("max_timeout_seconds", limits.get("timeout_seconds"))
+        if limits.get("max_agent_steps") is not None and budget.agent_steps + 1 > int(limits["max_agent_steps"]):
+            raise BudgetExceededError("maximum agent steps exceeded before dispatch")
+        if limits.get("max_total_agent_calls") is not None and budget.total_agent_calls + 1 > int(limits["max_total_agent_calls"]):
+            raise BudgetExceededError("maximum agent calls exceeded before dispatch")
+        if not budget.step():
+            raise BudgetExceededError("maximum agent steps exceeded before dispatch")
+        if not budget.call():
+            raise BudgetExceededError("maximum agent calls exceeded before dispatch")
+        metrics.participant_invocations += len(participants) or 1
+        if pattern == ExecutionPattern.CONCURRENT:
+            branch_count = len(participants) or 2
+            if limits.get("max_branches") is not None and branch_count > int(limits["max_branches"]):
+                raise BudgetExceededError("maximum concurrent branches exceeded before dispatch")
+            if not budget.reserve(branches=branch_count):
+                raise BudgetExceededError("maximum concurrent branches exceeded before dispatch")
+        async def invoke() -> tuple[list[object], object]:
+            if client is not None and pattern != ExecutionPattern.DIRECT:
+                native_outputs = await _run_native_stage(pattern, str(current), client, participants, metrics, context)
+                if pattern == ExecutionPattern.CONCURRENT:
+                    aggregate = ConcurrentAggregate(tuple(native_outputs))
+                    metrics.branches = len(participants)
+                    metrics.parallelism = metrics.branches
+                    return native_outputs, aggregate
+                return native_outputs, native_outputs[-1]
+            if pattern == ExecutionPattern.DIRECT:
+                stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), context).execute(str(current))]
+            elif pattern == ExecutionPattern.CONCURRENT:
+                branch_count = len(participants) or 2
+                metrics.branches = branch_count
+                metrics.parallelism = branch_count
+                branch_results = await asyncio.gather(
+                    *[AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participant, f"participant-{index}"), context).execute(str(current)) for index, participant in enumerate(participants or ({"purpose": "participant"},) * branch_count, 1)],
+                    return_exceptions=True,
+                )
+                results = tuple(item for item in branch_results if not isinstance(item, BaseException))
+                failures = tuple(item for item in branch_results if isinstance(item, BaseException))
+                aggregate = ConcurrentAggregate(results, failures)
+                return list(results), aggregate
+            elif pattern == ExecutionPattern.GROUP_CHAT:
+                stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), context).execute(str(current))]
+                metrics.chat_rounds += 1
+                if len(participants) > 1:
+                    reviewer = participants[1] if len(participants) > 1 else {"purpose": "review"}
+                    stage_outputs.append(await ReviewerExecutor(client, factory, ParticipantConfig.from_mapping(reviewer, "reviewer"), context).execute(f"Challenge this proposal:\n{stage_outputs[-1]}"))
+                    metrics.chat_rounds += 1
+            else:
+                stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), context).execute(str(current))]
+                if len(participants) > 1 or pattern == ExecutionPattern.HANDOFF:
+                    reviewer_prompt = f"Review this proposal:\n{stage_outputs[-1]}"
+                    reviewer = participants[1] if len(participants) > 1 else {"purpose": "review"}
+                    stage_outputs.append(await ReviewerExecutor(client, factory, ParticipantConfig.from_mapping(reviewer, "reviewer"), context).execute(reviewer_prompt))
+            if client is not None:
+                metrics.model_calls += len(stage_outputs)
+            return stage_outputs, stage_outputs[-1]
+        if max_timeout is not None:
+            return await asyncio.wait_for(invoke(), float(max_timeout))
+        return await invoke()
+
     try:
         stages = recipe.stages or ()
         if not stages:
             stages = (type("Stage", (), {"pattern": ExecutionPattern(recipe.pattern), "participants": tuple(recipe.roles)})(),)
         current: object = prompt
         for stage in stages:
-            pattern = ExecutionPattern(stage.pattern)
-            participants = list(stage.participants)
-            if client is not None and pattern != ExecutionPattern.DIRECT:
-                native_outputs = await _run_native_stage(pattern, str(current), client, participants, metrics)
-                outputs.extend(native_outputs)
-                current = native_outputs[-1]
-                if pattern == ExecutionPattern.CONCURRENT:
-                    metrics.branches = len(participants)
-                    metrics.parallelism = metrics.branches
-                continue
-            if pattern == ExecutionPattern.DIRECT:
-                stage_outputs = [await AnalystExecutor(client).execute(str(current))]
-            elif pattern == ExecutionPattern.CONCURRENT:
-                metrics.branches = len(participants) or 2
-                metrics.parallelism = metrics.branches
-                stage_outputs = list(await asyncio.gather(*[AnalystExecutor(client).execute(str(current)) for _ in range(metrics.branches)]))
-            elif pattern == ExecutionPattern.GROUP_CHAT:
-                stage_outputs = [await AnalystExecutor(client).execute(str(current))]
-                metrics.chat_rounds += 1
-                if len(participants) > 1:
-                    stage_outputs.append(await ReviewerExecutor(client).execute(f"Challenge this proposal:\n{stage_outputs[-1]}"))
-                    metrics.chat_rounds += 1
-            else:
-                stage_outputs = [await AnalystExecutor(client).execute(str(current))]
-                metrics.model_calls += 1 if client is not None else 0
-                if len(participants) > 1 or pattern == ExecutionPattern.HANDOFF:
-                    reviewer_prompt = f"Review this proposal:\n{stage_outputs[-1]}"
-                    stage_outputs.append(await ReviewerExecutor(client).execute(reviewer_prompt))
-                    metrics.model_calls += 1 if client is not None else 0
-            metrics.model_calls += sum(1 for _ in stage_outputs) if client is not None and pattern in {ExecutionPattern.DIRECT, ExecutionPattern.CONCURRENT, ExecutionPattern.GROUP_CHAT} else 0
+            stage_outputs, current = await dispatch_stage(stage, current)
             outputs.extend(stage_outputs)
-            current = stage_outputs[-1]
+        metrics.settled = True
         return RunResult(metrics.run_id, tuple(outputs), metrics)
-    except BaseException:
-        metrics.provider_failures += 1
+    except BaseException as error:
+        settle_failure(error)
         raise
     finally:
         metrics.wall_time_ms = round((time.perf_counter() - started) * 1000)
+        if scope is not None:
+            try:
+                await scope.close()
+            except BaseException as error:
+                metrics.cleanup_complete = False
+                if metrics.failure_class is None:
+                    cleanup_error = CleanupError("failed to close capability scope")
+                    settle_failure(cleanup_error)
+                    raise cleanup_error from error
 
 
-def run_recipe(recipe: ExecutionRecipe, prompt: str, client: Any | None = None, run_id: str | None = None) -> RunResult:
-    return asyncio.run(run_recipe_async(recipe, prompt, client, run_id))
+def run_recipe(
+    recipe: ExecutionRecipe,
+    prompt: str,
+    client: Any | None = None,
+    run_id: str | None = None,
+    run_context: dict[str, Any] | None = None,
+) -> RunResult:
+    return asyncio.run(run_recipe_async(recipe, prompt, client, run_id, run_context))

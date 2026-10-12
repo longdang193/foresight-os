@@ -12,6 +12,17 @@ Evaluation has three independent records:
 Measurement can tune defaults and budgets; it never changes the capability
 record or makes a slower pattern unsupported.
 
+Each candidate record keeps pattern support and runtime availability separate
+from Controller selection and measured output. The scorer consumes the selected
+recipe output only; a missing or failed recipe output is not silently replaced
+with the vertical-slice baseline. Measurements include model calls, tool calls,
+duplicate retrievals, latency, parallelism, run-scoped capability reuse,
+human correction, quality, and cleanup state.
+
+The contract and Controller matrices are executable gates: a selection or
+support/availability mismatch exits nonzero rather than producing a passing
+report.
+
 The v0.1 benchmark uses one synthetic workbook case and one frozen rubric. It
 compares three levels without changing the decision question:
 

@@ -1,0 +1,67 @@
+from dataclasses import dataclass, field
+from typing import Any, Mapping
+
+
+@dataclass(frozen=True)
+class ParticipantConfig:
+    id: str
+    role: str
+    purpose: str
+    profile: str = "normal"
+    capability_ids: tuple[str, ...] = ()
+    data_scope: tuple[str, ...] = ()
+    limits: dict[str, int | str] = field(default_factory=dict)
+    structured_output: bool | dict[str, Any] = False
+
+    @classmethod
+    def from_mapping(cls, value: "ParticipantConfig | Mapping[str, Any]", default_id: str = "participant") -> "ParticipantConfig":
+        if isinstance(value, cls):
+            return value
+        return cls(
+            id=str(value.get("id", default_id)),
+            role=str(value.get("role", value.get("purpose", "participant"))),
+            purpose=str(value.get("purpose", "participate")),
+            profile=str(value.get("profile", "normal")),
+            capability_ids=tuple(str(item) for item in value.get("capability_ids", value.get("capabilities", ()))),
+            data_scope=tuple(str(item) for item in value.get("data_scope", ())),
+            limits=dict(value.get("limits", {})),
+            structured_output=value.get("structured_output", False),
+        )
+
+
+@dataclass
+class AgentFactory:
+    client: Any
+
+    def create(self, participant_config: ParticipantConfig | Mapping[str, Any], run_context: Mapping[str, Any] | None = None) -> Any:
+        config = ParticipantConfig.from_mapping(participant_config)
+        context = dict(run_context or {})
+        kwargs: dict[str, Any] = {
+            "id": config.id,
+            "name": config.id,
+            "instructions": f"Act as the {config.role} responsible for {config.purpose} and return a structured result.",
+        }
+        if context.get("handoff"):
+            kwargs["require_per_service_call_history_persistence"] = True
+        profile_options = context.get("profile_options", {})
+        if config.profile in profile_options:
+            kwargs["default_options"] = dict(profile_options[config.profile])
+        if config.structured_output and isinstance(config.structured_output, dict):
+            kwargs.setdefault("default_options", {})["response_format"] = config.structured_output
+        tools = context.get("tools_by_participant", {}).get(config.id)
+        if tools is None and config.capability_ids and context.get("capability_resolver") is not None:
+            resolutions = context["capability_resolver"].resolve(config.capability_ids, context)
+            denied = [item.reason for item in resolutions.values() if not item.available]
+            if denied:
+                raise RuntimeError(f"participant {config.id} capabilities unavailable: {'; '.join(denied)}")
+            tools = [item.tool for item in resolutions.values() if item.tool is not None]
+        if tools is not None:
+            kwargs["tools"] = tools
+        context_providers = context.get("context_providers_by_participant", {}).get(config.id)
+        if context_providers is not None:
+            kwargs["context_providers"] = context_providers
+        agent = self.client.as_agent(**kwargs)
+        cleanup = context.get("cleanup")
+        if cleanup is not None:
+            cleanup.append(agent)
+        return agent

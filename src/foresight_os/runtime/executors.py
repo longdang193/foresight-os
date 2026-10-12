@@ -1,26 +1,73 @@
 from dataclasses import dataclass
-from typing import Any
+import inspect
+from typing import Any, Mapping
+
+from foresight_os.runtime.metrics import CleanupError
+from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
+
+
+async def _close_agent(agent: object) -> None:
+    close = getattr(agent, "close", None)
+    if close is None:
+        return
+    result = close()
+    if inspect.isawaitable(result):
+        await result
 
 
 @dataclass
 class AnalystExecutor:
     client: Any | None = None
+    factory: AgentFactory | None = None
+    participant: ParticipantConfig | None = None
+    run_context: Mapping[str, Any] | None = None
 
     async def execute(self, prompt: str) -> Any:
         if self.client is None:
             return {"role": "analyst", "status": "completed", "prompt": prompt}
-        agent = self.client.as_agent(instructions="Return a structured analytical proposal.")
-        response = await agent.run(prompt)
-        return getattr(response, "value", None) or getattr(response, "text", "")
+        factory = self.factory or AgentFactory(self.client)
+        participant = self.participant or ParticipantConfig("analyst", "analyst", "structured analytical proposal")
+        agent = factory.create(participant, self.run_context or {})
+        try:
+            response = await agent.run(prompt)
+            return getattr(response, "value", None) or getattr(response, "text", "")
+        except BaseException as error:
+            try:
+                await _close_agent(agent)
+            except BaseException:
+                raise error
+            raise
+        else:
+            try:
+                await _close_agent(agent)
+            except BaseException as error:
+                raise CleanupError("failed to close analyst agent") from error
 
 
 @dataclass
 class ReviewerExecutor:
     client: Any | None = None
+    factory: AgentFactory | None = None
+    participant: ParticipantConfig | None = None
+    run_context: Mapping[str, Any] | None = None
 
     async def execute(self, prompt: str) -> Any:
         if self.client is None:
             return {"role": "reviewer", "status": "completed", "prompt": prompt}
-        agent = self.client.as_agent(instructions="Return a structured review of the proposal.")
-        response = await agent.run(prompt)
-        return getattr(response, "value", None) or getattr(response, "text", "")
+        factory = self.factory or AgentFactory(self.client)
+        participant = self.participant or ParticipantConfig("reviewer", "reviewer", "structured review of the proposal")
+        agent = factory.create(participant, self.run_context or {})
+        try:
+            response = await agent.run(prompt)
+            return getattr(response, "value", None) or getattr(response, "text", "")
+        except BaseException as error:
+            try:
+                await _close_agent(agent)
+            except BaseException:
+                raise error
+            raise
+        else:
+            try:
+                await _close_agent(agent)
+            except BaseException as error:
+                raise CleanupError("failed to close reviewer agent") from error

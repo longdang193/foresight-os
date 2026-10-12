@@ -27,7 +27,7 @@ class ExecutionPattern(StrEnum):
 class RecipeStage:
     stage_id: str
     pattern: ExecutionPattern
-    participants: tuple[dict[str, str], ...]
+    participants: tuple[object, ...]
     input_type: str
     output_type: str
     limits: dict[str, int | str]
@@ -82,7 +82,13 @@ def make_recipe(name: RecipeName) -> ExecutionRecipe:
     stage = RecipeStage(
         "stage-1",
         ExecutionPattern(pattern),
-        tuple(roles),
+        tuple(
+            {
+                **role,
+                "id": role.get("id", f"participant-{index}"),
+            }
+            for index, role in enumerate(roles, 1)
+        ),
         "prompt",
         "typed-result",
         {"max_agent_steps": guardrail.max_agent_steps, "max_total_agent_calls": guardrail.max_total_agent_calls},

@@ -16,6 +16,7 @@ class GraphView:
     graph: Any
     investigation_id: str
     analysis_revision: int
+    indexes: dict[str, dict[str, list[str]]] | None = None
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.graph, name)
@@ -51,4 +52,23 @@ def build_graph(state: AnalysisState) -> GraphView:
             provenance_direction=relationship_rule(relation.relation_type).provenance_direction,
             evidence_role=relationship_rule(relation.relation_type).evidence_role,
         )
-    return GraphView(graph, state.investigation_id, state.revision)
+    forward: dict[str, list[str]] = {}
+    reverse: dict[str, list[str]] = {}
+    provenance: dict[str, list[str]] = {}
+    counterevidence: dict[str, list[str]] = {}
+    for source, target, data in graph.edges(data=True):
+        if data["impact"] == "forward":
+            forward.setdefault(source, []).append(target)
+        elif data["impact"] == "reverse":
+            reverse.setdefault(target, []).append(source)
+        if data.get("relation_type") in {"supports", "derived_from", "depends_on"}:
+            provenance.setdefault(target, []).append(source)
+        if data.get("relation_type") == "contradicts":
+            counterevidence.setdefault(target, []).append(source)
+    indexes = {name: {key: sorted(set(values)) for key, values in mapping.items()} for name, mapping in {
+        "forward": forward,
+        "reverse": reverse,
+        "provenance": provenance,
+        "counterevidence": counterevidence,
+    }.items()}
+    return GraphView(graph, state.investigation_id, state.revision, indexes)

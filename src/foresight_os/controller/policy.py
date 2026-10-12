@@ -15,7 +15,7 @@ class CandidateProbe:
 
     @property
     def production_admitted(self) -> bool:
-        return self.supported and self.available
+        return self.accepted and self.supported and self.available
 
     @property
     def available_for_execution(self) -> bool:
@@ -42,9 +42,17 @@ def _patterns_from_override(override) -> tuple[ExecutionPattern, ...]:
     return selected
 
 
-def _recipe_for_patterns(patterns: tuple[ExecutionPattern, ...], source: str, rationale: str) -> ExecutionRecipe:
+def _recipe_for_patterns(
+    patterns: tuple[ExecutionPattern, ...],
+    source: str,
+    rationale: str,
+    work_stages=(),
+    review_required: bool = False,
+) -> ExecutionRecipe:
     if not patterns:
         raise ValueError("at least one execution pattern is required")
+    if review_required and patterns == (ExecutionPattern.DIRECT,):
+        raise ValueError("review_required cannot be satisfied by a direct topology")
     base = make_recipe(RecipeName.ANALYZE_REVIEW if ExecutionPattern.SEQUENTIAL in patterns else RecipeName.DIRECT)
     recipe_names = {
         ExecutionPattern.DIRECT: RecipeName.DIRECT,
@@ -55,9 +63,12 @@ def _recipe_for_patterns(patterns: tuple[ExecutionPattern, ...], source: str, ra
     }
     stages = tuple(
         RecipeStage(
-            f"stage-{index}",
+            getattr(work_stages[index - 1], "stage_id", f"stage-{index}") if index <= len(work_stages) else f"stage-{index}",
             pattern,
-            tuple(make_recipe(recipe_names[pattern]).roles),
+            tuple(
+                make_recipe(recipe_names[pattern]).roles
+                + ([{"id": "reviewer", "role": "reviewer", "purpose": "review", "profile": "normal"}] if review_required and index == len(patterns) and pattern != ExecutionPattern.DIRECT else [])
+            ),
             "typed-result",
             "typed-result",
             {"max_agent_steps": base.max_agent_steps, "max_total_agent_calls": base.max_total_agent_calls},
@@ -89,8 +100,15 @@ def select_recipe(brief: WorkBrief, task_shape: TaskShape | None = None, overrid
     if override is not None:
         selected = _patterns_from_override(override)
         if task_shape is not None and task_shape.review_required and ExecutionPattern.SEQUENTIAL not in selected:
-            raise ValueError("review_required cannot be removed by an execution-pattern override")
-        return _recipe_for_patterns(selected, "explicit_override", "valid explicit execution-pattern override")
+            if selected == (ExecutionPattern.DIRECT,):
+                raise ValueError("review_required cannot be satisfied by a direct topology")
+        return _recipe_for_patterns(
+            selected,
+            "explicit_override",
+            "valid explicit execution-pattern override",
+            brief.stages,
+            bool(task_shape and task_shape.review_required),
+        )
     if task_shape is not None:
         patterns: list[ExecutionPattern] = []
         if task_shape.independent_subtasks:
@@ -102,8 +120,14 @@ def select_recipe(brief: WorkBrief, task_shape: TaskShape | None = None, overrid
         if task_shape.ordered_dependencies or task_shape.review_required:
             patterns.append(ExecutionPattern.SEQUENTIAL)
         if patterns:
-            return _recipe_for_patterns(tuple(patterns), "task_shape", "structural task-shape mapping")
-        return _recipe_for_patterns((ExecutionPattern.DIRECT,), "task_shape", "direct task shape")
+            return _recipe_for_patterns(
+                tuple(patterns),
+                "task_shape",
+                "structural task-shape mapping",
+                brief.stages,
+                task_shape.review_required,
+            )
+        return _recipe_for_patterns((ExecutionPattern.DIRECT,), "task_shape", "direct task shape", brief.stages)
     if brief.desired_deliverables:
         return make_recipe(RecipeName.ANALYZE_REVIEW)
     return make_recipe(RecipeName.DIRECT)
@@ -114,15 +138,15 @@ def probe_optional_patterns() -> list[CandidateProbe]:
         CandidateProbe(
             "Concurrent",
             False,
-            False,
-            False,
+            True,
+            True,
             "No measurable accepted-finding or recovery improvement over sequential review within budget.",
         ),
         CandidateProbe(
             "Handoff",
             False,
-            False,
-            False,
+            True,
+            True,
             "No measurable accepted-finding or recovery improvement over sequential review within budget.",
         ),
     ]

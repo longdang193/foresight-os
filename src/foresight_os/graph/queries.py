@@ -76,6 +76,9 @@ def get_counterevidence(graph: Any, record_id: str, limit: int = 50) -> list[str
 def get_context(graph: Any, record_id: str, limit: int = 50, depth: int | None = None) -> dict[str, Any]:
     view = graph
     graph = _graph(graph)
+    provenance_full = trace_provenance(graph, record_id, limit=len(graph.nodes))
+    evidence_full = get_evidence(graph, record_id, limit=len(graph.nodes))
+    counterevidence_full = get_counterevidence(graph, record_id, limit=len(graph.nodes))
     impacted = get_impacted_records_complete(graph, record_id)
     if depth is None:
         selected = impacted[:limit]
@@ -92,13 +95,17 @@ def get_context(graph: Any, record_id: str, limit: int = 50, depth: int | None =
                     queue.append((neighbor, current_depth + 1))
         selected = sorted(bounded)[:limit]
     return {
-        "provenance": trace_provenance(graph, record_id, limit),
-        "evidence": get_evidence(graph, record_id, limit),
-        "counterevidence": get_counterevidence(graph, record_id, limit),
+        "provenance": provenance_full[:limit],
+        "evidence": evidence_full[:limit],
+        "counterevidence": counterevidence_full[:limit],
         "impacted": selected,
         "investigation_id": getattr(view, "investigation_id", None),
         "analysis_revision": getattr(view, "analysis_revision", None),
         "depth": depth,
         "limit": limit,
-        "truncated": len(selected) < len(impacted) if depth is None else len(selected) < len(impacted),
+        "truncated_provenance": len(provenance_full) > limit,
+        "truncated_evidence": len(evidence_full) > limit,
+        "truncated_counterevidence": len(counterevidence_full) > limit,
+        "truncated_impact": len(selected) < len(impacted) if depth is None else len(selected) < len(impacted),
+        "truncated": any((len(provenance_full) > limit, len(evidence_full) > limit, len(counterevidence_full) > limit, len(selected) < len(impacted))),
     }

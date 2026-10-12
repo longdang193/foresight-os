@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import json
 import sys
+import tempfile
 from dataclasses import asdict
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from candidate_harness import run_candidate
 from foresight_os.controller.policy import probe_optional_patterns, select_recipe
 from foresight_os.controller.task_shape import TaskShape
 from foresight_os.persistence.recovery import continue_investigation
+from foresight_os.runtime.capabilities import PATTERN_CAPABILITIES
 from foresight_os.wayfinding import create_work_brief
 from foresight_os.runtime.maf_probe import load_provider_settings
 from foresight_os.runtime.workflow import run_recipe_async
@@ -29,7 +31,14 @@ FROZEN_THRESHOLDS = {
 
 
 def _score_candidate(candidate_result: dict, reference: dict) -> dict:
-    state = candidate_result["analysis_state"]
+    recipe_output = candidate_result.get("recipe_output")
+    state = recipe_output.get("analysis_state") if isinstance(recipe_output, dict) else None
+    recipe_completed = bool(
+        isinstance(recipe_output, dict)
+        and recipe_output.get("status") == "completed"
+        and recipe_output.get("pattern") == candidate_result.get("metrics", {}).get("pattern")
+        and state is not None
+    )
     records = [*state.claims, *state.recommendations] if state else []
     reference_statements = {item["statement"] for item in reference["reference_findings"]}
     accepted = [item for item in records if item.assessment.value == "SUPPORTED"]
@@ -43,17 +52,44 @@ def _score_candidate(candidate_result: dict, reference: dict) -> dict:
         and any("conditional" in item.statement.lower() for item in state.recommendations)
     ) if state else False
     metrics = dict(candidate_result["metrics"])
+    outcome = candidate_result.get("outcome")
+    recovery_success = bool(
+        outcome is not None
+        and outcome.accepted
+        and continue_investigation(outcome.report_path.parent.parent).revision == 1
+    )
+    measurement = {
+        "pattern": recipe_output.get("pattern") if isinstance(recipe_output, dict) else None,
+        "capability_selection": recipe_output.get("pattern") if isinstance(recipe_output, dict) else None,
+        "tool_calls": metrics.get("tool_calls", 0),
+        "duplicate_retrievals": metrics.get("duplicate_retrievals", 0),
+        "model_calls": metrics.get("model_calls", 0),
+        "latency_ms": metrics.get("wall_time_ms", 0),
+        "parallelism": metrics.get("parallelism", 0),
+        "capability_reuses": metrics.get("capability_reuses", 0),
+        "human_correction": metrics.get("human_correction", 0),
+        "quality": {
+            "supported_claim_precision": round(supported_claim_precision, 4),
+            "finding_coverage": round(finding_coverage, 4),
+            "contradiction_precision": 1.0 if contradiction_found else 0.0,
+            "contradiction_recall": 1.0 if contradiction_found and reference["contradictions"] else 0.0,
+            "traceability": round(traceability, 4),
+        },
+        "cleanup_complete": metrics.get("cleanup_complete", False),
+    }
     return {
         "supported_claim_precision": round(supported_claim_precision, 4),
         "finding_coverage": round(finding_coverage, 4),
         "contradiction_precision": 1.0 if contradiction_found else 0.0,
         "contradiction_recall": 1.0 if contradiction_found and reference["contradictions"] else 0.0,
         "traceability": round(traceability, 4),
-        "recovery_success": bool(candidate_result["outcome"].accepted and continue_investigation(candidate_result["outcome"].report_path.parent.parent).revision == 1),
-        "human_correction_effort": 1 if candidate_result["outcome"].accepted else 0,
+        "recovery_success": recovery_success,
+        "human_correction_effort": 1 if outcome is not None and outcome.accepted else 0,
         "run_metrics": metrics,
+        "measurement": measurement,
         "admitted": all(
             [
+                recipe_completed,
                 supported_claim_precision >= FROZEN_THRESHOLDS["supported_claim_precision"],
                 finding_coverage >= FROZEN_THRESHOLDS["finding_coverage"],
                 contradiction_found,
@@ -63,13 +99,14 @@ def _score_candidate(candidate_result: dict, reference: dict) -> dict:
     }
 
 
-def compare_case(case_dir: Path, names: list[str]) -> dict:
+def compare_case(case_dir: Path, names: list[str], output_root: Path | None = None) -> dict:
     reference = json.loads((case_dir / "reference.json").read_text(encoding="utf-8"))
     brief = create_work_brief("Should the strategy team increase investment in the Northern Europe service network for 2030?")
     recipe = select_recipe(brief)
     comparison = {}
+    root = output_root or Path(tempfile.mkdtemp(prefix="foresight-eval-"))
     for name in names:
-        result = run_candidate(case_dir, name)
+        result = run_candidate(case_dir, name, output_root=root)
         comparison[name] = _score_candidate(result, reference)
     return {
         "case_id": case_dir.name,
@@ -82,25 +119,29 @@ def compare_case(case_dir: Path, names: list[str]) -> dict:
     }
 
 
-def probe_case(case_dir: Path) -> dict:
-    report = compare_case(case_dir, ["semantic", "sequential"])
+def probe_case(case_dir: Path, output_root: Path | None = None) -> dict:
+    report = compare_case(case_dir, ["semantic", "sequential"], output_root)
     report["candidate_probes"] = [asdict(probe) for probe in probe_optional_patterns()]
     return report
 
 
-def run_contract_matrix() -> dict:
+def run_contract_matrix(output_root: Path | None = None) -> dict:
     patterns = ["direct", "sequential", "concurrent", "handoff", "group_chat"]
     results = {}
+    root = output_root or Path(tempfile.mkdtemp(prefix="foresight-eval-"))
     for pattern in patterns:
         candidate_name = {"direct": "ordinary", "sequential": "sequential"}.get(pattern, pattern)
-        candidate = run_candidate(ROOT / "evaluation" / "cases" / "case-001", candidate_name)
+        candidate = run_candidate(ROOT / "evaluation" / "cases" / "case-001", candidate_name, output_root=root)
+        capability = PATTERN_CAPABILITIES[pattern]
+        selected = candidate["metrics"]["pattern"]
         results[pattern] = {
-            "supported": True,
-            "available": True,
-            "selected": candidate["metrics"]["pattern"],
+            "supported": capability.supported,
+            "available": capability.available,
+            "selected": selected,
+            "match": capability.supported and capability.available and selected == pattern,
             "measured": candidate["metrics"],
         }
-    return {"matrix": "contract", "results": results}
+    return {"matrix": "contract", "results": results, "passed": all(item["match"] for item in results.values())}
 
 
 def run_controller_matrix(task_shapes_path: Path) -> dict:
@@ -118,7 +159,8 @@ def run_controller_matrix(task_shapes_path: Path) -> dict:
         recipe = select_recipe(create_work_brief(name), shape)
         selected = [stage.pattern.value for stage in recipe.stages]
         results.append({"task_shape": name, "expected_patterns": item["expected_patterns"], "selected_patterns": selected, "match": selected == item["expected_patterns"]})
-    return {"matrix": "controller", "results": results, "accuracy": sum(item["match"] for item in results) / len(results)}
+    accuracy = sum(item["match"] for item in results) / len(results)
+    return {"matrix": "controller", "results": results, "accuracy": accuracy, "passed": all(item["match"] for item in results)}
 
 
 def run_live_smoke(pattern: str, env_file: Path, config_file: Path) -> dict:
@@ -190,24 +232,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--probe-patterns", default="")
     parser.add_argument("--evaluation-only", action="store_true")
     parser.add_argument("--write-report", type=Path)
+    parser.add_argument("--output-root", type=Path)
     args = parser.parse_args(argv)
     if args.live_smoke:
         if args.pattern is None:
             parser.error("--pattern is required with --live-smoke")
         report = run_live_smoke(args.pattern, args.env_file, args.config_file)
     elif args.matrix == "contract":
-        report = run_contract_matrix()
+        report = run_contract_matrix(args.output_root)
     elif args.matrix == "controller":
         report = run_controller_matrix(args.task_shapes)
     elif args.case is None:
         parser.error("--case is required unless --matrix is used")
     else:
-        report = probe_case(args.case) if args.probe_patterns else compare_case(args.case, args.compare.split(","))
+        report = probe_case(args.case, args.output_root) if args.probe_patterns else compare_case(args.case, args.compare.split(","), args.output_root)
     if args.write_report:
         args.write_report.parent.mkdir(parents=True, exist_ok=True)
         args.write_report.write_text(render_markdown(report), encoding="utf-8")
     print(json.dumps(report, indent=2, default=str))
-    return 0
+    return 1 if args.matrix is not None and not report.get("passed", False) else 0
 
 
 if __name__ == "__main__":

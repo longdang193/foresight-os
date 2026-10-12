@@ -15,6 +15,7 @@ from foresight_os.domain.models import (
     Revision,
     SourceLocator,
     WorkBrief,
+    WorkStage,
 )
 from foresight_os.domain.validation import ValidationError, validate_analysis, validate_work_brief
 
@@ -46,6 +47,18 @@ def test_valid_analysis_and_work_brief_validate():
     assert validate_analysis(state())["investigation_id"] == "case-001"
     brief = WorkBrief("case-001", "Should investment increase?", ["Northern Europe"], ["report"], ["2030"], [], "Assess capacity.", "Review contradiction.")
     assert validate_work_brief(brief)["investigation_id"] == "case-001"
+    staged = WorkBrief(
+        "case-001",
+        "Should investment increase?",
+        ["Northern Europe"],
+        ["report"],
+        ["2030"],
+        [],
+        "Assess capacity.",
+        "Review contradiction.",
+        stages=[WorkStage("assess", "Assess capacity.", expected_result="assessment")],
+    )
+    assert validate_work_brief(staged)["stages"][0]["stage_id"] == "assess"
 
 
 def test_invalid_locator_and_relationship_fail():
