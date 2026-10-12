@@ -32,7 +32,7 @@ def compare_case(case_dir: Path, names: list[str]) -> dict:
         "accepted": semantic.accepted,
         "recovery_success": recovered.investigation_id == case_dir.name and recovered.revision == 1,
         "coordination_value": 0.0,
-        "limitations": ["Provider/model execution was not exercised; local deterministic steps were used."],
+        "limitations": ["Evaluation case uses local deterministic steps; live provider probing is a separate bounded check."],
     }
 
 

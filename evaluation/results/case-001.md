@@ -11,4 +11,4 @@
 - Recovery success: `True`
 
 ## Limitations
-- Provider/model execution was not exercised; local deterministic steps were used.
+- Evaluation case uses local deterministic steps; live provider probing is a separate bounded check.

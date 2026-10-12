@@ -1,23 +1,25 @@
 # MAF Capability Decision
 
-Status: MAF package installed; provider/model execution remains an explicit
-boundary because no authentication or network/model access was requested.
+Status: MAF package installed; provider/model execution is proven through the
+configured custom `9router` OpenAI-compatible endpoint.
 
 ## Observed local boundary
 
-The local Python environment now provides `agent-framework==1.21.0`. No
-authentication, network/model access, or custom orchestration fallback was
-performed. The probe verifies importable native boundaries and local
-checkpoint persistence only.
+The local Python environment provides `agent-framework==1.21.0`. A bounded
+live probe reads the active provider, model, and base URL from Codex
+`config.toml`, reads the configured key assignment from the repository `.env`,
+and uses MAF's `OpenAIChatClient` transport. This proves transport
+compatibility for custom OpenAI-compatible providers; it does not imply that
+MAF only supports OpenAI or Anthropic.
 
 ## Capability matrix
 
 | Capability | Decision | Evidence and limit |
 | --- | --- | --- |
-| Single agent | `ADAPT_AT_BOUNDARY` | `Agent` API imports; provider execution is not exercised. |
+| Single agent | `ADAPT_AT_BOUNDARY` | Live `9router` call through MAF completed with the configured `combo-high` model. |
 | Sequential review | `USE_NATIVE` | `WorkflowBuilder` chaining API imports. |
 | Human input | `ADAPT_AT_BOUNDARY` | `AgentExecutorRequest` imports; user interaction remains a client boundary. |
-| Structured output | `ADAPT_AT_BOUNDARY` | `Agent.run` exposes provider structured-output options; provider execution is not exercised. |
+| Structured output | `ADAPT_AT_BOUNDARY` | Live `9router` call returned the typed `ProbeReply` through MAF response-format handling. |
 | Checkpoint/restart | `USE_NATIVE` | `WorkflowCheckpoint` round-trips through `InMemoryCheckpointStorage`. |
 | Group Chat | `DEFER` | Explicitly outside the v0.1 scope. |
 | Magentic | `DEFER` | Explicitly outside the v0.1 scope. |
@@ -30,6 +32,26 @@ checkpoint persistence only.
 - exhaustion: no accepted recommendation; route to a human decision/review
   boundary
 
-Task 3 may activate against the proven local contract. Any task requiring a
-real provider call must retain the explicit authentication/model boundary and
-must not claim provider execution from this local probe alone.
+## Live probe evidence
+
+On October 12, 2026, the bounded probe was run with the repository `.env` and
+the active Codex `config.toml`:
+
+```text
+provider=9router
+model=combo-high
+base_url=http://127.0.0.1:17667/v1
+agent-framework=1.21.0
+success=true
+structured_output=true
+latency_ms=3480
+```
+
+The probe reports metadata only. It does not print the key, prompt, response
+content, headers, or request body.
+
+Task 3 may activate against the proven local and provider contract. Any task
+requiring a real provider call must retain the explicit provider, model,
+endpoint, authentication, timeout, and bounded-call boundary. Providers that
+implement the OpenAI-compatible API can use the same MAF client path; provider
+specific extensions remain outside this probe.

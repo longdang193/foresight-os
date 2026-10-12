@@ -17,8 +17,9 @@ The current prototype provides:
   protection;
 - one local client adapter over the canonical commands.
 
-Provider/model execution is not exercised without authentication or network
-access. `Concurrent` and `Handoff` remain evaluation-only probes and are
+Provider/model execution is proven through the configured custom `9router`
+OpenAI-compatible endpoint with one bounded structured-output probe.
+`Concurrent` and `Handoff` remain evaluation-only probes and are
 deferred because the frozen case shows no measurable value over sequential
 review within the accepted budget.
 

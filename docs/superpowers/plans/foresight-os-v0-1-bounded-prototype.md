@@ -199,7 +199,7 @@ README owns stable product architecture and the runtime vocabulary. A small `doc
 
 **Authority:**
 - Preauthorized local actions: inspect installed runtime capabilities, write the MAF probe and capability matrix, and run local smoke tests against approved local dependencies.
-- Stop for: dependency installation, authentication, network/model access, undocumented checkpoint semantics, or any need for a custom orchestration primitive.
+- Stop for: undocumented checkpoint semantics or any need for a custom orchestration primitive. Provider calls remain bounded and use the explicitly configured `9router` boundary.
 
 **Steps:**
 - [x] Step 1: Pin the runtime and MAF package versions in `pyproject.toml`; record why the selected runtime is the smallest viable prototype surface.
@@ -220,7 +220,7 @@ README owns stable product architecture and the runtime vocabulary. A small `doc
 - Expected: failure and restart behavior are observable without relying on chat history.
 
 **Exit Criteria:**
-- The supported MAF capability matrix is pinned, the runtime is known, and no downstream task depends on unproven framework behavior. Evidence: `tests/test_maf_fit.py` passed with 4 tests; provider/model execution remains an explicit boundary.
+- The supported MAF capability matrix is pinned, the runtime is known, and no downstream task depends on unproven framework behavior. Evidence: `tests/test_maf_fit.py` passed with 6 tests; the bounded `9router` structured-output probe passed through `agent-framework==1.21.0`.
 
 ### Task 3: Define durable evidence and analytical state
 
@@ -563,7 +563,7 @@ README owns stable product architecture and the runtime vocabulary. A small `doc
 - Expected: the implemented runtime compiles cleanly.
 
 **Exit Criteria:**
-- Every outcome and task is proven, all deviations and deferrals are recorded, documentation matches repository truth, and final verification returns `verified` before the plan status changes to `completed`. Evidence: 30 tests passed; compileall passed; evaluation report includes A/B/C metrics and recovery; repository contract validation passed; provider/model execution limitation and deferred optional patterns are documented.
+- Every outcome and task is proven, all deviations and deferrals are recorded, documentation matches repository truth, and final verification returns `verified` before the plan status changes to `completed`. Evidence: 31 tests passed; compileall passed; evaluation report includes A/B/C metrics and recovery; repository contract validation passed; the bounded `9router` provider probe passed; deferred optional patterns remain documented.
 
 ## Verification
 
