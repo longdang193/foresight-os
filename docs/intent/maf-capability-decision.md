@@ -59,3 +59,12 @@ requiring a real provider call must retain the explicit provider, model,
 endpoint, authentication, timeout, and bounded-call boundary. Providers that
 implement the OpenAI-compatible API can use the same MAF client path; provider
 specific extensions remain outside this probe.
+
+The completed delivery also exercised sanitized native smokes for Sequential,
+Concurrent, Handoff, and Group Chat. These records establish bounded completion
+against the configured provider boundary; the current `RunMetrics` values for
+model calls, handoffs, chat rounds, and cleanup are runtime estimates/finalization
+signals, not independent provider-event or per-agent settlement receipts. In
+particular, a successful Handoff smoke does not prove that the provider selected
+a transfer. Treat these results as capability smoke evidence, not exact
+execution telemetry.
