@@ -6,6 +6,7 @@ from foresight_os.artifacts.report import write_report
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.persistence.recovery import continue_investigation
 from foresight_os.clients.first_client_adapter import LocalClient
+from foresight_os.analysis.powerbi import read_powerbi_project
 from foresight_os.vertical_slice import run_vertical_slice
 
 
@@ -17,6 +18,9 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--workbook", type=Path, required=True)
     analyze.add_argument("--work-dir", type=Path, required=True)
     analyze.add_argument("--accept", action="store_true")
+
+    inspect_powerbi = subparsers.add_parser("inspect-powerbi")
+    inspect_powerbi.add_argument("--path", type=Path, required=True)
 
     report = subparsers.add_parser("report")
     report.add_argument("--work-dir", type=Path, required=True)
@@ -43,6 +47,9 @@ def main(argv: list[str] | None = None) -> int:
         outcome = run_vertical_slice(args.workbook, args.work_dir, args.accept)
         print(json.dumps({"accepted": outcome.accepted, "status": outcome.status}))
         return 0 if outcome.accepted else 2
+    if args.command == "inspect-powerbi":
+        print(json.dumps(read_powerbi_project(args.path).to_dict(), sort_keys=True))
+        return 0
     if args.command == "report":
         store = AnalysisStore(args.work_dir)
         state = store.load_analysis()

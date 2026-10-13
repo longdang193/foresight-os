@@ -736,6 +736,12 @@ def domain_validation(value: Any) -> dict[str, Any]:
     return {"valid": True, "kind": "candidate", "candidate_id": candidate.candidate_id}
 
 
+def powerbi_project_read(source: Path | str, limits: Any = None) -> Any:
+    from foresight_os.analysis.powerbi import read_powerbi_project
+
+    return read_powerbi_project(source, limits)
+
+
 def bind_local_toolbelt() -> dict[str, Any]:
     from foresight_os.runtime.capabilities import CapabilityBinding, CapabilityBindingKind, CapabilityOwnership
 
@@ -747,5 +753,6 @@ def bind_local_toolbelt() -> dict[str, Any]:
             "calculation": calculation,
             "graph_context": graph_context,
             "domain_validation": domain_validation,
+            "powerbi_project_read": powerbi_project_read,
         }.items()
     }

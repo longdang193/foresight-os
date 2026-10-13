@@ -19,6 +19,7 @@ def test_semantic_registry_contains_the_full_toolbelt():
         "calculation",
         "graph_context",
         "domain_validation",
+        "powerbi_project_read",
         "internal_knowledge",
         "artifact_generation",
     }

@@ -433,6 +433,7 @@ DEFAULT_CAPABILITIES = {
     "calculation": CapabilityDefinition("calculation", "local_deterministic", "read", "RUN", 1, data_scope="local", execution_mode=ExecutionMode.INLINE),
     "graph_context": CapabilityDefinition("graph_context", "local_deterministic", "read", "RUN", 1, data_scope="local", execution_mode=ExecutionMode.BLOCKING),
     "domain_validation": CapabilityDefinition("domain_validation", "local_deterministic", "read", "RUN", 1, data_scope="local", execution_mode=ExecutionMode.INLINE),
+    "powerbi_project_read": CapabilityDefinition("powerbi_project_read", "local_deterministic", "read", "RUN", 1, data_scope="local", execution_mode=ExecutionMode.BLOCKING),
     "document_read": CapabilityDefinition("document_read", "unavailable", "read", "RUN", 1, data_scope="local"),
     "internal_knowledge": CapabilityDefinition("internal_knowledge", "unavailable", "read", "RUN", 1, data_scope="internal"),
     "artifact_generation": CapabilityDefinition("artifact_generation", "unavailable", "write", "RUN", 1, "HUMAN", data_scope="local"),

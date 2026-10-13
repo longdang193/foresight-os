@@ -20,6 +20,8 @@ The current prototype provides:
 - bounded `page_retrieval` with SSRF checks and adapter-issued retrieval proof;
 - deterministic Analyst toolbelt bindings for CSV/XLSX inspection, table
   analysis, calculations, graph context, and domain validation;
+- read-only PBIP/PBIR project inspection with semantic-model metadata,
+  report-page/visual discovery, and source-hash provenance;
 - mandatory multi-sheet XLSX release proof covering hidden content, formulas
   versus cached values, dates/errors, merged headers, cross-sheet references,
   provenance, scenarios, cancellation limits, and unchanged source bytes;
@@ -56,7 +58,7 @@ durable analysis state. Source credibility remains a separate human decision.
 
 The semantic registry contains `web_search`, `page_retrieval`, `web_crawl`,
 `spreadsheet_read`, `data_analysis`, `calculation`, `graph_context`, and
-`domain_validation`, plus explicitly unavailable `document_read`,
+`domain_validation`, and `powerbi_project_read`, plus explicitly unavailable `document_read`,
 `internal_knowledge`, and `artifact_generation` follow-ups.
 
 Verification runs accept a disposable `--output-root`; preserved probe outputs
@@ -131,3 +133,14 @@ The optimization probe records the frozen baseline and release receipts under ig
 - Compare receipts with `python evaluation/probes/compare_optimization_receipts.py --baseline work/optimization-plan/baseline/receipt.json --release work/optimization-plan/release/receipt.json`.
 - `CapabilityScope` owns run-scoped semaphores, bounded blocking execution, cancellation settlement, workbook reuse, and cleanup. Native MCP tools use public Agent Framework middleware; local XLSX reads remain read-only and preserve source-path provenance.
 - Browser crawling keeps certificate validation enabled, validates each destination and same-host DNS change, and uses native WebSocket/service-worker controls.
+
+## Power BI project files
+
+The `powerbi_project_read` capability and `inspect-powerbi` command accept
+source-controlled `.pbip` projects, `.pbir` report definitions, or a directory
+containing either. They read report definition paths plus TMDL/BIM
+semantic-model metadata and return deterministic file hashes for provenance.
+This boundary is read-only and metadata-only: it does not parse `.pbix`
+binaries, execute DAX, or load model data. Those operations require a
+connected Power BI Desktop, Analysis Services/XMLA, Fabric, or Power BI
+Modeling MCP boundary.
