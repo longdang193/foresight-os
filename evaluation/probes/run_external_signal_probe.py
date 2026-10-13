@@ -62,8 +62,38 @@ def _mcp_result_is_success(result: object) -> bool:
         if not result:
             return False
         return all(_mcp_result_is_success(item) for item in result)
-    text = str(getattr(result, "text", result)).strip().lower()
+    text = " ".join(
+        str(getattr(result, attribute, "") or "")
+        for attribute in ("text", "output", "result", "message", "error_details", "error")
+    ).strip().lower()
     return bool(text) and not any(marker in text for marker in ("error message", "invalid api key", "unauthorized", "forbidden"))
+
+
+def _provider_result_is_success(provider_id: str, result: object) -> bool:
+    if not _mcp_result_is_success(result):
+        return False
+    if isinstance(result, (list, tuple)):
+        text = " ".join(_provider_result_text(item) for item in result).lower()
+    else:
+        text = _provider_result_text(result).lower()
+    if provider_id == "alpha_vantage":
+        return "global quote" in text or ("symbol" in text and "price" in text)
+    if provider_id == "github":
+        return any(marker in text for marker in ("full_name", "repositories", "items"))
+    return not any(marker in text for marker in ("error", "rate limit", "information", "unauthorized", "forbidden"))
+
+
+def _provider_result_text(result: object) -> str:
+    if result is None:
+        return ""
+    if isinstance(result, (str, int, float, bool)):
+        return str(result)
+    if isinstance(result, dict):
+        return " ".join(f"{key} {value}" for key, value in result.items())
+    return " ".join(
+        str(getattr(result, attribute, "") or "")
+        for attribute in ("text", "output", "result", "message", "error_details", "error")
+    )
 
 
 async def _probe(provider_id: str) -> dict[str, object]:
@@ -89,20 +119,21 @@ async def _probe(provider_id: str) -> dict[str, object]:
     scope = CapabilityScope()
     captured: dict[str, object] = {}
 
-    class ProbeAgent:
-        def __init__(self, tools):
-            self.id = "analyst"
-            self.tools = tools
+    from agent_framework import Agent, ChatResponse, Content, Message
 
-        async def run(self, prompt: str):
-            if not self.tools:
-                raise RuntimeError("MAF agent received no tools")
-            return await self.tools[0].call_tool(tool_name, **arguments)
+    class ProbeChatClient:
+        async def get_response(self, **kwargs):
+            tools = (kwargs.get("options") or {}).get("tools") or ()
+            matching = next((item for item in tools if getattr(item, "name", "").endswith(tool_name)), None)
+            if matching is None:
+                raise RuntimeError(f"MAF Agent did not discover {tool_name}")
+            captured["provider_result"] = await matching.invoke(**arguments)
+            return ChatResponse(messages=[Message("assistant", [Content("text", text="provider tool invoked")])])
 
     class Client:
         def as_agent(self, **kwargs):
             captured.update(kwargs)
-            agent = ProbeAgent(kwargs.get("tools", ()))
+            agent = Agent(ProbeChatClient(), **kwargs)
             captured["agent"] = agent
             return agent
 
@@ -121,14 +152,13 @@ async def _probe(provider_id: str) -> dict[str, object]:
             ),
             {"scope": scope, "capability_resolver": CapabilityResolver(), "mcp_tools": {provider.capability_id: binding}},
         )
-        tool = captured["tools"][0]
-        await tool.connect()
-        discovered = len(getattr(tool, "functions", ()) or ())
         agent = captured.get("agent")
         if agent is None:
             raise RuntimeError("MAF agent was not created")
         result = await agent.run(f"request {tool_name}")
-        if discovered < 1 or not _mcp_result_is_success(result):
+        tool = captured["tools"][0]
+        discovered = len(getattr(tool, "functions", ()) or ())
+        if discovered < 1 or not _provider_result_is_success(provider_id, captured.get("provider_result")):
             raise RuntimeError("MCP server returned an error result")
         receipt = {
             **base,

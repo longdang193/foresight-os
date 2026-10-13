@@ -150,6 +150,18 @@ def test_csv_range_selection_preserves_original_coordinates(tmp_path):
     assert coordinates == ["B2", "C2", "B3", "C3"]
 
 
+def test_csv_range_selection_honors_row_limit(tmp_path):
+    source = tmp_path / "signals.csv"
+    source.write_text("Region,Value\n" + "\n".join(f"R{index},{index}" for index in range(1, 101)) + "\n", encoding="utf-8")
+    with pytest.raises(ToolbeltError, match="row limit"):
+        spreadsheet_read(source, SheetSelection(ranges=(("signals", "A1:B101"),)), ToolbeltLimits(max_rows=2))
+
+
+def test_xlsx_actual_cells_are_counted_before_eager_load(workbook_path):
+    with pytest.raises(ToolbeltError, match="cell limit"):
+        spreadsheet_read(workbook_path, SheetSelection(sheet_names=("Demand",)), ToolbeltLimits(max_cells=1))
+
+
 def test_xlsx_expanded_archive_limit_is_checked_before_loading(workbook_path):
     with pytest.raises(ToolbeltError, match="expanded content"):
         spreadsheet_read(workbook_path, limits=ToolbeltLimits(max_expanded_bytes=1))

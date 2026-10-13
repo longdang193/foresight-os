@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import socket
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -52,7 +52,7 @@ class Crawl4AICapability:
         if not url:
             raise Crawl4AIError("invalid_url", "web crawl requires a source URL")
         try:
-            validate_destination(url, self.fixture_hosts)
+            initial_addresses = validate_destination(url, self.fixture_hosts)
         except Exception as error:
             failure_class = getattr(error, "failure_class", "invalid_url")
             raise Crawl4AIError(failure_class, str(error)) from error
@@ -61,11 +61,13 @@ class Crawl4AICapability:
 
             AsyncWebCrawler = crawl4ai.AsyncWebCrawler
             config_type = getattr(crawl4ai, "CrawlerRunConfig", None)
-            strategy_type = None
-            if config_type is not None:
-                from crawl4ai.async_crawler_strategy import AsyncCrawlerStrategy
+            try:
+                from crawl4ai.async_crawler_strategy import AsyncPlaywrightCrawlerStrategy
+            except (ImportError, ModuleNotFoundError):
+                AsyncPlaywrightCrawlerStrategy = None
 
-                strategy_type = AsyncCrawlerStrategy
+            strategy_type = AsyncPlaywrightCrawlerStrategy
+            browser_config_type = getattr(crawl4ai, "BrowserConfig", None)
         except ImportError as error:
             raise Crawl4AIError("dependency_missing", "crawl4ai is not installed") from error
         retrieved_at = datetime.now(timezone.utc).isoformat()
@@ -73,6 +75,7 @@ class Crawl4AICapability:
             crawler_kwargs = {}
             if strategy_type is not None:
                 strategy = strategy_type()
+                origin_host = (urlsplit(url).hostname or "").lower().rstrip(".")
 
                 async def guard_page_context(page, **_):
                     async def guard_request(route):
@@ -80,6 +83,10 @@ class Crawl4AICapability:
                         if request_url.startswith(("http://", "https://")):
                             try:
                                 validate_destination(request_url, self.fixture_hosts)
+                                request_host = (urlsplit(request_url).hostname or "").lower().rstrip(".")
+                                if request_host != origin_host and request_host not in {item.lower().rstrip(".") for item in self.fixture_hosts}:
+                                    await route.abort("blockedbyclient")
+                                    return
                             except Exception:
                                 await route.abort("blockedbyclient")
                                 return
@@ -89,6 +96,17 @@ class Crawl4AICapability:
 
                 strategy.set_hook("on_page_context_created", guard_page_context)
                 crawler_kwargs["crawler_strategy"] = strategy
+            if browser_config_type is not None:
+                extra_args = []
+                if initial_addresses:
+                    extra_args.append(f"--host-resolver-rules=MAP {urlsplit(url).hostname} {initial_addresses[0]}")
+                crawler_kwargs["config"] = browser_config_type(
+                    headless=True,
+                    java_script_enabled=True,
+                    verbose=False,
+                    ignore_https_errors=True,
+                    extra_args=extra_args,
+                )
             async with AsyncWebCrawler(**crawler_kwargs) as crawler:
                 if config_type is not None:
                     config = config_type(

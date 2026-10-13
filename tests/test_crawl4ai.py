@@ -69,3 +69,20 @@ def test_crawl4ai_is_injected_into_maf_agent_tools(monkeypatch):
 
     assert result["capability_id"] == "web_crawl"
     assert captured["tools"][0].capability_id == "web_crawl"
+
+
+def test_crawl4ai_uses_concrete_installed_strategy(monkeypatch):
+    import crawl4ai
+    from crawl4ai.async_crawler_strategy import AsyncPlaywrightCrawlerStrategy
+
+    class CompatibleCrawler(_FakeCrawler):
+        def __init__(self, **kwargs):
+            self.strategy = kwargs.get("crawler_strategy")
+
+        async def arun(self, url, **kwargs):
+            assert isinstance(self.strategy, AsyncPlaywrightCrawlerStrategy)
+            return await super().arun(url)
+
+    monkeypatch.setattr(crawl4ai, "AsyncWebCrawler", CompatibleCrawler)
+    result = asyncio.run(Crawl4AICapability(fixture_hosts={"example.test"})("https://example.test/report"))
+    assert result["capability_id"] == "web_crawl"

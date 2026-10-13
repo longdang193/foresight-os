@@ -245,6 +245,7 @@ def _read_delimited(source: Path, selection: SheetSelection | None, limits: Tool
     col_start = range_bounds[0] if range_bounds else 1
     raw_rows: list[tuple[Any, ...]] = []
     cell_count = 0
+    selected_row_count = 0
     with source.open(newline="", encoding="utf-8-sig") as handle:
         for row_number, row in enumerate(csv.reader(handle, delimiter=delimiter), 1):
             _check_cancel(cancel_check)
@@ -252,7 +253,8 @@ def _read_delimited(source: Path, selection: SheetSelection | None, limits: Tool
                 break
             if range_bounds and row_number < range_bounds[1]:
                 continue
-            if not range_bounds and row_number > limits.max_rows:
+            selected_row_count += 1
+            if selected_row_count > limits.max_rows:
                 raise ToolbeltError("workbook selection exceeds row limit")
             values = tuple(_delimited_value(value) for value in row)
             if range_bounds:
@@ -326,10 +328,16 @@ def spreadsheet_read(
                 selected_ranges = [f"A1:{openpyxl.utils.get_column_letter(ws.max_column)}{ws.max_row}"] if ws.max_row and ws.max_column else []
             for source_range in selected_ranges:
                 min_col, min_row, max_col, max_row = _range_bounds(source_range)
-                if max_row - min_row + 1 > limits.max_rows:
-                    raise ToolbeltError("workbook selection exceeds row limit")
-                if (max_row - min_row + 1) * (max_col - min_col + 1) > limits.max_cells:
-                    raise ToolbeltError("workbook selection exceeds cell limit")
+                actual_rows = 0
+                actual_cells = 0
+                for row in ws.iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col):
+                    _check_cancel(cancel_check)
+                    actual_rows += 1
+                    actual_cells += len(row)
+                    if actual_rows > limits.max_rows:
+                        raise ToolbeltError("workbook selection exceeds row limit")
+                    if actual_cells > limits.max_cells:
+                        raise ToolbeltError("workbook selection exceeds cell limit")
     finally:
         dimension_workbook.close()
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
@@ -361,16 +369,17 @@ def spreadsheet_read(
                 raise ToolbeltError("workbook selection exceeds row limit")
             rows: list[tuple[Any, ...]] = []
             row_provenance: list[tuple[CellProvenance, ...]] = []
-            for row in range(min_row, max_row + 1):
+            source_rows = ws.iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col)
+            cached_rows = cached[ws.title].iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col)
+            for source_row, cached_row in zip(source_rows, cached_rows, strict=True):
                 _check_cancel(cancel_check)
+                row = source_row[0].row
                 if row in hidden_rows and not (selection and selection.include_hidden_rows):
                     continue
                 values: list[Any] = []
                 provenance: list[CellProvenance] = []
-                for column in range(min_col, max_col + 1):
+                for cell, cached_cell in zip(source_row, cached_row, strict=True):
                     _check_cancel(cancel_check)
-                    cell = ws.cell(row, column)
-                    cached_cell = cached[ws.title].cell(row, column)
                     formula = cell.value if isinstance(cell.value, str) and cell.value.startswith("=") else None
                     cached_value = _coerce(cached_cell.value) if formula else None
                     raw_value = cached_value if formula and cached_value is not None else cell.value

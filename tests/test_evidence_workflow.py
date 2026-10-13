@@ -4,6 +4,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
 
+import pytest
+
 from foresight_os.analysis.evidence_workflow import accept_pending_evidence, run_evidence_workflow
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.runtime.page_retrieval import PageRetrievalCapability
@@ -82,6 +84,8 @@ def test_evidence_workflow_requires_explicit_acceptance_and_supports_restart(tmp
         third_pending = asyncio.run(run_evidence_workflow(pending_twice, "capacity expansion cost", _Provider(url), retrieval=PageRetrievalCapability(fixture_hosts={"127.0.0.1"}), human_decision="PENDING"))
         assert first_pending.status == "accepted"
         assert second_pending.status == third_pending.status == "pending"
+        with pytest.raises(ValueError, match="stale pending"):
+            pending_twice.commit_revision(second_pending.analysis, expected_revision=second_pending.analysis.revision, accepted=True)
         rejected = accept_pending_evidence(pending_twice, human_decision="REJECT")
         assert rejected.status == "rejected"
         assert pending_twice.load_analysis().revision_status.value == "ACCEPTED"

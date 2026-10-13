@@ -268,13 +268,12 @@ class _InstrumentedMCPTool:
 
 
 def instrument_tool(tool: Any, definition: CapabilityDefinition, context: Mapping[str, Any]) -> Any:
-    if getattr(tool, "__foresight_instrumented__", False):
-        return tool
-
     mcp_call = getattr(tool, "call_tool", None)
     if callable(mcp_call) and not callable(tool):
-        dispatch = _instrumented_dispatch(mcp_call, definition, context)
         try:
+            original = getattr(tool, "__foresight_original_call_tool__", None) or mcp_call
+            dispatch = _instrumented_dispatch(original, definition, context)
+            setattr(tool, "__foresight_original_call_tool__", original)
             setattr(tool, "call_tool", dispatch)
             setattr(tool, "__foresight_instrumented__", True)
             setattr(tool, "capability_id", definition.id)
@@ -286,13 +285,15 @@ def instrument_tool(tool: Any, definition: CapabilityDefinition, context: Mappin
     if not callable(tool):
         return tool
 
-    dispatch = _instrumented_dispatch(tool, definition, context)
+    original = getattr(tool, "__foresight_original_callable__", None) or tool
+    dispatch = _instrumented_dispatch(original, definition, context)
 
     @functools.wraps(tool)
     async def invoke(*args: Any, **kwargs: Any) -> Any:
         return await dispatch(*args, **kwargs)
 
     setattr(invoke, "__foresight_instrumented__", True)
+    setattr(invoke, "__foresight_original_callable__", original)
     setattr(invoke, "capability_id", definition.id)
     return invoke
 

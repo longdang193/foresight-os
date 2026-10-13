@@ -85,6 +85,31 @@ async def _run_once(index: int) -> dict:
     }
 
 
+async def _mixed_schedule(index: int) -> dict:
+    if index % 4 == 0:
+        return {"scenario": "success", **await _run_once(index)}
+    if index % 4 == 1:
+        return {"scenario": "concurrent", "results": await asyncio.gather(_run_once(index), _run_once(index + 10000))}
+    if index % 4 == 2:
+        return {"scenario": "boundary", "boundaries": await _boundary_probes()}
+    try:
+        await asyncio.wait_for(asyncio.sleep(0.01), timeout=0)
+    except asyncio.TimeoutError:
+        return {"scenario": "timeout", "timeout": True}
+    return {"scenario": "timeout", "timeout": False}
+
+
+async def _leak_control_probe() -> bool:
+    before = _snapshot()
+    task = asyncio.create_task(asyncio.sleep(60))
+    try:
+        after = _snapshot()
+        return after["unfinished_tasks"] > before["unfinished_tasks"]
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
 async def run_probe(runs: int, seed: str, warmup: int = 10) -> dict:
     import random
 
@@ -99,24 +124,32 @@ async def run_probe(runs: int, seed: str, warmup: int = 10) -> dict:
     for index in range(runs):
         gc.collect()
         before = _snapshot()
-        outcome = await _run_once(index + 10)
+        outcome = await _mixed_schedule(index + 10)
         gc.collect()
         after = _snapshot()
         samples.append({"before": before, "after": after})
-        state_hashes.append(outcome["state_hash"])
-        if not outcome["cleanup_complete"] or outcome["failure_class"] is not None:
+        if outcome.get("scenario") == "success":
+            state_hashes.append(outcome["state_hash"])
+            if not outcome["cleanup_complete"] or outcome["failure_class"] is not None:
+                failures.append(outcome)
+            if baseline is None:
+                baseline = outcome
+            elif outcome != baseline:
+                failures.append({"failure_class": "metric_drift"})
+        elif outcome.get("scenario") == "concurrent":
+            failures.extend(item for item in outcome["results"] if not item["cleanup_complete"] or item["failure_class"] is not None)
+        elif outcome.get("scenario") == "boundary" and not all(outcome["boundaries"].values()):
             failures.append(outcome)
-        if baseline is None:
-            baseline = outcome
-        elif outcome != baseline:
-            failures.append({"failure_class": "metric_drift"})
+        elif outcome.get("scenario") == "timeout" and not outcome["timeout"]:
+            failures.append(outcome)
     memory_values = [sample["after"]["memory_bytes"] for sample in samples]
     handle_values = [sample["after"]["handles"] for sample in samples if sample["after"]["handles"] is not None]
     monotonic_handles = bool(handle_values) and all(left <= right for left, right in zip(handle_values, handle_values[1:])) and handle_values[-1] > handle_values[0]
     boundaries = await _boundary_probes()
+    leak_control_detected = await _leak_control_probe()
     result = {
         "mode": "anomaly",
-        "status": "failed" if failures or len(set(state_hashes)) != 1 or monotonic_handles or not all(boundaries.values()) else "verified",
+        "status": "failed" if failures or len(set(state_hashes)) != 1 or monotonic_handles or not all(boundaries.values()) or not leak_control_detected else "verified",
         "runs": runs,
         "seed": seed,
         "warmup_runs": warmup,
@@ -126,6 +159,7 @@ async def run_probe(runs: int, seed: str, warmup: int = 10) -> dict:
         "memory_max": max(memory_values) if memory_values else None,
         "failures": failures,
         "boundary_probes": boundaries,
+        "leak_control_detected": leak_control_detected,
         "samples": samples,
     }
     tracemalloc.stop()

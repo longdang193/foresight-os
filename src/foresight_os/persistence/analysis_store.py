@@ -83,17 +83,19 @@ class AnalysisStore:
     def commit_revision(self, state: AnalysisState, expected_revision: int, accepted: bool) -> AnalysisState:
         with FileLock(str(self.lock_path)):
             current = self._load_path(self.analysis_path) if self.analysis_path.exists() else None
-            sidecar_pending = self.pending_analysis_path.exists()
-            if sidecar_pending and state.revision != expected_revision:
+            pending = self._load_path(self.pending_analysis_path) if self.pending_analysis_path.exists() else None
+            if pending is not None and state.revision != expected_revision:
                 raise ValueError(f"stale pending revision: expected {expected_revision}, pending {state.revision}")
-            if not sidecar_pending and current is not None and current.revision != expected_revision:
+            if pending is not None and pending.revision != expected_revision:
+                raise ValueError(f"stale pending snapshot: expected {expected_revision}, persisted {pending.revision}")
+            if pending is None and current is not None and current.revision != expected_revision:
                 raise ValueError(f"stale revision: expected {expected_revision}, current {current.revision}")
-            if sidecar_pending and current is not None and not accepted:
+            if pending is not None and current is not None and not accepted:
                 self.pending_analysis_path.unlink(missing_ok=True)
                 return current
             status = RevisionStatus.ACCEPTED if accepted else RevisionStatus.REJECTED
-            committed = replace(state, revision_status=status)
-            if sidecar_pending and current is not None and accepted:
+            committed = replace(pending or state, revision_status=status)
+            if pending is not None and current is not None and accepted:
                 committed = self._merge_states(current, committed)
             elif current is not None and current.revision_status != RevisionStatus.PENDING_REVIEW and committed.revision <= current.revision:
                 number = current.revision + 1
@@ -112,18 +114,22 @@ class AnalysisStore:
         pending = replace(state, revision_status=RevisionStatus.PENDING_REVIEW)
         with FileLock(str(self.lock_path)):
             current = self._load_path(self.analysis_path) if self.analysis_path.exists() else None
-            if current is not None and current.revision_status != RevisionStatus.PENDING_REVIEW:
-                number = current.revision + 1
+            existing_pending = self._load_path(self.pending_analysis_path) if self.pending_analysis_path.exists() else None
+            base_revision = max(
+                (current.revision if current is not None else 0),
+                (existing_pending.revision if existing_pending is not None else 0),
+            )
+            if current is not None or existing_pending is not None:
+                number = base_revision + 1
                 revision = Revision(
                     f"revision-{number}",
                     number,
                     "pending mutation",
                     [item.id for collection in [pending.evidence, pending.claims, pending.implications, pending.recommendations, pending.artifacts] for item in collection] + [item.id for item in pending.calculations],
                 )
-                pending = replace(pending, revision=number, revisions=[*current.revisions, revision])
-                self._write_validated(validate_analysis(pending), self.pending_analysis_path)
-            else:
-                self._write_validated(validate_analysis(pending))
+                prior_revisions = existing_pending.revisions if existing_pending is not None else current.revisions
+                pending = replace(pending, revision=number, revisions=[*prior_revisions, revision])
+            self._write_validated(validate_analysis(pending), self.pending_analysis_path)
         return pending
 
     def load_pending(self) -> AnalysisState:
