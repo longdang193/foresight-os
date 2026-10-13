@@ -13,7 +13,7 @@ from foresight_os.domain.challenge import ReviewValidity, review_validity
 from foresight_os.domain.models import AnalysisState, AnalyticalRecord, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Revision, SourceLocator
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.persistence.analysis_store import StageReceipt
-from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, RecipeName, RecipeStage, make_recipe
+from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, RecipeName, RecipeStage, StageInput, make_recipe
 from foresight_os.runtime.workflow import _canonical_provenance_matches, _canonical_result_hash, _committed_cache_output, _stage_cache_key, run_recipe_async
 
 
@@ -54,12 +54,13 @@ def test_rejected_receipt_cannot_fall_back_to_legacy_cache_entry():
     recipe = ExecutionRecipe(base.name, base.pattern, base.roles, base.max_agent_steps, base.max_correction_rounds, base.max_total_agent_calls, base.completion, base.escalation, base.partial_result, stages=(stage,))
     output = {"stage": "old-scope"}
     record_hash = _canonical_result_hash(output)
-    receipt = StageReceipt("first", _stage_cache_key(stage, "start", ()), authorization_scope_fingerprint="old-scope", result_references=("claim-1",), result_hashes=(record_hash,), status="committed", committed=True, provenance_complete=True)
+    stage_input = StageInput("start", "unspecified", "execute declared stage", "")
+    receipt = StageReceipt("first", _stage_cache_key(stage, stage_input, ()), authorization_scope_fingerprint="old-scope", result_references=("claim-1",), result_hashes=(record_hash,), status="committed", committed=True, provenance_complete=True)
     result = asyncio.run(run_recipe_async(recipe, "start", run_context={
         "stage_receipts": {"first": receipt},
         "canonical_outputs": {"first": {"tampered": True}},
         "canonical_records": {"claim-1": output},
-        "stage_cache": {_stage_cache_key(stage, "start", ()): {"status": "committed", "provenance_complete": True, "result_references": ["claim-1"], "result_hashes": [record_hash], "output": output}},
+        "stage_cache": {_stage_cache_key(stage, stage_input, ()): {"status": "committed", "provenance_complete": True, "result_references": ["claim-1"], "result_hashes": [record_hash], "output": output}},
         "authorization_scope_fingerprint": "new-scope",
     }))
     assert result.metrics.cache_hits == 0

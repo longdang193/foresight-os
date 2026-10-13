@@ -158,14 +158,14 @@ spec checks on PRs and reserve heavy closure evidence for nightly/release runs.
 - Branch: `codex/closure-patch-canva-delivery`
 - Base commit: `2fe7b4280d989f254647ba2acc142a271e2813f8` (`origin/main`)
 - Expected workspace: tracked files clean after branch recreation from `origin/main`; preserve existing untracked `build/`, `data/`, `src/foresight_os.egg-info/`, and every existing `work/` output without staging, deletion, or cleanup
-- Next action: implement Task 1 stage semantics and split fingerprints on the verified closure branch, preserving the Task 0 baseline as historical evidence
+- Next action: implement Task 2 material closure and typed review integration on the verified closure branch, preserving Task 0 and Task 1 evidence
 - Blockers: none known; Canva connector availability is an external-boundary condition, not a reason to block local compiler work
 
 | Task | State | Workspace | Executor | Depends On | Required Proof | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | Task 0 | `completed` | current | `unresolved` | none | baseline commands and verdict matrix | `work/closure-patch-canva-20261013/baseline/` |
-| Task 1 | `active` | current | `unresolved` | Task 0 | stage execution/fingerprint tests | pending |
-| Task 2 | `pending` | current | `unresolved` | Task 0 | relation/review/finding tests | pending |
+| Task 1 | `completed` | current | `unresolved` | Task 0 | stage execution/fingerprint tests | focused suites passed |
+| Task 2 | `active` | current | `unresolved` | Task 0 | relation/review/finding tests | pending |
 | Task 3 | `pending` | current | `unresolved` | Tasks 1–2 | fresh-process receipt lifecycle probe | pending |
 | Task 4 | `pending` | current | `unresolved` | Task 2 | presentation compiler/spec validation | pending |
 | Task 5 | `pending` | current | `unresolved` | Tasks 3–4 | performance/resource receipt comparison | pending |
@@ -262,14 +262,15 @@ spec checks on PRs and reserve heavy closure evidence for nightly/release runs.
 - Stop for: adding a second compiled-stage abstraction, changing MAF topology semantics, changing public limits without an explicit compatibility test, or modifying unrelated exercises
 
 **Steps:**
-- [ ] Step 1: Preserve `WorkStage.participants` as specialist IDs and compile those entries into `RecipeStage.participants` as derived `ParticipantConfig` values through the existing participant/factory path; add topology-generated roles only when the selected pattern requires a missing collaboration role.
-- [ ] Step 2: Add one deterministic bounded stage-input envelope containing decision question, horizon, objective, expected result, relevant constraints, and `dependency_outputs` keyed by declared dependency ID; pass record references plus bounded summaries/extracts for large canonical outputs rather than the full prompt or accumulated history, and use the same envelope for direct, sequential, concurrent, handoff, and group-chat execution.
-- [ ] Step 3: Maintain `outputs_by_stage` in `run_recipe_async`; reject missing dependency outputs before dispatch; ensure concurrent branches receive the stage envelope rather than the outer-loop `current` value.
-- [ ] Step 4: Split stage identity into a semantic input fingerprint and an execution-policy fingerprint. The semantic fingerprint covers decision context, objective, expected result, research needs, specialist IDs, selected skills, dependency result hashes, and relevant constraints; retain separate model, capability, and authorization fingerprints; keep timeouts, round/branch limits, and budgets in execution-policy identity rather than collapsing all values into one giant SHA.
-- [ ] Step 5: Add focused tests proving objective changes, dependency-output changes, specialist changes, and skill/capability/model/authorization changes invalidate semantic reuse while unchanged stage inputs reuse deterministically; prove timeout, round, branch, and budget changes update execution-policy identity without falsely invalidating an otherwise valid canonical analytical result.
+- [x] Step 1: Preserve `WorkStage.participants` as specialist IDs and compile those entries into `RecipeStage.participants` as derived `ParticipantConfig` values through the existing participant/factory path; add topology-generated roles only when the selected pattern requires a missing collaboration role.
+- [x] Step 2: Add one deterministic bounded stage-input envelope containing decision question, horizon, objective, expected result, relevant constraints, and `dependency_outputs` keyed by declared dependency ID; pass record references plus bounded summaries/extracts for large canonical outputs rather than the full prompt or accumulated history, and use the same envelope for direct, sequential, concurrent, handoff, and group-chat execution.
+- [x] Step 3: Maintain `outputs_by_stage` in `run_recipe_async`; reject missing dependency outputs before dispatch; ensure concurrent branches receive the stage envelope rather than the outer-loop `current` value.
+- [x] Step 4: Split stage identity into a semantic input fingerprint and an execution-policy fingerprint. The semantic fingerprint covers decision context, objective, expected result, research needs, specialist IDs, selected skills, dependency result hashes, and relevant constraints; retain separate model, capability, and authorization fingerprints; keep timeouts, round/branch limits, and budgets in execution-policy identity rather than collapsing all values into one giant SHA.
+- [x] Step 5: Add focused tests proving objective changes, dependency-output changes, specialist changes, and skill/capability/model/authorization changes invalidate semantic reuse while unchanged stage inputs reuse deterministically; prove timeout, round, branch, and budget changes update execution-policy identity without falsely invalidating an otherwise valid canonical analytical result.
 
 **Verification:**
-- [ ] `python -m pytest -q tests/test_controller_selection.py tests/test_research_needs.py tests/test_runtime_boundaries.py tests/test_tool_enabled_patterns.py tests/test_orchestration_patterns.py`
+- [x] `python -m pytest -q tests/test_stage_inputs.py tests/test_controller_selection.py tests/test_research_needs.py tests/test_runtime_boundaries.py tests/test_tool_enabled_patterns.py tests/test_orchestration_patterns.py`
+- [x] `python -m pytest -q tests/test_selective_reuse.py tests/test_review_hardening.py tests/test_persistence.py`
 - Expected: all five patterns preserve topology contracts, requested specialist IDs/purposes survive compilation, dependency envelopes are exact, semantic changes produce different semantic fingerprints, and policy-only changes remain distinguishable.
 
 **Exit Criteria:**
