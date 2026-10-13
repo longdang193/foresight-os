@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -72,17 +73,50 @@ def _mcp_result_is_success(result: object) -> bool:
 def _provider_result_is_success(provider_id: str, result: object) -> bool:
     if not _mcp_result_is_success(result):
         return False
-    if isinstance(result, (list, tuple)):
-        text = " ".join(_provider_result_text(item) for item in result).lower()
-    else:
-        text = _provider_result_text(result).lower()
-    if any(marker in text for marker in ("rate limit", "unauthorized", "forbidden", "invalid api key", "error")):
+    payloads = _provider_payloads(result)
+    if not payloads or any(_provider_error_payload(payload) for payload in payloads):
         return False
     if provider_id == "alpha_vantage":
-        return "global quote" in text or ("symbol" in text and "price" in text)
+        return any(
+            isinstance(payload, Mapping)
+            and isinstance(payload.get("Global Quote"), Mapping)
+            and bool(payload["Global Quote"])
+            and "01. symbol" in payload["Global Quote"]
+            and "05. price" in payload["Global Quote"]
+            for payload in payloads
+        )
     if provider_id == "github":
-        return any(marker in text for marker in ("full_name", "repositories", "items"))
-    return not any(marker in text for marker in ("error", "rate limit", "information", "unauthorized", "forbidden"))
+        return any(
+            isinstance(payload, Mapping)
+            and ((isinstance(payload.get("items"), list) and "total_count" in payload) or isinstance(payload.get("repositories"), list))
+            for payload in payloads
+        )
+    return any(isinstance(payload, Mapping) and isinstance(payload.get("observations"), list) for payload in payloads)
+
+
+def _provider_payloads(result: object) -> list[object]:
+    if isinstance(result, (list, tuple)):
+        payloads: list[object] = []
+        for item in result:
+            payloads.extend(_provider_payloads(item))
+        return payloads
+    if isinstance(result, Mapping):
+        return [result]
+    text = _provider_result_text(result).strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    return [parsed] if isinstance(parsed, (Mapping, list)) else []
+
+
+def _provider_error_payload(payload: object) -> bool:
+    if not isinstance(payload, Mapping):
+        return False
+    keys = {str(key).lower().replace("_", " ") for key in payload}
+    return bool(keys & {"error", "error message", "information", "note", "unauthorized", "forbidden", "rate limit"})
 
 
 def _provider_result_text(result: object) -> str:

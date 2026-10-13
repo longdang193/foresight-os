@@ -48,6 +48,10 @@ class AnalysisStore:
         return self.root / "analysis.pending.json"
 
     @property
+    def pending_tokens_path(self) -> Path:
+        return self.root / "analysis.pending.tokens.json"
+
+    @property
     def lock_path(self) -> Path:
         return self.root / ".analysis.lock"
 
@@ -91,13 +95,17 @@ class AnalysisStore:
                 raise ValueError(f"stale pending snapshot: expected {expected_revision}, persisted {pending.revision}")
             if pending is not None and (not state.pending_token or state.pending_token != pending.pending_token):
                 raise ValueError("stale pending identity")
+            consumed_tokens = self._load_consumed_pending_tokens()
+            if pending is None and state.pending_token and state.pending_token in consumed_tokens:
+                raise ValueError("stale pending identity")
             if pending is None and current is not None and current.revision != expected_revision:
                 raise ValueError(f"stale revision: expected {expected_revision}, current {current.revision}")
             if pending is not None and current is not None and not accepted:
+                self._remember_consumed_pending_token(pending.pending_token)
                 self.pending_analysis_path.unlink(missing_ok=True)
                 return current
             status = RevisionStatus.ACCEPTED if accepted else RevisionStatus.REJECTED
-            committed = replace(pending or state, revision_status=status)
+            committed = replace(pending or state, revision_status=status, pending_token=None)
             if pending is not None and current is not None and accepted:
                 committed = self._merge_states(current, committed)
             elif current is not None and current.revision_status != RevisionStatus.PENDING_REVIEW and committed.revision <= current.revision:
@@ -110,6 +118,8 @@ class AnalysisStore:
                 )
                 committed = replace(committed, revision=number, revisions=[*current.revisions, revision])
             self._write_validated(validate_analysis(committed))
+            if pending is not None:
+                self._remember_consumed_pending_token(pending.pending_token)
             self.pending_analysis_path.unlink(missing_ok=True)
             return committed
 
@@ -205,6 +215,19 @@ class AnalysisStore:
 
     def _write_validated(self, value: dict, path: Path | None = None) -> None:
         self._atomic_write(path or self.analysis_path, json.dumps(value, indent=2) + "\n")
+
+    def _load_consumed_pending_tokens(self) -> set[str]:
+        if not self.pending_tokens_path.exists():
+            return set()
+        value = json.loads(self.pending_tokens_path.read_text(encoding="utf-8"))
+        return {item for item in value if isinstance(item, str)} if isinstance(value, list) else set()
+
+    def _remember_consumed_pending_token(self, token: str | None) -> None:
+        if not token:
+            return
+        tokens = self._load_consumed_pending_tokens()
+        tokens.add(token)
+        self._atomic_write(self.pending_tokens_path, json.dumps(sorted(tokens), indent=2) + "\n")
 
     @staticmethod
     def _merge_states(current: AnalysisState, pending: AnalysisState) -> AnalysisState:

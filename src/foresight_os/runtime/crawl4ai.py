@@ -76,6 +76,7 @@ class Crawl4AICapability:
             browser_config = None
             if browser_config_type is not None:
                 extra_args = []
+                extra_args.append("--disable-service-worker")
                 if initial_addresses:
                     extra_args.append(f"--host-resolver-rules=MAP {urlsplit(url).hostname} {initial_addresses[0]}")
                 browser_config = browser_config_type(
@@ -89,7 +90,7 @@ class Crawl4AICapability:
                 strategy = strategy_type(browser_config=browser_config)
                 origin_host = (urlsplit(url).hostname or "").lower().rstrip(".")
 
-                async def guard_page_context(page, **_):
+                async def guard_page_context(page, context=None, **_):
                     async def guard_request(route):
                         request_url = route.request.url
                         if request_url.startswith(("http://", "https://")):
@@ -104,7 +105,32 @@ class Crawl4AICapability:
                                 return
                         await route.continue_()
 
-                    await page.route("**/*", guard_request)
+                    if context is not None:
+                        await context.add_init_script(
+                            """
+                            (() => {
+                              const serviceWorker = navigator.serviceWorker;
+                              if (!serviceWorker) return;
+                              try {
+                                Object.defineProperty(navigator, "serviceWorker", {
+                                  configurable: false,
+                                  enumerable: true,
+                                  value: new Proxy(serviceWorker, {
+                                    get(target, property, receiver) {
+                                      if (property === "register") {
+                                        return () => Promise.reject(new Error("service workers disabled"));
+                                      }
+                                      return Reflect.get(target, property, receiver);
+                                    }
+                                  })
+                                });
+                              } catch (_) {}
+                            })();
+                            """
+                        )
+                        await context.route("**/*", guard_request)
+                    else:
+                        await page.route("**/*", guard_request)
 
                 strategy.set_hook("on_page_context_created", guard_page_context)
                 crawler_kwargs["crawler_strategy"] = strategy

@@ -62,6 +62,14 @@ def _snapshot() -> dict[str, int | None]:
             handles = process.num_handles()
         except (AttributeError, psutil.Error, OSError):
             handles = None
+        try:
+            open_files = len(process.open_files())
+        except (psutil.Error, OSError):
+            open_files = None
+        try:
+            child_processes = len(process.children(recursive=True))
+        except (psutil.Error, OSError):
+            child_processes = None
     except ImportError:
         open_files = child_processes = handles = None
     return {
@@ -101,11 +109,15 @@ async def _mixed_schedule(index: int) -> dict:
 
 async def _leak_control_probe() -> bool:
     before = _snapshot()
+    retained = [bytearray(1024 * 1024)]
     task = asyncio.create_task(asyncio.sleep(60))
     try:
         after = _snapshot()
-        return _sample_has_resource_drift({"before": before, "after": after})
+        detected = _sample_has_resource_drift({"before": before, "after": after})
+        detected = detected or after["memory_bytes"] > before["memory_bytes"]
+        return detected
     finally:
+        retained.clear()
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
 
@@ -152,6 +164,8 @@ async def run_probe(runs: int, seed: str, warmup: int = 10) -> dict:
         elif outcome.get("scenario") == "timeout" and not outcome["timeout"]:
             failures.append(outcome)
     memory_values = [sample["after"]["memory_bytes"] for sample in samples]
+    memory_growth = max(0, max(memory_values) - memory_values[0]) if memory_values else 0
+    memory_growth_exceeded = memory_growth > 4 * 1024 * 1024
     handle_values = [sample["after"]["handles"] for sample in samples if sample["after"]["handles"] is not None]
     monotonic_handles = bool(handle_values) and all(left <= right for left, right in zip(handle_values, handle_values[1:])) and handle_values[-1] > handle_values[0]
     boundaries = await _boundary_probes()
@@ -159,7 +173,7 @@ async def run_probe(runs: int, seed: str, warmup: int = 10) -> dict:
     resource_leak_samples = [index for index, sample in enumerate(samples) if _sample_has_resource_drift(sample)]
     result = {
         "mode": "anomaly",
-        "status": "failed" if failures or resource_leak_samples or len(set(state_hashes)) != 1 or monotonic_handles or not all(boundaries.values()) or not leak_control_detected else "verified",
+        "status": "failed" if failures or resource_leak_samples or memory_growth_exceeded or len(set(state_hashes)) != 1 or monotonic_handles or not all(boundaries.values()) or not leak_control_detected else "verified",
         "runs": runs,
         "seed": seed,
         "warmup_runs": warmup,
@@ -167,6 +181,8 @@ async def run_probe(runs: int, seed: str, warmup: int = 10) -> dict:
         "monotonic_handle_accumulation": monotonic_handles,
         "memory_min": min(memory_values) if memory_values else None,
         "memory_max": max(memory_values) if memory_values else None,
+        "memory_growth_bytes": memory_growth,
+        "memory_growth_exceeded": memory_growth_exceeded,
         "failures": failures,
         "boundary_probes": boundaries,
         "leak_control_detected": leak_control_detected,

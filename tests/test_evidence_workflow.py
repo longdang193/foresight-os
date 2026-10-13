@@ -90,6 +90,8 @@ def test_evidence_workflow_requires_explicit_acceptance_and_supports_restart(tmp
         assert rejected.status == "rejected"
         assert pending_twice.load_analysis().revision_status.value == "ACCEPTED"
         assert pending_twice.load_analysis().evidence[0].id == first_pending.analysis.evidence[0].id
+        with pytest.raises(ValueError, match="stale pending identity"):
+            pending_twice.commit_revision(third_pending.analysis, expected_revision=third_pending.analysis.revision, accepted=True)
     finally:
         server.shutdown()
         thread.join(timeout=2)

@@ -309,10 +309,6 @@ def _preflight_xlsx_archive(source: Path, selection: SheetSelection | None, limi
         targets = {item.attrib["Id"]: item.attrib["Target"] for item in relationships.findall("pkg:Relationship", namespaces)}
         for sheet in workbook_root.findall("main:sheets/main:sheet", namespaces):
             title = sheet.attrib["name"]
-            if selection and selection.sheet_names and title not in selection.sheet_names:
-                continue
-            if sheet.attrib.get("state", "visible") != "visible" and not (selection and selection.include_hidden):
-                continue
             target = targets.get(sheet.attrib.get(f"{{{namespaces['rel']}}}id"))
             if not target:
                 continue
@@ -332,19 +328,17 @@ def _preflight_xlsx_archive(source: Path, selection: SheetSelection | None, limi
                     _check_cancel(cancel_check)
                     if element.tag == f"{{{namespaces['main']}}}row":
                         row_number = int(element.attrib.get("r", row_count + 1))
-                        if not bounds or any(range_bounds[1] <= row_number <= range_bounds[3] for range_bounds in bounds):
-                            row_count += 1
-                            if row_count > limits.max_rows:
-                                raise ToolbeltError("workbook selection exceeds row limit")
+                        row_count += 1
+                        if row_count > limits.max_rows:
+                            raise ToolbeltError("workbook allocation exceeds row limit")
                     elif element.tag == f"{{{namespaces['main']}}}c":
                         coordinate = element.attrib.get("r", "")
                         match = re.fullmatch(r"([A-Z]+)(\d+)", coordinate.upper())
                         if match:
                             column, row = _range_bounds(f"{match.group(1)}{match.group(2)}")[:2]
-                            if not bounds or any(range_bounds[0] <= column <= range_bounds[2] and range_bounds[1] <= row <= range_bounds[3] for range_bounds in bounds):
-                                cell_count += 1
-                                if cell_count > limits.max_cells:
-                                    raise ToolbeltError("workbook selection exceeds cell limit")
+                            cell_count += 1
+                            if cell_count > limits.max_cells:
+                                raise ToolbeltError("workbook allocation exceeds cell limit")
                     element.clear()
 
 
@@ -373,9 +367,11 @@ def spreadsheet_read(
         raise ToolbeltError("workbook expanded content exceeds byte limit")
     _preflight_xlsx_archive(source, selection, limits, cancel_check)
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
-    workbook = openpyxl.load_workbook(source, data_only=False, read_only=False)
-    cached = openpyxl.load_workbook(source, data_only=True, read_only=True)
+    workbook = None
+    cached = None
     try:
+        workbook = openpyxl.load_workbook(source, data_only=False, read_only=False)
+        cached = openpyxl.load_workbook(source, data_only=True, read_only=True)
         sheets: list[SheetSummary] = []
         tables: list[TypedTable] = []
         measurements: list[TypedMeasurement] = []
@@ -468,8 +464,10 @@ def spreadsheet_read(
             finalized_tables.append(replace(table, related_provenance=tuple(dict.fromkeys(related))))
         return WorkbookReadResult(str(source), digest, tuple(sheets), tuple(finalized_tables), tuple(measurements))
     finally:
-        cached.close()
-        workbook.close()
+        if cached is not None:
+            cached.close()
+        if workbook is not None:
+            workbook.close()
 
 
 def _rows(table: TypedTable) -> list[dict[str, Any]]:

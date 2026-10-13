@@ -90,3 +90,7 @@ def test_fred_requires_explicit_read_only_allowlist():
 def test_external_probe_rejects_provider_error_envelopes():
     assert not _provider_result_is_success("alpha_vantage", {"Information": "The Global Quote endpoint is rate limited. Retry tomorrow."})
     assert _provider_result_is_success("alpha_vantage", {"Global Quote": {"01. symbol": "IBM", "05. price": "1.0"}})
+    assert not _provider_result_is_success("github", {"message": "Bad credentials", "items": []})
+    assert _provider_result_is_success("github", {"total_count": 0, "items": []})
+    assert not _provider_result_is_success("fred", {"Information": "rate limit"})
+    assert _provider_result_is_success("fred", {"observations": []})

@@ -3,6 +3,7 @@ import asyncio
 import copy
 import functools
 import time
+import types
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Mapping
@@ -268,6 +269,49 @@ class _InstrumentedMCPTool:
         return getattr(self._tool, name)
 
 
+def _make_cell(value: Any):
+    def capture():
+        return value
+
+    return capture.__closure__[0]
+
+
+def _rebind_mcp_callable(function: Any, tool: Any) -> Any:
+    if not isinstance(function, types.FunctionType) or not function.__closure__:
+        return function
+    if "mcp_tool" not in function.__code__.co_freevars:
+        return function
+    cells = list(function.__closure__)
+    cells[function.__code__.co_freevars.index("mcp_tool")] = _make_cell(tool)
+    rebound = types.FunctionType(function.__code__, function.__globals__, function.__name__, function.__defaults__, tuple(cells))
+    rebound.__kwdefaults__ = function.__kwdefaults__
+    rebound.__annotations__ = dict(function.__annotations__)
+    rebound.__dict__.update(function.__dict__)
+    return rebound
+
+
+def _clone_mcp_function(function: Any, tool: Any) -> Any:
+    try:
+        from agent_framework import FunctionTool
+
+        rebound = _rebind_mcp_callable(getattr(function, "func", None), tool)
+        schema = getattr(function, "_input_schema_cached", None) or getattr(function, "input_model", None)
+        return FunctionTool(
+            name=function.name,
+            description=function.description,
+            approval_mode=function.approval_mode,
+            kind=getattr(function, "kind", None),
+            max_invocations=getattr(function, "max_invocations", None),
+            max_invocation_exceptions=getattr(function, "max_invocation_exceptions", None),
+            additional_properties=copy.deepcopy(getattr(function, "additional_properties", None)),
+            func=rebound,
+            input_model=copy.deepcopy(schema),
+            result_parser=getattr(function, "result_parser", None),
+        )
+    except (AttributeError, TypeError, ValueError):
+        return copy.copy(function)
+
+
 def instrument_tool(tool: Any, definition: CapabilityDefinition, context: Mapping[str, Any]) -> Any:
     mcp_call = getattr(tool, "call_tool", None)
     if callable(mcp_call) and not callable(tool):
@@ -280,6 +324,18 @@ def instrument_tool(tool: Any, definition: CapabilityDefinition, context: Mappin
             else:
                 original = getattr(isolated, "call_tool")
             dispatch = _instrumented_dispatch(original, definition, context)
+            if hasattr(isolated, "_functions"):
+                isolated._functions = [_clone_mcp_function(function, isolated) for function in isolated._functions]
+            if hasattr(isolated, "_tool_call_meta_by_name"):
+                isolated._tool_call_meta_by_name = dict(isolated._tool_call_meta_by_name)
+            if hasattr(isolated, "_tool_task_support_by_name"):
+                isolated._tool_task_support_by_name = dict(isolated._tool_task_support_by_name)
+            if hasattr(isolated, "_tool_param_names_by_name"):
+                isolated._tool_param_names_by_name = {
+                    name: set(values) for name, values in isolated._tool_param_names_by_name.items()
+                }
+            if hasattr(isolated, "_progressive_loaded_tool_names"):
+                isolated._progressive_loaded_tool_names = set(isolated._progressive_loaded_tool_names)
             setattr(isolated, "__foresight_original_call_tool__", original)
             setattr(isolated, "call_tool", dispatch)
             setattr(isolated, "__foresight_instrumented__", True)
