@@ -170,14 +170,14 @@ class CapabilityResolver:
         definition = self.definitions.get(capability_id)
         if definition is None:
             return CapabilityResolution(CapabilityDefinition(capability_id, "unknown"), CapabilityDecision.UNSUPPORTED, False, "capability is not defined")
-        if definition.capability_class == "unavailable":
+        candidate, decision, reason = self._candidate(capability_id, context)
+        if definition.capability_class == "unavailable" and candidate is None:
             return CapabilityResolution(definition, CapabilityDecision.UNSUPPORTED, False, "capability is registered but its adapter is not activated")
         if definition.approval_policy == "HUMAN" and not context.get("human_approved", False):
             return CapabilityResolution(definition, CapabilityDecision.UNSUPPORTED, False, "human approval required")
         denied = self._authorization_denial(definition, context)
         if denied is not None:
             return CapabilityResolution(definition, CapabilityDecision.UNSUPPORTED, False, denied)
-        candidate, decision, reason = self._candidate(capability_id, context)
         if candidate is None:
             if definition.capability_class == "unavailable":
                 reason = "capability is registered but its adapter is not activated"
@@ -204,14 +204,14 @@ class CapabilityResolver:
         definition = self.definitions.get(capability_id)
         if definition is None:
             return CapabilityResolution(CapabilityDefinition(capability_id, "unknown"), CapabilityDecision.UNSUPPORTED, False, "capability is not defined")
-        if definition.capability_class == "unavailable":
+        candidate, decision, reason = self._candidate(capability_id, context)
+        if definition.capability_class == "unavailable" and candidate is None:
             return CapabilityResolution(definition, CapabilityDecision.UNSUPPORTED, False, "capability is registered but its adapter is not activated")
         if definition.approval_policy == "HUMAN" and not context.get("human_approved", False):
             return CapabilityResolution(definition, CapabilityDecision.UNSUPPORTED, False, "human approval required")
         denied = self._authorization_denial(definition, context)
         if denied is not None:
             return CapabilityResolution(definition, CapabilityDecision.UNSUPPORTED, False, denied)
-        candidate, decision, reason = self._candidate(capability_id, context)
         if candidate is None:
             if definition.capability_class == "unavailable":
                 reason = "capability is registered but its adapter is not activated"
@@ -256,7 +256,7 @@ def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, cont
 
     def blocking_call(args: tuple[Any, ...], kwargs: dict[str, Any], cancel_event: asyncio.Event | None) -> Any:
         effective_kwargs = dict(kwargs)
-        if definition.id == "spreadsheet_read" and scope is not None:
+        if definition.id in {"spreadsheet_read", "data_analysis"} and scope is not None:
             try:
                 accepts_cache = "_cache" in inspect.signature(dispatch).parameters
             except (TypeError, ValueError):
@@ -293,7 +293,7 @@ def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, cont
                 if metrics is not None:
                     metrics.queue_wait_ms += round((time.perf_counter() - queue_started) * 1000)
                 if metrics is not None:
-                    metrics.tool_calls += 1
+                    metrics.record_tool_call(str(context.get("tool_call_kind", "local")))
                 if mode == ExecutionMode.BLOCKING:
                     if scope is not None and getattr(scope, "executor", None) is None:
                         scope.executor = ThreadPoolExecutor(max_workers=max(1, definition.max_parallelism))
@@ -313,7 +313,7 @@ def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, cont
                         raise
                 else:
                     effective_kwargs = dict(kwargs)
-                    if definition.id == "spreadsheet_read" and scope is not None:
+                    if definition.id in {"spreadsheet_read", "data_analysis"} and scope is not None:
                         if getattr(scope, "workbook_cache", None) is None:
                             from foresight_os.runtime.local_toolbelt import WorkbookReadCache
                             scope.workbook_cache = WorkbookReadCache()
@@ -367,7 +367,7 @@ class ForesightFunctionMiddleware(FunctionMiddleware):
                 raise BudgetExceededError(f"maximum tool calls exceeded before dispatch: {definition.id}")
             async with semaphore:
                 if metrics is not None:
-                    metrics.tool_calls += 1
+                    metrics.record_tool_call(str(self.context.get("tool_call_kind", "mcp")))
                 await call_next()
         except BudgetExceededError as error:
             if metrics is not None:
@@ -439,6 +439,21 @@ DEFAULT_CAPABILITIES = {
     "artifact_generation": CapabilityDefinition("artifact_generation", "unavailable", "write", "RUN", 1, "HUMAN", data_scope="local"),
     "external_mutation": CapabilityDefinition("external_mutation", "external_mutation", "write", "RUN", 1, "HUMAN"),
 }
+
+
+def register_artifact_generation_adapter(
+    run_context: dict[str, Any],
+    adapter: Any,
+    *,
+    fingerprint: str = "",
+) -> dict[str, Any]:
+    """Register a caller-owned artifact adapter without activating one by default."""
+    run_context.setdefault("adapters", {})["artifact_generation"] = CapabilityBinding(
+        adapter,
+        kind=CapabilityBindingKind.TOOL,
+        fingerprint=fingerprint,
+    )
+    return run_context
 
 
 @dataclass(frozen=True)

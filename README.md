@@ -59,7 +59,23 @@ durable analysis state. Source credibility remains a separate human decision.
 The semantic registry contains `web_search`, `page_retrieval`, `web_crawl`,
 `spreadsheet_read`, `data_analysis`, `calculation`, `graph_context`, and
 `domain_validation`, and `powerbi_project_read`, plus explicitly unavailable `document_read`,
-`internal_knowledge`, and `artifact_generation` follow-ups.
+  `internal_knowledge`, and `artifact_generation` follow-ups.
+
+## Presentation and Canva boundary
+
+The local presentation compiler derives a deterministic six-slide
+`PresentationSpec` from accepted `AnalysisState` findings. The spec carries its
+analysis revision, provenance IDs, qualifications, and content hash; it does
+not create a second analytical or artifact state model. `presentation_spec`
+artifacts are linked to their source findings through the existing
+`produces` relationships and become stale through the normal invalidation
+path.
+
+Canva remains an optional external boundary. No connector is activated by
+default, provisional specs cannot be published, and external mutation requires
+explicit human approval. A connected adapter returns only durable provider,
+design, revision, spec-hash, confirmation, and verification-time fields;
+preview or export URLs are transient and are not stored as analytical truth.
 
 Verification runs accept a disposable `--output-root`; preserved probe outputs
 under `work/` are not used as evaluation storage or rewritten by default.
@@ -125,7 +141,7 @@ retrieval time, query provenance, read-only authorization, and independent
 
 ## Optimization release evidence
 
-The optimization probe records the frozen baseline and release receipts under ignored `work/optimization-baseline/` and `work/optimization-release/`.
+The optimization probe records corrected-schema baseline and release receipts under ignored disposable roots. Receipts separate model calls, local/MCP/external tool calls, token counters, accepted-finding-normalized economics, pattern p95 latency components, and portable resource snapshots. The comparator fails closed for missing evidence, workload/schema/denominator mismatches, monotonic leak indicators, and threshold regressions.
 
 - Baseline: `python evaluation/probes/run_optimization_probe.py --mode baseline --output work/optimization-baseline/receipt.json`
 - Release: `python evaluation/probes/run_optimization_probe.py --mode release --output work/optimization-release/receipt.json`

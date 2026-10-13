@@ -114,45 +114,65 @@ def collect_material_inputs(state: AnalysisState, target_ids: tuple[str, ...] | 
     visited = {item for item in index.material_closure(targets) if item in records}
     visited.update(targets)
 
-    evidence_ids = set()
+    evidence_ids: set[str] = set()
     assumptions: set[str] = set()
-    for target_id in targets:
-        target = records.get(target_id)
-        if isinstance(target, AnalyticalRecord):
-            evidence_ids.update(target.evidence_ids)
-            assumptions.update(target.assumptions)
+    uncertainty: set[str] = set()
+    for record_id in sorted(visited):
+        record = records.get(record_id)
+        if isinstance(record, AnalyticalRecord):
+            evidence_ids.update(record.evidence_ids)
+            assumptions.update(record.assumptions)
+            uncertainty.update(record.uncertainty)
 
     calculation_ids = set(item for item in targets if isinstance(records.get(item), CalculationRecord))
-    known_inputs = set(evidence_ids) | calculation_ids
+    known_inputs = set(evidence_ids) | calculation_ids | visited
     missing_inputs: set[str] = set()
     changed = True
     while changed:
         changed = False
         for calculation in sorted(state.calculations, key=lambda item: item.id):
-            if calculation.id in calculation_ids or not set(calculation.input_ids) & known_inputs:
+            selected = calculation.id in calculation_ids or bool(set(calculation.input_ids) & known_inputs)
+            if not selected:
                 continue
-            calculation_ids.add(calculation.id)
-            known_inputs.add(calculation.id)
-            changed = True
+            if calculation.id not in calculation_ids:
+                calculation_ids.add(calculation.id)
+                known_inputs.add(calculation.id)
+                changed = True
             for input_id in calculation.input_ids:
                 if input_id in records:
                     known_inputs.add(input_id)
+                    if isinstance(records[input_id], Evidence):
+                        evidence_ids.add(input_id)
+                    elif isinstance(records[input_id], AnalyticalRecord):
+                        evidence_ids.update(records[input_id].evidence_ids)
+                        assumptions.update(records[input_id].assumptions)
+                        uncertainty.update(records[input_id].uncertainty)
                 else:
                     missing_inputs.add(input_id)
-    counterevidence = set(index.counterevidence_ids(tuple(sorted(visited))))
+    missing_inputs.update(item for item in evidence_ids if item not in records)
+    counterevidence = set(index.counterevidence_context(tuple(sorted(visited))))
     material_records = {
         record_id: records[record_id]
         for record_id in sorted(visited)
         if record_id in records and record_id not in evidence_ids and record_id not in calculation_ids
     }
+    direct_record_ids = tuple(sorted(item for item in targets if item in records))
+    derived_record_ids = tuple(sorted(set(material_records) - set(direct_record_ids)))
     return {
         "target_ids": targets,
         "records": material_records,
         "evidence": {item.id: item for item in state.evidence if item.id in evidence_ids},
         "calculations": {item.id: item for item in state.calculations if item.id in calculation_ids},
         "assumptions": tuple(sorted(assumptions)),
+        "uncertainty": tuple(sorted(uncertainty)),
         "counterevidence": tuple(sorted(counterevidence)),
         "missing_inputs": tuple(sorted(missing_inputs)),
+        "provenance": {
+            "direct": direct_record_ids,
+            "derived": derived_record_ids,
+        },
+        "direct_record_ids": direct_record_ids,
+        "derived_record_ids": derived_record_ids,
     }
 
 
@@ -171,8 +191,10 @@ def build_material_fingerprint(
         "evidence": {key: asdict(value) for key, value in sorted(material["evidence"].items())},
         "calculations": {key: asdict(value) for key, value in sorted(material["calculations"].items())},
         "assumptions": material["assumptions"],
+        "uncertainty": material["uncertainty"],
         "counterevidence": material["counterevidence"],
         "missing_inputs": material["missing_inputs"],
+        "provenance": material["provenance"],
         "skill_ids": tuple(sorted(set(skill_ids))),
         "skill_versions": tuple(sorted(set(skill_versions))),
         "skill_hashes": tuple(sorted(set(skill_hashes))),

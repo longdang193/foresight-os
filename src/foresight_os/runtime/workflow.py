@@ -3,13 +3,14 @@ import hashlib
 import inspect
 import json
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from uuid import uuid4
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from agent_framework import FunctionExecutor, WorkflowBuilder, WorkflowContext
 
-from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe
+from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, StageInput
 from foresight_os.runtime.executors import AnalystExecutor, ReviewerExecutor
 from foresight_os.controller.budgets import BudgetState
 from foresight_os.domain.validation import ValidationError
@@ -25,10 +26,30 @@ from foresight_os.runtime.capabilities import CapabilityResolver, CapabilityScop
 from foresight_os.runtime.crawl4ai import bind_crawl4ai
 from foresight_os.runtime.external_signals import load_hosted_mcp_bindings
 from foresight_os.runtime.web_search import bind_web_search
+from foresight_os.persistence.analysis_store import AnalysisStore, StageReceipt
 from foresight_os.runtime.page_retrieval import PageRetrievalCapability, bind_page_retrieval
 from foresight_os.runtime.local_toolbelt import bind_local_toolbelt
 from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
 from foresight_os.controller.skills import SkillRegistry
+
+
+@dataclass(frozen=True)
+class CanonicalStageResult:
+    result_references: tuple[str, ...]
+    result_hashes: tuple[str, ...]
+    output: object
+
+    def __post_init__(self) -> None:
+        if not self.result_references or len(self.result_references) != len(self.result_hashes):
+            raise ValueError("canonical stage results require matching non-empty references and hashes")
+        if len(self.result_references) == 1 and self.result_hashes[0] != _canonical_result_hash(self.output):
+            raise ValueError("canonical stage result hash does not match its output")
+
+
+CanonicalResultCommitter = Callable[
+    [Any, object, Mapping[str, Any]],
+    CanonicalStageResult | None | Awaitable[CanonicalStageResult | None],
+]
 
 
 async def _close_agents(agents: list[object]) -> list[BaseException]:
@@ -128,15 +149,45 @@ def _make_stage(stage_name: str):
     return stage
 
 
-def _stage_cache_key(stage: Any, current: object, skill_ids: tuple[str, ...]) -> str:
-    payload = {
+def _stage_input_payload(stage_input: object) -> dict[str, object]:
+    if isinstance(stage_input, StageInput):
+        return stage_input.to_payload()
+    return {"decision_question": stage_input}
+
+
+def _stage_fingerprints(
+    stage: Any,
+    stage_input: object,
+    skill_ids: tuple[str, ...],
+) -> tuple[str, str]:
+    participants = tuple(ParticipantConfig.from_mapping(item).id for item in getattr(stage, "participants", ()))
+    input_payload = _stage_input_payload(stage_input)
+    dependency_outputs = input_payload.get("dependency_outputs", {})
+    semantic_payload = {
         "stage_id": getattr(stage, "stage_id", "stage"),
         "pattern": str(getattr(stage, "pattern", "direct")),
-        "skills": tuple(skill_ids),
-        "participants": [ParticipantConfig.from_mapping(item).__dict__ for item in getattr(stage, "participants", ())],
-        "input": current,
+        "objective": getattr(stage, "objective", ""),
+        "expected_result": getattr(stage, "expected_result", ""),
+        "research_needs": getattr(stage, "research_needs", ()),
+        "specialist_ids": participants,
+        "skill_ids": tuple(skill_ids),
+        "decision_question": input_payload.get("decision_question", ""),
+        "horizon": input_payload.get("horizon", ""),
+        "relevant_constraints": input_payload.get("relevant_constraints", ()),
+        "dependency_result_hashes": {
+            stage_id: _canonical_result_hash(output)
+            for stage_id, output in dict(dependency_outputs).items()
+        },
     }
-    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")).hexdigest()
+    policy_payload = {"limits": getattr(stage, "limits", {})}
+    return (
+        hashlib.sha256(json.dumps(semantic_payload, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")).hexdigest(),
+        hashlib.sha256(json.dumps(policy_payload, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")).hexdigest(),
+    )
+
+
+def _stage_cache_key(stage: Any, current: object, skill_ids: tuple[str, ...]) -> str:
+    return _stage_fingerprints(stage, current, skill_ids)[0]
 
 
 def _committed_cache_output(entry: Any, canonical_records: dict[str, object] | None = None) -> tuple[bool, object]:
@@ -215,6 +266,30 @@ async def run_recipe_async(
     factory = AgentFactory(client) if client is not None else None
     context = dict(run_context or {})
     context.setdefault("skill_registry", SkillRegistry())
+    receipt_store = context.get("analysis_store") or context.get("stage_receipt_store")
+    if isinstance(receipt_store, AnalysisStore):
+        context.setdefault("stage_receipts", receipt_store.load_stage_receipts())
+    context.setdefault("canonical_records", {})
+    context.setdefault("canonical_outputs", {})
+    context.setdefault("stage_receipts", {})
+    changed_record_ids = tuple(str(item) for item in context.get("changed_record_ids", context.get("changed_ids", ())))
+    relation_index = context.get("relation_index")
+    if changed_record_ids and relation_index is not None:
+        impact_closure = getattr(relation_index, "impact_closure", None) or getattr(relation_index, "impacted_descendants")
+        impacted_ids = set(impact_closure(changed_record_ids))
+        context["invalidated_stage_ids"] = tuple(
+            sorted(
+                stage_id
+                for stage_id, receipt in context["stage_receipts"].items()
+                if impacted_ids.intersection(getattr(receipt, "result_references", ()))
+            )
+        )
+    for stage_id, receipt in context["stage_receipts"].items():
+        if stage_id in context["canonical_outputs"] or not context["canonical_records"]:
+            continue
+        values = [context["canonical_records"].get(reference) for reference in receipt.result_references]
+        if all(value is not None for value in values):
+            context["canonical_outputs"][stage_id] = values[0] if len(values) == 1 else values
     supplied_scope = context.get("scope")
     scope = supplied_scope or CapabilityScope(ownership=ScopeOwnership.RUN)
     owns_scope = supplied_scope is None or getattr(scope, "ownership", ScopeOwnership.BORROWED) == ScopeOwnership.RUN
@@ -288,6 +363,8 @@ async def run_recipe_async(
         pattern = ExecutionPattern(stage.pattern)
         stage_skill_ids = tuple(getattr(stage, "skill_ids", ()))
         selected_skills = context["skill_registry"].resolve(stage_skill_ids)
+        stage_skill_hashes = tuple(skill.content_sha256 for skill in selected_skills)
+        context.setdefault("skill_hashes_by_stage", {})[getattr(stage, "stage_id", "")] = stage_skill_hashes
         stage_context = dict(context)
         stage_context["selected_skills"] = selected_skills
         participants = [
@@ -301,14 +378,19 @@ async def run_recipe_async(
             for index, participant in enumerate(stage.participants, 1)
         ]
         cache_key = _stage_cache_key(stage, stage_input, stage_skill_ids)
+        semantic_fingerprint, execution_policy_fingerprint = _stage_fingerprints(stage, stage_input, stage_skill_ids)
+        stage_context["stage_fingerprints"] = (semantic_fingerprint, execution_policy_fingerprint)
         cache_entry = context.get("stage_cache", {}).get(cache_key)
         receipt = context.get("stage_receipts", {}).get(getattr(stage, "stage_id", ""))
         canonical_output = context.get("canonical_outputs", {}).get(getattr(stage, "stage_id", ""))
         if receipt is not None:
             cache_entry = None
+        if getattr(stage, "stage_id", "") in set(context.get("invalidated_stage_ids", ())):
+            receipt = None
         if receipt is not None and canonical_output is not None and hasattr(receipt, "reusable_for"):
             if receipt.reusable_for(
                 input_fingerprint=cache_key,
+                execution_policy_fingerprint=execution_policy_fingerprint,
                 skill_hashes=tuple(context.get("skill_hashes_by_stage", {}).get(getattr(stage, "stage_id", ""), ())),
                 capability_fingerprints=tuple(context.get("capability_fingerprints", ())),
                 model_config_fingerprint=str(context.get("model_config_fingerprint", "")),
@@ -364,7 +446,7 @@ async def run_recipe_async(
                 metrics.branches = branch_count
                 metrics.parallelism = branch_count
                 branch_results = await asyncio.gather(
-                    *[AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participant, f"participant-{index}"), stage_context).execute(str(current)) for index, participant in enumerate(participants or ({"purpose": "participant"},) * branch_count, 1)],
+                    *[AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participant, f"participant-{index}"), stage_context).execute(str(stage_input)) for index, participant in enumerate(participants or ({"purpose": "participant"},) * branch_count, 1)],
                     return_exceptions=True,
                 )
                 results = tuple(item for item in branch_results if not isinstance(item, BaseException))
@@ -388,17 +470,73 @@ async def run_recipe_async(
                 metrics.model_calls += len(stage_outputs)
             return stage_outputs, stage_outputs[-1]
         if max_timeout is not None:
-            return await asyncio.wait_for(invoke(), float(max_timeout))
-        return await invoke()
+            stage_outputs, current = await asyncio.wait_for(invoke(), float(max_timeout))
+        else:
+            stage_outputs, current = await invoke()
+        committer = context.get("canonical_result_committer")
+        if committer is None:
+            return stage_outputs, current
+        canonical = committer(
+            stage,
+            current,
+            {**stage_context, "stage_input": stage_input, "stage_outputs": tuple(stage_outputs)},
+        )
+        if inspect.isawaitable(canonical):
+            canonical = await canonical
+        if canonical is None:
+            return stage_outputs, current
+        if not isinstance(canonical, CanonicalStageResult):
+            raise ValidationError("canonical result committer must return CanonicalStageResult or None")
+        if len(canonical.result_references) == 1:
+            context["canonical_records"][canonical.result_references[0]] = canonical.output
+        context["canonical_outputs"][getattr(stage, "stage_id", "")] = canonical.output
+        committed_receipt = StageReceipt(
+            stage_id=str(getattr(stage, "stage_id", "stage")),
+            input_fingerprint=semantic_fingerprint,
+            execution_policy_fingerprint=execution_policy_fingerprint,
+            skill_hashes=stage_skill_hashes,
+            capability_fingerprints=tuple(context.get("capability_fingerprints", ())),
+            model_config_fingerprint=str(context.get("model_config_fingerprint", "")),
+            authorization_scope_fingerprint=str(context.get("authorization_scope_fingerprint", "")),
+            result_references=canonical.result_references,
+            result_hashes=canonical.result_hashes,
+            status="committed",
+            committed=True,
+            provenance_complete=True,
+        )
+        context["stage_receipts"][committed_receipt.stage_id] = committed_receipt
+        if isinstance(receipt_store, AnalysisStore):
+            receipt_store.save_stage_receipt(committed_receipt)
+        return stage_outputs, canonical.output
 
     primary_error: BaseException | None = None
     try:
         stages = recipe.stages or ()
         if not stages:
             stages = (type("Stage", (), {"pattern": ExecutionPattern(recipe.pattern), "participants": tuple(recipe.roles)})(),)
-        current: object = prompt
+        outputs_by_stage: dict[str, object] = {}
         for stage in stages:
-            stage_outputs, current = await dispatch_stage(stage, current)
+            dependencies = tuple(getattr(stage, "dependencies", ()))
+            missing = tuple(dependency for dependency in dependencies if dependency not in outputs_by_stage)
+            if missing:
+                raise ValidationError(f"stage {getattr(stage, 'stage_id', 'stage')} has unavailable dependency outputs: {', '.join(missing)}")
+            stage_input = StageInput(
+                decision_question=str(getattr(stage, "decision_question", "") or context.get("decision_question") or recipe.metadata.get("decision_question") or prompt),
+                horizon=str(getattr(stage, "horizon", "") or context.get("horizon") or recipe.metadata.get("horizon", "unspecified")),
+                objective=str(getattr(stage, "objective", "") or "execute declared stage"),
+                expected_result=str(getattr(stage, "expected_result", "") or ""),
+                relevant_constraints=tuple(
+                    str(item)
+                    for item in (
+                        getattr(stage, "relevant_constraints", ())
+                        or context.get("relevant_constraints", ())
+                        or tuple(filter(None, str(recipe.metadata.get("relevant_constraints", "")).split("|")))
+                    )
+                ),
+                dependency_outputs=tuple((dependency, outputs_by_stage[dependency]) for dependency in dependencies),
+            )
+            stage_outputs, current = await dispatch_stage(stage, stage_input)
+            outputs_by_stage[getattr(stage, "stage_id", f"stage-{len(outputs_by_stage) + 1}")] = current
             outputs.extend(stage_outputs)
         metrics.settled = True
         return RunResult(metrics.run_id, tuple(outputs), metrics)

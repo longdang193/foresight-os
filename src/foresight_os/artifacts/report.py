@@ -25,6 +25,7 @@ def render_report(state: AnalysisState, *, provisional: bool = False) -> str:
         "",
         "## Findings",
     ]
+    findings = {item.target_id: item for item in derive_finding_views(state)}
     if provisional:
         for finding in derive_finding_views(state):
             if finding.limitations:
@@ -36,10 +37,21 @@ def render_report(state: AnalysisState, *, provisional: bool = False) -> str:
             lines.append(f"  - Assumptions: {'; '.join(record.assumptions)}")
         if record.uncertainty:
             lines.append(f"  - Uncertainty: {'; '.join(record.uncertainty)}")
-        if provisional and record.disconfirmation_conditions:
+        finding = findings.get(record.id)
+        if finding and finding.counterevidence_ids:
+            lines.append(f"  - Counterevidence: {', '.join(f'`{item}`' for item in finding.counterevidence_ids)}")
+        if finding and finding.limitations:
+            lines.append(f"  - Review limitations: {'; '.join(finding.limitations)}")
+        if finding and finding.unresolved_issues:
+            lines.append(f"  - Unresolved issues: {'; '.join(finding.unresolved_issues)}")
+        if record.disconfirmation_conditions:
             lines.append(f"  - Disconfirmation conditions: {'; '.join(record.disconfirmation_conditions)}")
-        if provisional and record.confidence_rationale:
+        if record.confidence_rationale:
             lines.append(f"  - Rationale: {record.confidence_rationale}")
+        if record.monitoring_indicators:
+            lines.append(f"  - Monitoring indicators: {'; '.join(record.monitoring_indicators)}")
+        if finding and finding.implications:
+            lines.append(f"  - Implications: {', '.join(f'`{item}`' for item in finding.implications)}")
     return "\n".join(lines) + "\n"
 
 

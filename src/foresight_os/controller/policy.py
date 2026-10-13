@@ -102,6 +102,7 @@ def _recipe_for_patterns(
     rationale: str,
     work_stages=(),
     review_required: bool = False,
+    brief: WorkBrief | None = None,
 ) -> ExecutionRecipe:
     if not patterns:
         raise ValueError("at least one execution pattern is required")
@@ -162,20 +163,52 @@ def _recipe_for_patterns(
         capabilities, _ = stage_capabilities(stage)
         return capabilities
 
+    def stage_roles(stage: object, pattern: ExecutionPattern, is_last: bool) -> list[dict[str, object]]:
+        requested_ids = tuple(str(item) for item in getattr(stage, "participants", ()) if str(item))
+        if requested_ids:
+            roles = [
+                {
+                    "id": participant_id,
+                    "role": "reviewer" if participant_id == "reviewer" else participant_id,
+                    "purpose": "review" if participant_id == "reviewer" else participant_id,
+                    "profile": "normal",
+                }
+                for participant_id in requested_ids
+            ]
+        else:
+            roles = [dict(role) for role in make_recipe(recipe_names[pattern]).roles]
+            for index, role in enumerate(roles, 1):
+                role.setdefault("id", f"participant-{index}")
+
+        needs_collaborator = pattern in {ExecutionPattern.HANDOFF, ExecutionPattern.GROUP_CHAT} or (
+            review_required and is_last and pattern != ExecutionPattern.DIRECT
+        )
+        if needs_collaborator and len(roles) < 2:
+            roles.append(
+                {
+                    "id": "participant-2" if pattern == ExecutionPattern.HANDOFF else "reviewer",
+                    "role": "reviewer",
+                    "purpose": "review" if pattern != ExecutionPattern.GROUP_CHAT else "skeptic",
+                    "profile": "normal",
+                }
+            )
+        if review_required and is_last and pattern != ExecutionPattern.DIRECT and not any(role.get("purpose") == "review" for role in roles):
+            roles.append({"id": "reviewer", "role": "reviewer", "purpose": "review", "profile": "normal"})
+        if pattern == ExecutionPattern.HANDOFF and len(roles) > 1:
+            roles[0].setdefault("handoff_targets", (roles[1]["id"],))
+        return roles
+
     stages = tuple(
         RecipeStage(
             getattr(work_stages[index - 1], "stage_id", f"stage-{index}") if index <= len(work_stages) else f"stage-{index}",
             stage_patterns[index - 1],
             tuple(
-                [
-                    {
-                        **role,
-                        "capability_ids": stage_capabilities(work_stages[index - 1])[0] if index <= len(work_stages) and role.get("purpose") != "review" else (review_capabilities(work_stages[index - 1]) if index <= len(work_stages) and role.get("purpose") == "review" else ()),
-                        "unresolved_capabilities": stage_capabilities(work_stages[index - 1])[1] if index <= len(work_stages) and role.get("purpose") != "review" else (),
-                    }
-                    for role in make_recipe(recipe_names[stage_patterns[index - 1]]).roles
-                ]
-                + ([{"id": "reviewer", "role": "reviewer", "purpose": "review", "profile": "normal"}] if review_required and index == stage_count and stage_patterns[index - 1] != ExecutionPattern.DIRECT else [])
+                {
+                    **role,
+                    "capability_ids": stage_capabilities(work_stages[index - 1])[0] if index <= len(work_stages) and role.get("purpose") != "review" else (review_capabilities(work_stages[index - 1]) if index <= len(work_stages) and role.get("purpose") == "review" else ()),
+                    "unresolved_capabilities": stage_capabilities(work_stages[index - 1])[1] if index <= len(work_stages) and role.get("purpose") != "review" else (),
+                }
+                for role in stage_roles(work_stages[index - 1] if index <= len(work_stages) else object(), stage_patterns[index - 1], index == stage_count)
             ),
             "typed-result",
             "typed-result",
@@ -193,6 +226,17 @@ def _recipe_for_patterns(
             tuple(getattr(work_stages[index - 1], "dependencies", ())) if index <= len(work_stages) else (),
             getattr(work_stages[index - 1], "expected_result", "") if index <= len(work_stages) else "",
             tuple(getattr(work_stages[index - 1], "research_needs", ())) if index <= len(work_stages) else (),
+            getattr(brief, "decision_question", "") if brief is not None else "",
+            getattr(brief, "horizon", "unspecified") if brief is not None else "unspecified",
+            tuple(
+                dict.fromkeys(
+                    [
+                        *getattr(brief, "scope", ()),
+                        *getattr(brief, "assumptions", ()),
+                        *getattr(brief, "open_dependencies", ()),
+                    ]
+                )
+            ) if brief is not None else (),
         )
         for index in range(1, stage_count + 1)
     )
@@ -215,6 +259,17 @@ def _recipe_for_patterns(
                 for stage in work_stages
                 for need in stage_capabilities(stage)[1]
             ),
+            "decision_question": getattr(brief, "decision_question", "") if brief is not None else "",
+            "horizon": getattr(brief, "horizon", "unspecified") if brief is not None else "unspecified",
+            "relevant_constraints": "|".join(
+                dict.fromkeys(
+                    [
+                        *getattr(brief, "scope", ()),
+                        *getattr(brief, "assumptions", ()),
+                        *getattr(brief, "open_dependencies", ()),
+                    ]
+                )
+            ) if brief is not None else "",
         },
         purpose=base.purpose,
         stages=stages,
@@ -236,6 +291,7 @@ def select_recipe(brief: WorkBrief, task_shape: TaskShape | None = None, overrid
             "valid explicit execution-pattern override",
             brief.stages,
             bool(task_shape and task_shape.review_required),
+            brief,
         )
     if task_shape is not None:
         patterns: list[ExecutionPattern] = []
@@ -254,8 +310,9 @@ def select_recipe(brief: WorkBrief, task_shape: TaskShape | None = None, overrid
                 "structural task-shape mapping",
                 brief.stages,
                 task_shape.review_required,
+                brief,
             )
-        return _recipe_for_patterns((ExecutionPattern.DIRECT,), "task_shape", "direct task shape", brief.stages)
+        return _recipe_for_patterns((ExecutionPattern.DIRECT,), "task_shape", "direct task shape", brief.stages, brief=brief)
     if brief.stages:
         return _recipe_for_patterns(
             (ExecutionPattern.SEQUENTIAL,),
@@ -263,6 +320,7 @@ def select_recipe(brief: WorkBrief, task_shape: TaskShape | None = None, overrid
             "ordered Work Brief stages",
             brief.stages,
             True,
+            brief,
         )
     if brief.desired_deliverables:
         return make_recipe(RecipeName.ANALYZE_REVIEW)

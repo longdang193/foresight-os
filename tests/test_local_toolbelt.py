@@ -287,6 +287,18 @@ def test_run_local_workbook_cache_keeps_path_provenance(tmp_path, workbook_path)
     assert first_result.workbook_sha256 == second_result.workbook_sha256
 
 
+def test_run_local_workbook_cache_reuses_deterministic_analysis(workbook_path):
+    cache = WorkbookReadCache()
+    table = spreadsheet_read(workbook_path, _cache=cache).tables[0]
+    operation = AnalysisOperation("duplicates", key_columns=("Region", "Metric", "Value"))
+
+    first = data_analysis(table, operation, _cache=cache)
+    second = data_analysis(table, operation, _cache=cache)
+
+    assert first is second
+    assert cache.size == 2
+
+
 def test_calculation_provenance_qualifies_workbook_sheet_and_coordinate(workbook_path):
     result = spreadsheet_read(workbook_path, SheetSelection(sheet_names=("Demand", "Assumptions"), include_hidden=True, include_hidden_rows=True))
     demand_value = next(item for item in result.measurements if item.provenance.sheet == "Demand" and item.provenance.coordinate == "C3")

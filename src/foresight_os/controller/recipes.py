@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from enum import StrEnum
+import json
 from typing import Any
 
 from foresight_os.controller.profiles import Profile
@@ -24,6 +25,29 @@ class ExecutionPattern(StrEnum):
 
 
 @dataclass(frozen=True)
+class StageInput:
+    decision_question: str
+    horizon: str
+    objective: str
+    expected_result: str
+    relevant_constraints: tuple[str, ...] = ()
+    dependency_outputs: tuple[tuple[str, object], ...] = ()
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "decision_question": self.decision_question,
+            "horizon": self.horizon,
+            "objective": self.objective,
+            "expected_result": self.expected_result,
+            "relevant_constraints": self.relevant_constraints,
+            "dependency_outputs": {stage_id: output for stage_id, output in self.dependency_outputs},
+        }
+
+    def __str__(self) -> str:
+        return json.dumps(self.to_payload(), sort_keys=True, default=str, separators=(",", ":"))
+
+
+@dataclass(frozen=True)
 class RecipeStage:
     stage_id: str
     pattern: ExecutionPattern
@@ -36,6 +60,9 @@ class RecipeStage:
     dependencies: tuple[str, ...] = ()
     expected_result: str = ""
     research_needs: tuple[object, ...] = ()
+    decision_question: str = ""
+    horizon: str = "unspecified"
+    relevant_constraints: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
