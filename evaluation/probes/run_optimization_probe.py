@@ -18,6 +18,7 @@ from foresight_os.controller.recipes import ExecutionPattern, RecipeName, make_r
 from foresight_os.runtime.capabilities import CapabilityDefinition, CapabilityScope, instrument_tool
 from foresight_os.runtime.local_toolbelt import AnalysisOperation, SheetSelection, data_analysis, spreadsheet_read
 from foresight_os.runtime.workflow import run_recipe_async
+from optimization_measurement import build_receipt, observed_xlsx_state, stage_metric
 
 
 class _ProbeClient:
@@ -154,9 +155,10 @@ def _measure_workbook(path: Path) -> dict[str, object]:
     }
 
 
-async def _measure_patterns() -> dict[str, object]:
+async def _measure_patterns() -> tuple[dict[str, object], list[dict[str, object]]]:
     receipts: dict[str, object] = {}
-    for recipe_name in (RecipeName.ANALYZE, RecipeName.CONCURRENT, RecipeName.HANDOFF, RecipeName.CHALLENGE_RECOMMENDATION):
+    stage_metrics: list[dict[str, object]] = []
+    for recipe_name in (RecipeName.DIRECT, RecipeName.ANALYZE, RecipeName.CONCURRENT, RecipeName.HANDOFF, RecipeName.CHALLENGE_RECOMMENDATION):
         recipe = make_recipe(recipe_name)
         for _ in range(2):
             await run_recipe_async(recipe, "optimization baseline", _ProbeClient(), f"warm-{recipe_name.value}")
@@ -166,13 +168,15 @@ async def _measure_patterns() -> dict[str, object]:
             started = time.perf_counter()
             last = await run_recipe_async(recipe, "optimization baseline", _ProbeClient(), f"measure-{recipe_name.value}-{index}")
             samples.append((time.perf_counter() - started) * 1000)
+        if last is not None:
+            stage_metrics.append(stage_metric("stage-1", recipe.pattern, last, samples[-1]))
         receipts[recipe_name.value] = {
             "p50_ms": round(median(samples), 3),
             "p95_ms": round(sorted(samples)[-1], 3),
             "model_calls": last.metrics.model_calls if last else 0,
             "cleanup_complete": bool(last and last.metrics.cleanup_complete),
         }
-    return receipts
+    return receipts, stage_metrics
 
 
 async def _soak_receipt() -> dict[str, object]:
@@ -188,9 +192,9 @@ async def _soak_receipt() -> dict[str, object]:
     }
 
 
-async def _run(mode: str, fixture: Path) -> dict[str, object]:
+async def _run(mode: str, fixture: Path, evidence_root: Path) -> dict[str, object]:
     workbook = _measure_workbook(fixture)
-    patterns = await _measure_patterns()
+    patterns, stage_metrics = await _measure_patterns()
     soak = await _soak_receipt()
 
     async def external_call(query: str = "") -> str:
@@ -205,18 +209,19 @@ async def _run(mode: str, fixture: Path) -> dict[str, object]:
         mcp = await _native_mcp_receipt()
     except Exception as error:
         mcp = {"status": "FAILED", "error_type": type(error).__name__}
-    return {
-        "mode": mode,
-        "status": "VERIFIED" if mcp.get("status") == "VERIFIED" else "FAILED",
-        "finding_count": 1,
-        "workload": {"fixture": str(fixture), "warmups": 2, "measured_runs": 10},
-        "acceptance": {"p95_regression_pct": 20, "peak_allocation_regression_pct": 15, "tool_calls_per_finding_increase": 0, "soak_runs": 100},
-        "xlsx": workbook,
-        "maf_patterns": patterns,
-        "soak": soak,
-        "external_fixture": {"tool_calls": metrics.tool_calls, "failures": metrics.tool_failures},
-        "native_mcp": mcp,
-    }
+    state = observed_xlsx_state(fixture, evidence_root)
+    return build_receipt(
+        mode=mode,
+        fixture=fixture,
+        workbook=workbook,
+        patterns=patterns,
+        stage_metrics=stage_metrics,
+        soak=soak,
+        external_fixture={"tool_calls": metrics.tool_calls, "failures": metrics.tool_failures},
+        native_mcp=mcp,
+        state=state,
+        thresholds={"p95_regression_pct": 20, "peak_allocation_regression_pct": 15, "tool_calls_per_finding_increase": 0, "soak_runs": 100},
+    )
 
 
 def main() -> int:
@@ -227,9 +232,9 @@ def main() -> int:
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     fixture = args.workbook or args.fixture
-    result = asyncio.run(_run(args.mode, fixture))
     output = args.output or Path(f"work/optimization-{args.mode}/receipt.json")
     output.parent.mkdir(parents=True, exist_ok=True)
+    result = asyncio.run(_run(args.mode, fixture, output.parent / "measurement-state"))
     output.write_text(json.dumps(result, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result, sort_keys=True))
     return 0 if result["status"] == "VERIFIED" else 1

@@ -14,14 +14,17 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-root", type=Path, default=ROOT / "work" / "toolbelt-probes")
     args = parser.parse_args()
-    semantic_ids = ("web_search", "page_retrieval", "web_crawl", "technology_signals", "market_signals", "macro_signals", "spreadsheet_read", "data_analysis", "calculation", "graph_context", "domain_validation", "document_read", "internal_knowledge", "artifact_generation")
     local = bind_local_toolbelt()
+    unavailable = ("document_read", "internal_knowledge", "artifact_generation")
+    semantic_ids = tuple(sorted(set(local) | set(unavailable)))
     resolved = CapabilityResolver().resolve(semantic_ids, {"local_capabilities": local, "participant_data_scope": ("local", "public")})
+    unknown_local = sorted(set(local) - set(resolved))
     receipt = {
         "mode": "toolbelt",
-        "status": "verified" if all(resolved[name].available for name in local) and all(not resolved[name].available for name in ("document_read", "internal_knowledge", "artifact_generation")) else "failed",
+        "status": "verified" if not unknown_local and all(resolved[name].available for name in local) and all(not resolved[name].available for name in unavailable) else "failed",
         "available": sorted(name for name, item in resolved.items() if item.available),
         "unavailable": sorted(name for name, item in resolved.items() if not item.available),
+        "unknown_local": unknown_local,
         "resolution_side_effect_free": True,
     }
     args.output_root.mkdir(parents=True, exist_ok=True)

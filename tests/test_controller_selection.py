@@ -2,6 +2,7 @@ from foresight_os.controller.budgets import BudgetState
 from foresight_os.controller.policy import probe_pattern_status, select_recipe
 from foresight_os.controller.recipes import ExecutionPattern, RecipeName
 from foresight_os.controller.task_shape import TaskShape
+from foresight_os.domain.models import ResearchNeed, ResearchNeedKind, WorkStage
 from foresight_os.wayfinding import create_work_brief
 
 
@@ -61,17 +62,19 @@ def test_override_preserves_required_review_and_rejects_only_direct_topology():
     else:
         raise AssertionError("direct topology bypassed required review")
 
-    try:
-        select_recipe(brief, override=["concurrent", "concurrent"])
-    except ValueError as error:
-        assert "repeat" in str(error)
-    else:
-        raise AssertionError("duplicate pattern override was accepted")
+    repeated = select_recipe(brief, override=["concurrent", "concurrent"])
+    assert [stage.pattern for stage in repeated.stages] == [ExecutionPattern.CONCURRENT, ExecutionPattern.CONCURRENT]
 
 
 def test_work_stages_assign_capabilities_and_handoff_routes_explicitly():
     recipe = select_recipe(
-        create_work_brief("review"),
+        create_work_brief(
+            "review",
+            stages=[
+                WorkStage("assess-capacity", "assess capacity", participants=["analyst"]),
+                WorkStage("validate-contradiction", "review evidence", participants=["reviewer"], dependencies=["assess-capacity"], research_needs=[ResearchNeed(ResearchNeedKind.EXTERNAL_FACT, "capacity expansion cost"), ResearchNeed(ResearchNeedKind.SOURCE_DETAIL, "source details")]),
+            ],
+        ),
         TaskShape(dynamic_specialist_routing=True, ordered_dependencies=True),
     )
 

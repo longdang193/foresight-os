@@ -122,6 +122,7 @@ class AnalyticalRecord:
     uncertainty: tuple[str, ...] = ()
     confidence_rationale: str = ""
     disconfirmation_conditions: tuple[str, ...] = ()
+    monitoring_indicators: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -204,6 +205,8 @@ class WorkBrief:
     next_useful_step: str
     execution_pattern_override: str | list[str] | None = None
     stages: list[WorkStage] = field(default_factory=list)
+    horizon: str = "unspecified"
+    consequence_level: str = "standard"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

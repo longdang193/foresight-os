@@ -6,6 +6,52 @@ from foresight_os.domain.models import ResearchNeed, ResearchNeedKind, WorkBrief
 
 
 @dataclass(frozen=True)
+class ReviewPolicy:
+    policy_id: str
+    version: str
+    required_skill_ids: tuple[str, ...]
+    acceptable_outcomes: tuple[str, ...] = ("ACCEPTED",)
+    blocking_objection_kinds: tuple[str, ...] = ()
+    unresolved_classification_issue: str | None = None
+
+
+class ReviewPolicyResolver:
+    """Single owner for deterministic review-policy selection."""
+
+    def resolve(
+        self,
+        brief: WorkBrief | None = None,
+        *,
+        target_kind: str | None = None,
+        research_needs: tuple[object, ...] | list[object] = (),
+        consequence_level: str | None = None,
+    ) -> ReviewPolicy:
+        level = consequence_level if consequence_level is not None else getattr(brief, "consequence_level", "standard")
+        level = str(level or "standard").lower()
+        target_value = str(target_kind or "").upper()
+        quantitative = target_value == ResearchNeedKind.QUANTITATIVE_ANALYSIS.value or any(str(getattr(item, "kind", item)) == ResearchNeedKind.QUANTITATIVE_ANALYSIS.value for item in research_needs)
+        if brief is not None:
+            quantitative = quantitative or any(
+                str(getattr(stage_need, "kind", stage_need)) == ResearchNeedKind.QUANTITATIVE_ANALYSIS.value
+                for stage in getattr(brief, "stages", ())
+                for stage_need in getattr(stage, "research_needs", ())
+            )
+        unresolved = None
+        if level not in {"standard", "high"}:
+            unresolved = f"unknown consequence classification: {level}"
+            level = "standard"
+        if level == "high":
+            return ReviewPolicy("review-policy-high-consequence-v1", "1", ("key-assumptions-check", "red-team-claim", "abstain-or-escalate"), blocking_objection_kinds=("FAILURE_MODE", "UNSUPPORTED_ASSUMPTION"), unresolved_classification_issue=unresolved)
+        if quantitative:
+            return ReviewPolicy("review-policy-quantitative-v1", "1", ("quantitative-sanity-check", "red-team-claim"), blocking_objection_kinds=("CALCULATION_ERROR",), unresolved_classification_issue=unresolved)
+        if not target_kind:
+            unresolved = unresolved or "missing target classification"
+        elif target_value not in {"CLAIM", "IMPLICATION", "RECOMMENDATION", ResearchNeedKind.QUANTITATIVE_ANALYSIS.value}:
+            unresolved = unresolved or f"unknown target classification: {target_kind}"
+        return ReviewPolicy("review-policy-standard-v1", "1", ("source-appraisal", "red-team-claim"), blocking_objection_kinds=("SOURCE_CONTRADICTION",), unresolved_classification_issue=unresolved)
+
+
+@dataclass(frozen=True)
 class CandidateProbe:
     name: str
     supported: bool
@@ -42,13 +88,11 @@ class PatternSelection:
 
 def _patterns_from_override(override) -> tuple[ExecutionPattern, ...]:
     values = (override,) if isinstance(override, str) else tuple(override)
-    if not values or len(values) > 4:
-        raise ValueError("execution-pattern override must contain one to four patterns")
+    if not values or len(values) > 32:
+        raise ValueError("execution-pattern override must contain one to thirty-two patterns")
     selected = tuple(ExecutionPattern(value) for value in values)
     if len(selected) > 1 and ExecutionPattern.DIRECT in selected:
         raise ValueError("direct cannot be composed with other execution patterns")
-    if len(set(selected)) != len(selected):
-        raise ValueError("execution-pattern override cannot repeat a pattern")
     return selected
 
 
@@ -104,13 +148,20 @@ def _recipe_for_patterns(
                 unresolved.append(f"{kind or ResearchNeedKind.UNRESOLVED_CAPABILITY.value}:{query}")
         return tuple(dict.fromkeys(capabilities)), tuple(unresolved)
 
-    stage_count = max(len(patterns), len(work_stages))
+    stage_count = len(work_stages) or len(patterns)
+    if work_stages and source == "explicit_override" and len(patterns) not in (1, len(work_stages)):
+        raise ValueError("pattern list must contain one pattern or exactly one pattern per WorkStage")
     stage_patterns = [
         _patterns_from_override(getattr(work_stages[index - 1], "execution_pattern_override"))[0]
         if index <= len(work_stages) and getattr(work_stages[index - 1], "execution_pattern_override", None) is not None
         else (patterns[index - 1] if index <= len(patterns) else patterns[-1])
         for index in range(1, stage_count + 1)
     ]
+
+    def review_capabilities(stage: object) -> tuple[str, ...]:
+        capabilities, _ = stage_capabilities(stage)
+        return capabilities
+
     stages = tuple(
         RecipeStage(
             getattr(work_stages[index - 1], "stage_id", f"stage-{index}") if index <= len(work_stages) else f"stage-{index}",
@@ -119,7 +170,7 @@ def _recipe_for_patterns(
                 [
                     {
                         **role,
-                        "capability_ids": stage_capabilities(work_stages[index - 1])[0] if index <= len(work_stages) and role.get("purpose") != "review" else (),
+                        "capability_ids": stage_capabilities(work_stages[index - 1])[0] if index <= len(work_stages) and role.get("purpose") != "review" else (review_capabilities(work_stages[index - 1]) if index <= len(work_stages) and role.get("purpose") == "review" else ()),
                         "unresolved_capabilities": stage_capabilities(work_stages[index - 1])[1] if index <= len(work_stages) and role.get("purpose") != "review" else (),
                     }
                     for role in make_recipe(recipe_names[stage_patterns[index - 1]]).roles
@@ -138,6 +189,10 @@ def _recipe_for_patterns(
                 "max_total_agent_calls": base.max_total_agent_calls,
             },
             tuple(getattr(work_stages[index - 1], "skill_ids", ())) if index <= len(work_stages) else (),
+            getattr(work_stages[index - 1], "objective", "") if index <= len(work_stages) else "",
+            tuple(getattr(work_stages[index - 1], "dependencies", ())) if index <= len(work_stages) else (),
+            getattr(work_stages[index - 1], "expected_result", "") if index <= len(work_stages) else "",
+            tuple(getattr(work_stages[index - 1], "research_needs", ())) if index <= len(work_stages) else (),
         )
         for index in range(1, stage_count + 1)
     )
@@ -170,6 +225,8 @@ def select_recipe(brief: WorkBrief, task_shape: TaskShape | None = None, overrid
     override = override if override is not None else brief.execution_pattern_override
     if override is not None:
         selected = _patterns_from_override(override)
+        if isinstance(override, (list, tuple)) and brief.stages and len(selected) != len(brief.stages):
+            raise ValueError("global pattern list must map positionally to every WorkStage")
         if task_shape is not None and task_shape.review_required and ExecutionPattern.SEQUENTIAL not in selected:
             if selected == (ExecutionPattern.DIRECT,):
                 raise ValueError("review_required cannot be satisfied by a direct topology")

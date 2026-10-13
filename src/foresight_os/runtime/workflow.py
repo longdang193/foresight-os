@@ -141,9 +141,16 @@ def _stage_cache_key(stage: Any, current: object, skill_ids: tuple[str, ...]) ->
 
 def _committed_cache_output(entry: Any) -> tuple[bool, object]:
     if isinstance(entry, dict):
-        valid = entry.get("status") == "committed" and entry.get("provenance_complete") is True and "output" in entry
+        references = entry.get("result_references", entry.get("canonical_result_ids", ()))
+        hashes = entry.get("result_hashes", ())
+        valid = entry.get("status") == "committed" and entry.get("provenance_complete") is True and bool(references) and bool(hashes) and "output" in entry
         return valid, entry.get("output")
-    valid = getattr(entry, "status", None) == "committed" and getattr(entry, "provenance_complete", False) is True
+    valid = (
+        getattr(entry, "status", None) == "committed"
+        and getattr(entry, "provenance_complete", False) is True
+        and bool(getattr(entry, "result_references", ()))
+        and bool(getattr(entry, "result_hashes", ()))
+    )
     return valid, getattr(entry, "output", None)
 
 
@@ -252,7 +259,7 @@ async def run_recipe_async(
         except BaseException:
             pass
 
-    async def dispatch_stage(stage: Any, current: object) -> tuple[list[object], object]:
+    async def dispatch_stage(stage: Any, stage_input: object) -> tuple[list[object], object]:
         pattern = ExecutionPattern(stage.pattern)
         stage_skill_ids = tuple(getattr(stage, "skill_ids", ()))
         selected_skills = context["skill_registry"].resolve(stage_skill_ids)
@@ -268,8 +275,19 @@ async def run_recipe_async(
             )
             for index, participant in enumerate(stage.participants, 1)
         ]
-        cache_key = _stage_cache_key(stage, current, stage_skill_ids)
+        cache_key = _stage_cache_key(stage, stage_input, stage_skill_ids)
         cache_entry = context.get("stage_cache", {}).get(cache_key)
+        receipt = context.get("stage_receipts", {}).get(getattr(stage, "stage_id", ""))
+        canonical_output = context.get("canonical_outputs", {}).get(getattr(stage, "stage_id", ""))
+        if receipt is not None and canonical_output is not None and hasattr(receipt, "reusable_for"):
+            if receipt.reusable_for(
+                input_fingerprint=cache_key,
+                skill_hashes=tuple(context.get("skill_hashes_by_stage", {}).get(getattr(stage, "stage_id", ""), ())),
+                capability_fingerprints=tuple(context.get("capability_fingerprints", ())),
+                model_config_fingerprint=str(context.get("model_config_fingerprint", "")),
+                authorization_scope_fingerprint=str(context.get("authorization_scope_fingerprint", "")),
+            ):
+                cache_entry = {"status": "committed", "provenance_complete": True, "result_references": receipt.result_references, "result_hashes": receipt.result_hashes, "output": canonical_output}
         if cache_entry is not None:
             cache_valid, cached_output = _committed_cache_output(cache_entry)
             if cache_valid:
@@ -282,8 +300,8 @@ async def run_recipe_async(
         for field_name in ("max_agent_steps", "max_total_agent_calls", "max_branches", "max_handoffs", "max_rounds", "max_tool_calls"):
             value = limits.get(field_name)
             if value is not None:
-                current = getattr(budget, field_name)
-                setattr(budget, field_name, min(current, int(value)) if current is not None else int(value))
+                existing_budget = getattr(budget, field_name)
+                setattr(budget, field_name, min(existing_budget, int(value)) if existing_budget is not None else int(value))
         if limits.get("max_agent_steps") is not None and budget.agent_steps + 1 > int(limits["max_agent_steps"]):
             raise BudgetExceededError("maximum agent steps exceeded before dispatch")
         if limits.get("max_total_agent_calls") is not None and budget.total_agent_calls + 1 > int(limits["max_total_agent_calls"]):
@@ -301,7 +319,7 @@ async def run_recipe_async(
                 raise BudgetExceededError("maximum concurrent branches exceeded before dispatch")
         async def invoke() -> tuple[list[object], object]:
             if client is not None and pattern != ExecutionPattern.DIRECT:
-                native_outputs = await _run_native_stage(pattern, str(current), client, participants, metrics, stage_context)
+                native_outputs = await _run_native_stage(pattern, str(stage_input), client, participants, metrics, stage_context)
                 if pattern == ExecutionPattern.CONCURRENT:
                     aggregate = ConcurrentAggregate(tuple(native_outputs))
                     metrics.branches = len(participants)
@@ -309,7 +327,7 @@ async def run_recipe_async(
                     return native_outputs, aggregate
                 return native_outputs, native_outputs[-1]
             if pattern == ExecutionPattern.DIRECT:
-                stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(str(current))]
+                stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(str(stage_input))]
             elif pattern == ExecutionPattern.CONCURRENT:
                 branch_count = len(participants) or 2
                 metrics.branches = branch_count
@@ -323,14 +341,14 @@ async def run_recipe_async(
                 aggregate = ConcurrentAggregate(results, failures)
                 return list(results), aggregate
             elif pattern == ExecutionPattern.GROUP_CHAT:
-                stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(str(current))]
+                stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(str(stage_input))]
                 metrics.chat_rounds += 1
                 if len(participants) > 1:
                     reviewer = participants[1] if len(participants) > 1 else {"purpose": "review"}
                     stage_outputs.append(await ReviewerExecutor(client, factory, ParticipantConfig.from_mapping(reviewer, "reviewer"), stage_context).execute(f"Challenge this proposal:\n{stage_outputs[-1]}"))
                     metrics.chat_rounds += 1
             else:
-                stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(str(current))]
+                stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(str(stage_input))]
                 if len(participants) > 1 or pattern == ExecutionPattern.HANDOFF:
                     reviewer_prompt = f"Review this proposal:\n{stage_outputs[-1]}"
                     reviewer = participants[1] if len(participants) > 1 else {"purpose": "review"}

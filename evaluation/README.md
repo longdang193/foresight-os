@@ -96,6 +96,8 @@ external payloads are not durable evidence.
 
 ## Optimization pass evidence
 
-`run_optimization_probe.py` is the release-level measurement entry point. It compares cold/warm XLSX reads and all four MAF patterns, proves a credential-free native Streamable HTTP MCP discovery path, records external-call and cleanup metrics, and runs a 100-run resource soak. Thresholds are frozen in `work/optimization-baseline/acceptance.json` before implementation changes.
+`run_optimization_probe.py` is the release-level measurement entry point. It compares cold/warm XLSX reads and all five native MAF patterns, proves a credential-free native Streamable HTTP MCP discovery path, records external-call and cleanup metrics, captures accepted `FindingView` values, per-stage metrics, RSS/resource observations, and runs a 100-run resource soak. Baseline and release receipts share the schema owned by `optimization_measurement.py`; missing required evidence fails comparison.
+
+`run_selective_reuse_probe.py` validates fresh-process reuse and sidecar receipt provenance. `run_strategic_exercise.py` stages participant-visible workbooks without the validator key and proves filesystem scope denial. `run_clean_wheel_smoke.py` builds and installs only the new wheel in a disposable environment outside the repository tree.
 
 The optimization contract keeps blocking XLSX work off the event loop, shares run-scoped capacity and cancellation settlement, keeps provider construction selective, and uses public Agent Framework function middleware for native MCP invocations. XLSX cache entries are immutable and run-local; keys include canonical source identity, digest, selection, and effective limits. Browser controls retain certificate verification, redirect/DNS validation, WebSocket interception, and service-worker blocking.

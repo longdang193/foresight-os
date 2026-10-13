@@ -5,7 +5,7 @@ import json
 from typing import Any
 
 from .models import AnalysisState, AnalyticalRecord, CalculationRecord, Evidence
-from .relationships import relationship_rule
+from .relationships import RelationIndex, relationship_rule
 
 
 class ObjectionDisposition(StrEnum):
@@ -33,6 +33,15 @@ class ChallengeObjection:
     evidence_ids: tuple[str, ...] = ()
     disposition: ObjectionDisposition = ObjectionDisposition.UNRESOLVED
 
+    def validate(self, known_evidence_ids: set[str], known_calculation_ids: set[str] | None = None) -> None:
+        known_calculation_ids = known_calculation_ids or set()
+        if not self.kind or not self.target_id or not self.statement:
+            raise ValueError("typed objection requires kind, target, and statement")
+        if not set(self.evidence_ids).issubset(known_evidence_ids | known_calculation_ids):
+            raise ValueError("objection references unknown provenance")
+        if self.kind in {"SOURCE_CONTRADICTION", "CALCULATION_ERROR"} and not self.evidence_ids:
+            raise ValueError(f"{self.kind} requires evidence or calculation provenance")
+
 
 @dataclass(frozen=True)
 class ReviewRecord:
@@ -46,6 +55,9 @@ class ReviewRecord:
     outcome: ReviewOutcome = ReviewOutcome.PROVISIONAL
     limitations: tuple[str, ...] = ()
     unresolved_issues: tuple[str, ...] = ()
+    policy_id: str = ""
+    policy_version: str = ""
+    skill_hashes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -60,6 +72,12 @@ class FindingView:
     review_outcome: str | None
     limitations: tuple[str, ...]
     accepted: bool
+    counterevidence_ids: tuple[str, ...] = ()
+    confidence_rationale: str = ""
+    disconfirmation_conditions: tuple[str, ...] = ()
+    unresolved_issues: tuple[str, ...] = ()
+    implications: tuple[str, ...] = ()
+    monitoring_indicators: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -92,21 +110,9 @@ def _records(state: AnalysisState) -> dict[str, Any]:
 def collect_material_inputs(state: AnalysisState, target_ids: tuple[str, ...] | list[str]) -> dict[str, Any]:
     records = _records(state)
     targets = tuple(sorted(set(target_ids)))
-    visited = set(targets)
-    queue = list(targets)
-    while queue:
-        current = queue.pop(0)
-        for relationship in sorted(state.relationships, key=lambda item: (item.from_id, item.to_id, item.relation_type, item.id)):
-            rule = relationship_rule(relationship.relation_type)
-            if rule.provenance_direction == "forward" and relationship.to_id == current:
-                candidate = relationship.from_id
-            elif rule.provenance_direction == "reverse" and relationship.from_id == current:
-                candidate = relationship.to_id
-            else:
-                continue
-            if candidate in records and candidate not in visited:
-                visited.add(candidate)
-                queue.append(candidate)
+    index = RelationIndex.from_state(state)
+    visited = {item for item in index.material_closure(targets) if item in records}
+    visited.update(targets)
 
     evidence_ids = set()
     assumptions: set[str] = set()
@@ -133,11 +139,7 @@ def collect_material_inputs(state: AnalysisState, target_ids: tuple[str, ...] | 
                     known_inputs.add(input_id)
                 else:
                     missing_inputs.add(input_id)
-    counterevidence = {
-        relationship.from_id
-        for relationship in state.relationships
-        if relationship.relation_type.lower() == "contradicts" and relationship.to_id in visited
-    }
+    counterevidence = set(index.counterevidence_ids(tuple(sorted(visited))))
     material_records = {
         record_id: records[record_id]
         for record_id in sorted(visited)
@@ -154,7 +156,14 @@ def collect_material_inputs(state: AnalysisState, target_ids: tuple[str, ...] | 
     }
 
 
-def build_material_fingerprint(state: AnalysisState, target_ids: tuple[str, ...] | list[str], skill_ids: tuple[str, ...] | list[str] = ()) -> str:
+def build_material_fingerprint(
+    state: AnalysisState,
+    target_ids: tuple[str, ...] | list[str],
+    skill_ids: tuple[str, ...] | list[str] = (),
+    skill_versions: tuple[str, ...] | list[str] = (),
+    skill_hashes: tuple[str, ...] | list[str] = (),
+    policy_identity: tuple[str, str] | None = None,
+) -> str:
     material = collect_material_inputs(state, target_ids)
     payload = {
         "target_ids": material["target_ids"],
@@ -165,13 +174,24 @@ def build_material_fingerprint(state: AnalysisState, target_ids: tuple[str, ...]
         "counterevidence": material["counterevidence"],
         "missing_inputs": material["missing_inputs"],
         "skill_ids": tuple(sorted(set(skill_ids))),
+        "skill_versions": tuple(sorted(set(skill_versions))),
+        "skill_hashes": tuple(sorted(set(skill_hashes))),
     }
+    if policy_identity is not None:
+        payload["policy_identity"] = policy_identity
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 
 def review_validity(state: AnalysisState, review: ReviewRecord) -> ReviewValidity:
-    current = build_material_fingerprint(state, review.target_ids, review.skill_ids)
+    current = build_material_fingerprint(
+        state,
+        review.target_ids,
+        review.skill_ids,
+        review.skill_versions,
+        review.skill_hashes,
+        (review.policy_id, review.policy_version) if review.policy_id and review.policy_version else None,
+    )
     return ReviewValidity.CURRENT if current == review.input_fingerprint else ReviewValidity.STALE
 
 
@@ -222,9 +242,27 @@ def derive_finding_views(
                 review_outcome=review.outcome.value if review else None,
                 limitations=tuple(review.limitations) if review else (),
                 accepted=accepted,
+                counterevidence_ids=tuple(material_counterevidence(state, (record.id,))),
+                confidence_rationale=record.confidence_rationale,
+                disconfirmation_conditions=record.disconfirmation_conditions,
+                unresolved_issues=tuple(review.unresolved_issues) if review else tuple(material_missing_inputs(state, (record.id,))),
+                implications=tuple(item.id for item in state.implications if any(record.id == source for source in _relationship_sources(state, item.id, "informs"))),
+                monitoring_indicators=record.monitoring_indicators,
             )
         )
     return tuple(views)
+
+
+def material_counterevidence(state: AnalysisState, target_ids: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    return RelationIndex.from_state(state).counterevidence_ids(target_ids)
+
+
+def material_missing_inputs(state: AnalysisState, target_ids: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    return tuple(collect_material_inputs(state, target_ids)["missing_inputs"])
+
+
+def _relationship_sources(state: AnalysisState, target_id: str, relation_type: str) -> tuple[str, ...]:
+    return tuple(sorted(item.from_id for item in state.relationships if item.to_id == target_id and item.relation_type.lower() == relation_type))
 
 
 def accepted_consequential_recommendation(state: AnalysisState, recommendation_id: str) -> bool:

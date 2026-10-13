@@ -1,3 +1,4 @@
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -24,6 +25,64 @@ class RelationshipRule:
     semantic_direction: str = "forward"
     provenance_direction: str = "forward"
     evidence_role: str = "context"
+
+
+@dataclass(frozen=True)
+class RelationIndex:
+    """Deterministic, typed projections over the canonical relationship set."""
+
+    relationships: tuple[object, ...]
+
+    @classmethod
+    def from_state(cls, state: object) -> "RelationIndex":
+        return cls(tuple(sorted(getattr(state, "relationships", ()), key=lambda item: (item.from_id, item.to_id, item.relation_type, item.id))))
+
+    def _edges(self, direction: str) -> dict[str, tuple[str, ...]]:
+        edges: dict[str, list[str]] = defaultdict(list)
+        for relationship in self.relationships:
+            rule = relationship_rule(relationship.relation_type)
+            if direction == "impact":
+                if rule.impact == ImpactDirection.FORWARD:
+                    edges[relationship.from_id].append(relationship.to_id)
+                elif rule.impact == ImpactDirection.REVERSE:
+                    edges[relationship.to_id].append(relationship.from_id)
+            elif direction == "material":
+                if rule.provenance_direction == "forward":
+                    edges[relationship.to_id].append(relationship.from_id)
+                elif rule.provenance_direction == "reverse":
+                    edges[relationship.from_id].append(relationship.to_id)
+        return {key: tuple(sorted(set(value))) for key, value in edges.items()}
+
+    def material_closure(self, target_ids: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+        edges = self._edges("material")
+        visited = set(target_ids)
+        queue = deque(sorted(visited))
+        while queue:
+            current = queue.popleft()
+            for candidate in edges.get(current, ()):
+                if candidate not in visited:
+                    visited.add(candidate)
+                    queue.append(candidate)
+        return tuple(sorted(visited))
+
+    def impacted_descendants(self, changed_ids: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+        edges = self._edges("impact")
+        visited = set(changed_ids)
+        queue = deque(sorted(visited))
+        while queue:
+            current = queue.popleft()
+            for dependent in edges.get(current, ()):
+                if dependent not in visited:
+                    visited.add(dependent)
+                    queue.append(dependent)
+        return tuple(sorted(visited))
+
+    def support_ids(self, target_id: str) -> tuple[str, ...]:
+        return tuple(sorted({item.from_id for item in self.relationships if item.to_id == target_id and relationship_rule(item.relation_type).evidence_role == "support"}))
+
+    def counterevidence_ids(self, target_ids: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+        targets = set(target_ids)
+        return tuple(sorted({item.from_id for item in self.relationships if item.to_id in targets and item.relation_type.lower() == "contradicts"}))
 
 
 ANALYTICAL = frozenset({RecordKind.CLAIM, RecordKind.IMPLICATION, RecordKind.RECOMMENDATION})

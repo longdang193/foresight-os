@@ -1,7 +1,26 @@
 import asyncio
 
 from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, RecipeName, RecipeStage, make_recipe
+from foresight_os.persistence.analysis_store import StageReceipt
 from foresight_os.runtime.workflow import _stage_cache_key, run_recipe_async
+
+
+def test_stage_receipt_reuse_revalidates_semantic_scope_and_provenance():
+    receipt = StageReceipt(
+        "stage-1",
+        "input-v1",
+        skill_hashes=("skill-v1",),
+        capability_fingerprints=("local-v1",),
+        model_config_fingerprint="model-v1",
+        authorization_scope_fingerprint="scope-v1",
+        result_references=("claim-1",),
+        result_hashes=("result-v1",),
+        status="committed",
+        committed=True,
+        provenance_complete=True,
+    )
+    assert receipt.reusable_for(input_fingerprint="input-v1", skill_hashes=("skill-v1",), capability_fingerprints=("local-v1",), model_config_fingerprint="model-v1", authorization_scope_fingerprint="scope-v1")
+    assert not receipt.reusable_for(input_fingerprint="input-v1", authorization_scope_fingerprint="scope-v2")
 
 
 def test_committed_stage_cache_hits_complete_ordered_stages_without_new_calls():
@@ -22,8 +41,8 @@ def test_committed_stage_cache_hits_complete_ordered_stages_without_new_calls():
     )
     first_output = {"stage": "first"}
     stage_cache = {
-        _stage_cache_key(first, "start", ()): {"status": "committed", "provenance_complete": True, "output": first_output},
-        _stage_cache_key(second, first_output, ()): {"status": "committed", "provenance_complete": True, "output": {"stage": "second"}},
+        _stage_cache_key(first, "start", ()): {"status": "committed", "provenance_complete": True, "result_references": ["claim-first"], "result_hashes": ["hash-first"], "output": first_output},
+        _stage_cache_key(second, first_output, ()): {"status": "committed", "provenance_complete": True, "result_references": ["claim-second"], "result_hashes": ["hash-second"], "output": {"stage": "second"}},
     }
 
     result = asyncio.run(run_recipe_async(recipe, "start", run_context={"stage_cache": stage_cache}))
