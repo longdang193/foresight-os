@@ -475,11 +475,14 @@ def _rows(table: TypedTable) -> list[dict[str, Any]]:
     return [dict(zip(columns, row, strict=False)) for row in table.rows]
 
 
-def _ensure_homogeneous_units(rows: Sequence[dict[str, Any]], table: TypedTable) -> None:
+def _ensure_homogeneous_units(rows: Sequence[dict[str, Any]], table: TypedTable, value_column: str) -> None:
     unit_column = next((column for column in table.columns if column.strip().lower() == "unit"), None)
     if unit_column is None or not rows:
         return
-    units = {row.get(unit_column) for row in rows}
+    contributing_rows = [row for row in rows if row.get(value_column) is not None]
+    if not contributing_rows:
+        return
+    units = {row.get(unit_column) for row in contributing_rows}
     if None in units or "" in units:
         raise ToolbeltError("unit unavailable for numeric analysis")
     if len(units) > 1:
@@ -545,7 +548,7 @@ def data_analysis(
     elif kind in {"aggregate", "sum", "mean"}:
         if not operation.value_column:
             raise ToolbeltError("aggregate requires value_column")
-        _ensure_homogeneous_units(rows, table)
+        _ensure_homogeneous_units(rows, table, operation.value_column)
         values = [row.get(operation.value_column) for row in rows if row.get(operation.value_column) is not None]
         if any(isinstance(value, ExcelError) for value in values):
             raise ToolbeltError("cannot aggregate Excel errors")
@@ -556,7 +559,7 @@ def data_analysis(
     elif kind in {"scenario", "sensitivity"}:
         if not operation.value_column:
             raise ToolbeltError("scenario analysis requires value_column")
-        _ensure_homogeneous_units(rows, table)
+        _ensure_homogeneous_units(rows, table, operation.value_column)
         base = sum(float(row[operation.value_column]) for row in rows if row.get(operation.value_column) is not None)
         if kind == "scenario":
             result = [{"scenario": name, "value": base * float(multiplier)} for name, multiplier in operation.scenarios]

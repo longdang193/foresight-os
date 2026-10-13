@@ -143,6 +143,20 @@ def test_analysis_blocks_numeric_analysis_when_rows_mix_units(tmp_path, kind):
         data_analysis(table, operation)
 
 
+def test_analysis_ignores_units_on_rows_without_numeric_values(tmp_path):
+    source = tmp_path / "nullable_units.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.append(["Metric", "Unit", "Value"])
+    sheet.append(["sales", "Vehicles", 100])
+    sheet.append(["share", "percent", None])
+    workbook.save(source)
+
+    table = spreadsheet_read(source).tables[0]
+    result = data_analysis(table, AnalysisOperation("sum", value_column="Value"))
+    assert result.rows[0]["sum"] == 100.0
+
+
 def test_spreadsheet_and_analysis_honor_cancellation_checkpoints(workbook_path):
     cancelled = lambda: True
     with pytest.raises(ToolbeltError, match="cancelled"):
