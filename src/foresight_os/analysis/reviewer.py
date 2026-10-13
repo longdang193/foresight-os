@@ -1,9 +1,14 @@
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
+import json
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 from foresight_os.controller.policy import ReviewPolicyResolver
 from foresight_os.controller.skills import SkillRegistry
 from foresight_os.domain.challenge import ChallengeObjection, ObjectionDisposition, ReviewOutcome
 from foresight_os.domain.models import AnalyticalRecord, CalculationRecord, Evidence
+from foresight_os.runtime.executors import ReviewerExecutor
+from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
 
 
 @dataclass(frozen=True)
@@ -18,6 +23,127 @@ class ReviewResult:
     skill_ids: tuple[str, ...] = ()
     skill_versions: tuple[str, ...] = ()
     skill_hashes: tuple[str, ...] = ()
+
+
+def _review_objection(value: Any, default_target_id: str) -> ChallengeObjection:
+    if isinstance(value, ChallengeObjection):
+        return value
+    if not isinstance(value, Mapping):
+        raise ValueError("reviewer output must contain structured objection mappings")
+    disposition = value.get("disposition", ObjectionDisposition.UNRESOLVED)
+    return ChallengeObjection(
+        kind=str(value.get("kind", "")),
+        target_id=str(value.get("target_id", default_target_id)),
+        statement=str(value.get("statement", "")),
+        evidence_ids=tuple(str(item) for item in value.get("evidence_ids", ())),
+        disposition=ObjectionDisposition(str(disposition)),
+    )
+
+
+def parse_review_objections(output: Any, default_target_id: str = "review") -> tuple[ChallengeObjection, ...]:
+    """Convert the existing reviewer runtime's structured output into domain objections."""
+    if output is None or output == "":
+        return ()
+    if isinstance(output, str):
+        try:
+            output = json.loads(output)
+        except json.JSONDecodeError as error:
+            raise ValueError("reviewer output must be JSON or a structured mapping") from error
+    if isinstance(output, Mapping):
+        output = output.get("objections", output.get("challenge_objections", ()))
+    if not isinstance(output, Sequence) or isinstance(output, (bytes, bytearray)):
+        raise ValueError("reviewer output objections must be a sequence")
+    return tuple(_review_objection(item, default_target_id) for item in output)
+
+
+def _review_prompt(evidence: list[Evidence], records: list[AnalyticalRecord], calculations: list[CalculationRecord]) -> str:
+    payload = {
+        "task": "Return only typed challenge objections for the supplied analytical records.",
+        "contract": "ChallengeObjection",
+        "objection_schema": {
+            "kind": "string",
+            "target_id": "string",
+            "statement": "string",
+            "evidence_ids": ["string"],
+            "disposition": [item.value for item in ObjectionDisposition],
+        },
+        "evidence": [asdict(item) for item in evidence],
+        "records": [asdict(item) for item in records],
+        "calculations": [asdict(item) for item in calculations],
+    }
+    return json.dumps(payload, sort_keys=True, default=str)
+
+
+async def execute_review_skills(
+    evidence: list[Evidence],
+    records: list[AnalyticalRecord],
+    *,
+    calculations: list[CalculationRecord] | None = None,
+    policy: object | None = None,
+    client: Any | None = None,
+    executor: ReviewerExecutor | None = None,
+    factory: AgentFactory | None = None,
+    run_context: Mapping[str, Any] | None = None,
+) -> tuple[ChallengeObjection, ...]:
+    """Run selected review skills through the canonical ReviewerExecutor seam."""
+    skill_ids = tuple(str(item) for item in getattr(policy, "required_skill_ids", ()))
+    registry = SkillRegistry()
+    skills = registry.resolve(skill_ids)
+    participant = ParticipantConfig(
+        "reviewer",
+        "reviewer",
+        "adversarial review",
+        skill_ids=skill_ids,
+        structured_output={"type": "json", "items": "ChallengeObjection"},
+    )
+    context = dict(run_context or {})
+    context.update({"skill_registry": registry, "selected_skills": skills})
+    reviewer = executor or ReviewerExecutor(client, factory, participant, context)
+    output = await reviewer.execute(_review_prompt(evidence, records, list(calculations or ())))
+    objections = parse_review_objections(output, records[-1].id if records else "review")
+    known_evidence_ids = {item.id for item in evidence}
+    known_calculation_ids = {item.id for item in calculations or ()}
+    for objection in objections:
+        objection.validate(known_evidence_ids, known_calculation_ids)
+    return objections
+
+
+async def review_reasoning_with_skills(
+    evidence: list[Evidence],
+    records: list[AnalyticalRecord],
+    *,
+    calculations: list[CalculationRecord] | None = None,
+    policy: object | None = None,
+    client: Any | None = None,
+    executor: ReviewerExecutor | None = None,
+    factory: AgentFactory | None = None,
+    run_context: Mapping[str, Any] | None = None,
+) -> ReviewResult:
+    deterministic = review_reasoning(evidence, records, calculations=calculations, policy=policy)
+    skill_objections = await execute_review_skills(
+        evidence,
+        records,
+        calculations=calculations,
+        policy=policy,
+        client=client,
+        executor=executor,
+        factory=factory,
+        run_context=run_context,
+    )
+    if not skill_objections:
+        return deterministic
+    objections = (*deterministic.objections, *skill_objections)
+    blocking_kinds = {str(item) for item in getattr(policy, "blocking_objection_kinds", ())}
+    blocking = [item for item in skill_objections if item.kind in blocking_kinds and item.disposition != ObjectionDisposition.REJECTED]
+    issues = [*deterministic.issues, *(f"{item.target_id}: {item.statement}" for item in blocking)]
+    accepted = not issues
+    return replace(
+        deterministic,
+        accepted=accepted,
+        issues=issues,
+        objections=objections,
+        outcome=ReviewOutcome.ACCEPTED if accepted else ReviewOutcome.REJECTED,
+    )
 
 
 def review_reasoning(
@@ -93,4 +219,28 @@ def review_analysis_state(state: object) -> ReviewResult:
         [*getattr(state, "claims", ()), *getattr(state, "implications", ()), *getattr(state, "recommendations", ())],
         calculations=calculations,
         policy=policy,
+    )
+
+
+async def review_analysis_state_with_skills(
+    state: object,
+    *,
+    client: Any | None = None,
+    executor: ReviewerExecutor | None = None,
+    factory: AgentFactory | None = None,
+    run_context: Mapping[str, Any] | None = None,
+) -> ReviewResult:
+    calculations = list(getattr(state, "calculations", ()))
+    policy = ReviewPolicyResolver().resolve(
+        target_kind="QUANTITATIVE_ANALYSIS" if calculations else "CLAIM",
+    )
+    return await review_reasoning_with_skills(
+        list(getattr(state, "evidence", ())),
+        [*getattr(state, "claims", ()), *getattr(state, "implications", ()), *getattr(state, "recommendations", ())],
+        calculations=calculations,
+        policy=policy,
+        client=client,
+        executor=executor,
+        factory=factory,
+        run_context=run_context,
     )

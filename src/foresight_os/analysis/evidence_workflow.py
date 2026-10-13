@@ -6,7 +6,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state, review_reasoning
+from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state, review_analysis_state_with_skills, review_reasoning
 from foresight_os.domain.evidence import normalize_evidence_candidate
 from foresight_os.domain.challenge import ReviewOutcome, ReviewRecord, build_material_fingerprint
 from foresight_os.domain.models import (
@@ -25,6 +25,7 @@ from foresight_os.domain.models import (
 )
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.runtime.page_retrieval import PageRetrievalCapability
+from foresight_os.runtime.executors import ReviewerExecutor
 from foresight_os.runtime.web_search import WebSearchCapability, WebSearchProvider
 from foresight_os.runtime.local_toolbelt import (
     AnalysisOperation,
@@ -83,6 +84,8 @@ async def run_evidence_workflow(
     investigation_id: str = "evidence-workflow",
     human_decision: str = "REJECT",
     source_trust_accepted: bool = True,
+    review_client: Any | None = None,
+    reviewer_executor: ReviewerExecutor | None = None,
 ) -> EvidenceWorkflowResult:
     tools = ["web_search"]
     try:
@@ -110,7 +113,15 @@ async def run_evidence_workflow(
             evidence_ids=claim.evidence_ids,
             relationship_ids=[relationship.id],
         )
-        review = review_analysis_state(AnalysisState(investigation_id, 1, evidence=[evidence], claims=[claim]))
+        review_state = AnalysisState(investigation_id, 1, evidence=[evidence], claims=[claim])
+        if review_client is not None or reviewer_executor is not None:
+            review = await review_analysis_state_with_skills(
+                review_state,
+                client=review_client,
+                executor=reviewer_executor,
+            )
+        else:
+            review = review_analysis_state(review_state)
         if not source_trust_accepted:
             review = ReviewResult(False, ["human source-trust decision rejected the retrieved source"])
         state = AnalysisState(

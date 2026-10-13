@@ -158,15 +158,15 @@ spec checks on PRs and reserve heavy closure evidence for nightly/release runs.
 - Branch: `codex/closure-patch-canva-delivery`
 - Base commit: `2fe7b4280d989f254647ba2acc142a271e2813f8` (`origin/main`)
 - Expected workspace: tracked files clean after branch recreation from `origin/main`; preserve existing untracked `build/`, `data/`, `src/foresight_os.egg-info/`, and every existing `work/` output without staging, deletion, or cleanup
-- Next action: implement Task 2 material closure and typed review integration on the verified closure branch, preserving Task 0 and Task 1 evidence
+- Next action: implement Task 3 automatic canonical receipt lifecycle on the verified closure branch, preserving Task 0–2 evidence
 - Blockers: none known; Canva connector availability is an external-boundary condition, not a reason to block local compiler work
 
 | Task | State | Workspace | Executor | Depends On | Required Proof | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | Task 0 | `completed` | current | `unresolved` | none | baseline commands and verdict matrix | `work/closure-patch-canva-20261013/baseline/` |
 | Task 1 | `completed` | current | `unresolved` | Task 0 | stage execution/fingerprint tests | focused suites passed |
-| Task 2 | `active` | current | `unresolved` | Task 0 | relation/review/finding tests | pending |
-| Task 3 | `pending` | current | `unresolved` | Tasks 1–2 | fresh-process receipt lifecycle probe | pending |
+| Task 2 | `completed` | current | `unresolved` | Task 0 | relation/review/finding tests | required suite passed; Task 2 checkpoint |
+| Task 3 | `active` | current | `unresolved` | Tasks 1–2 | fresh-process receipt lifecycle probe | pending |
 | Task 4 | `pending` | current | `unresolved` | Task 2 | presentation compiler/spec validation | pending |
 | Task 5 | `pending` | current | `unresolved` | Tasks 3–4 | performance/resource receipt comparison | pending |
 | Task 6 | `pending` | current | `unresolved` | Tasks 2–5 | cache and CI/documentation checks | pending |
@@ -316,15 +316,15 @@ spec checks on PRs and reserve heavy closure evidence for nightly/release runs.
 - Stop for: introducing a second graph, accepting unsupported claims from an LLM without typed provenance, deleting `ReviewPolicy`, or converting raw skill text into acceptance without validation
 
 **Steps:**
-- [ ] Step 1: Make material traversal direction explicit per relation type: `depends_on` follows source-to-target for provenance, while support/derived relationships retain their source evidence direction; expose `material_closure`, `impact_closure`, `support_context`, and `counterevidence_context` without collapsing semantics.
-- [ ] Step 2: Change `collect_material_inputs` to aggregate evidence IDs, assumptions, uncertainty, calculations, counterevidence, and missing inputs from every reached analytical record, recursively include calculation inputs, and retain direct-vs-derived provenance in the returned structure.
-- [ ] Step 3: Add only a thin typed adapter over the existing `ReviewPolicy` → `SkillRegistry` → `ParticipantConfig`/`AgentFactory` → `ReviewerExecutor` path; convert structured executor output into validated `ChallengeObjection` records, retain deterministic missing-reference, formula, and structural checks as a separate validator layer, and record skill IDs, versions, and hashes in `ReviewRecord`.
-- [ ] Step 4: Make objection validation kind-specific: only objections whose contract requires provenance must require evidence/calculation IDs; keep `ChallengeProposal` as an aggregation/transport compatibility object rather than the acceptance authority.
-- [ ] Step 5: Ensure `FindingView` and normal report rendering retain evidence, counterevidence, assumptions, confidence rationale, uncertainty, disconfirmation conditions, monitoring indicators, and unresolved non-blocking issues for accepted findings.
-- [ ] Step 6: Add a reproduced recommendation→claim→evidence regression test proving a supporting claim's evidence changes the material fingerprint, maps through affected analytical records to the owning stage receipts, and invalidates the review.
+- [x] Step 1: Make material traversal direction explicit per relation type: `depends_on` and `derived_from` follow source-to-target for provenance, while support/contradiction relationships retain target-to-source context; expose `material_closure`, `impact_closure`, `support_context`, and `counterevidence_context` without collapsing semantics.
+- [x] Step 2: Change `collect_material_inputs` to aggregate evidence IDs, assumptions, uncertainty, calculations, counterevidence, and missing inputs from every reached analytical record, recursively include calculation inputs, and retain direct-vs-derived provenance in the returned structure.
+- [x] Step 3: Add only a thin typed adapter over the existing `ReviewPolicy` → `SkillRegistry` → `ParticipantConfig`/`AgentFactory` → `ReviewerExecutor` path; convert structured executor output into validated `ChallengeObjection` records, retain deterministic missing-reference, formula, and structural checks as a separate validator layer, and record skill IDs, versions, and hashes in `ReviewRecord`.
+- [x] Step 4: Make objection validation kind-specific: only objections whose contract requires provenance must require evidence/calculation IDs; keep `ChallengeProposal` as an aggregation/transport compatibility object rather than the acceptance authority.
+- [x] Step 5: Ensure `FindingView` and normal report rendering retain evidence, counterevidence, assumptions, confidence rationale, uncertainty, disconfirmation conditions, monitoring indicators, and unresolved non-blocking issues for accepted findings.
+- [x] Step 6: Add a reproduced recommendation→claim→evidence regression test proving a supporting claim's evidence changes the material fingerprint and invalidates the review; stage-receipt mapping remains owned and proven by Task 3.
 
 **Verification:**
-- [ ] `python -m pytest -q tests/test_finding_view.py tests/test_review_records.py tests/test_vertical_slice.py tests/test_persistence.py tests/test_supplier_and_ev_resilience.py tests/test_evidence_workflow.py`
+- [x] `python -m pytest -q tests/test_finding_view.py tests/test_review_records.py tests/test_vertical_slice.py tests/test_persistence.py tests/test_supplier_and_ev_resilience.py tests/test_evidence_workflow.py`
 - Expected: recursive material changes invalidate reviews, selected skills are represented in durable review records, objection validation rejects only contract-invalid objections, and accepted reports preserve qualifications.
 
 **Exit Criteria:**

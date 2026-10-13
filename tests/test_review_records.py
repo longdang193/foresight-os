@@ -1,4 +1,5 @@
 from dataclasses import replace
+import asyncio
 from pathlib import Path
 
 from foresight_os.domain.challenge import (
@@ -22,8 +23,10 @@ from foresight_os.domain.models import (
     Revision,
     SourceLocator,
     MeasurementKey,
+    Relationship,
 )
 from foresight_os.persistence.analysis_store import AnalysisStore
+from foresight_os.analysis.reviewer import review_reasoning_with_skills
 
 
 def make_state() -> AnalysisState:
@@ -116,3 +119,81 @@ def test_material_inputs_include_calculation_chain_and_missing_inputs():
     material = collect_material_inputs(state, ("claim-1",))
     assert "calculation-1" in material["calculations"]
     assert material["missing_inputs"] == ("missing-input",)
+
+
+def test_material_inputs_recurse_through_supporting_claims_and_preserve_provenance():
+    state = make_state()
+    supporting = replace(
+        state.claims[0],
+        id="claim-supporting",
+        statement="Supporting claim",
+        assumptions=("support assumption",),
+        uncertainty=("support uncertainty",),
+    )
+    recommendation = AnalyticalRecord(
+        "recommendation-1",
+        "Recommendation",
+        Basis.DERIVED,
+        Assessment.SUPPORTED,
+    )
+    state = replace(
+        state,
+        claims=[supporting],
+        recommendations=[recommendation],
+        relationships=[
+            Relationship("support-claim", supporting.id, recommendation.id, "supports"),
+            Relationship("support-evidence", state.evidence[0].id, supporting.id, "supports"),
+        ],
+    )
+
+    from foresight_os.domain.challenge import collect_material_inputs
+
+    material = collect_material_inputs(state, (recommendation.id,))
+    assert set(material["records"]) == {recommendation.id, supporting.id}
+    assert material["evidence"] == {state.evidence[0].id: state.evidence[0]}
+    assert material["assumptions"] == ("support assumption",)
+    assert material["uncertainty"] == ("support uncertainty",)
+    assert material["provenance"] == {"direct": (recommendation.id,), "derived": (supporting.id,)}
+
+
+def test_selected_review_skills_produce_validated_typed_objections():
+    class FakeExecutor:
+        async def execute(self, prompt):
+            assert "ChallengeObjection" in prompt
+            return {
+                "objections": [
+                    {
+                        "kind": "UNSUPPORTED_ASSUMPTION",
+                        "target_id": "claim-1",
+                        "statement": "The scope assumption is untested.",
+                        "disposition": "UNRESOLVED",
+                    }
+                ]
+            }
+
+    state = make_state()
+    policy = type(
+        "Policy",
+        (),
+        {
+            "policy_id": "policy-1",
+            "version": "1",
+            "required_skill_ids": ("red-team-claim",),
+            "acceptable_outcomes": ("ACCEPTED",),
+            "blocking_objection_kinds": (),
+        },
+    )()
+    review = asyncio.run(
+        review_reasoning_with_skills(
+            state.evidence,
+            state.claims,
+            policy=policy,
+            executor=FakeExecutor(),
+        )
+    )
+
+    assert review.accepted
+    assert review.skill_ids == ("red-team-claim",)
+    assert review.skill_versions == ("1.0.0",)
+    assert review.skill_hashes
+    assert review.objections[-1].kind == "UNSUPPORTED_ASSUMPTION"

@@ -53,9 +53,8 @@ class RelationIndex:
                     edges[relationship.from_id].append(relationship.to_id)
         return {key: tuple(sorted(set(value))) for key, value in edges.items()}
 
-    def material_closure(self, target_ids: tuple[str, ...] | list[str]) -> tuple[str, ...]:
-        edges = self._edges("material")
-        visited = set(target_ids)
+    def _closure(self, edges: dict[str, tuple[str, ...]], start_ids: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+        visited = set(start_ids)
         queue = deque(sorted(visited))
         while queue:
             current = queue.popleft()
@@ -65,24 +64,42 @@ class RelationIndex:
                     queue.append(candidate)
         return tuple(sorted(visited))
 
+    def material_closure(self, target_ids: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+        return self._closure(self._edges("material"), target_ids)
+
+    def impact_closure(self, changed_ids: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+        return self._closure(self._edges("impact"), changed_ids)
+
     def impacted_descendants(self, changed_ids: tuple[str, ...] | list[str]) -> tuple[str, ...]:
-        edges = self._edges("impact")
-        visited = set(changed_ids)
-        queue = deque(sorted(visited))
-        while queue:
-            current = queue.popleft()
-            for dependent in edges.get(current, ()):
-                if dependent not in visited:
-                    visited.add(dependent)
-                    queue.append(dependent)
-        return tuple(sorted(visited))
+        return self.impact_closure(changed_ids)
 
     def support_ids(self, target_id: str) -> tuple[str, ...]:
-        return tuple(sorted({item.from_id for item in self.relationships if item.to_id == target_id and relationship_rule(item.relation_type).evidence_role == "support"}))
+        return self.support_context((target_id,))
+
+    def support_context(self, target_ids: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+        edges: dict[str, list[str]] = defaultdict(list)
+        for relationship in self.relationships:
+            if relationship_rule(relationship.relation_type).evidence_role == "support":
+                edges[relationship.to_id].append(relationship.from_id)
+        closure = self._closure(
+            {key: tuple(sorted(set(value))) for key, value in edges.items()},
+            target_ids,
+        )
+        return tuple(item for item in closure if item not in set(target_ids))
 
     def counterevidence_ids(self, target_ids: tuple[str, ...] | list[str]) -> tuple[str, ...]:
-        targets = set(target_ids)
-        return tuple(sorted({item.from_id for item in self.relationships if item.to_id in targets and item.relation_type.lower() == "contradicts"}))
+        return self.counterevidence_context(target_ids)
+
+    def counterevidence_context(self, target_ids: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+        edges: dict[str, list[str]] = defaultdict(list)
+        for relationship in self.relationships:
+            if relationship_rule(relationship.relation_type).evidence_role == "counterevidence":
+                edges[relationship.to_id].append(relationship.from_id)
+        closure = self._closure(
+            {key: tuple(sorted(set(value))) for key, value in edges.items()},
+            target_ids,
+        )
+        return tuple(item for item in closure if item not in set(target_ids))
 
 
 ANALYTICAL = frozenset({RecordKind.CLAIM, RecordKind.IMPLICATION, RecordKind.RECOMMENDATION})
@@ -108,7 +125,7 @@ RELATIONSHIP_RULES: dict[str, RelationshipRule] = {
         frozenset({RecordKind.EVIDENCE}) | ANALYTICAL,
         ImpactDirection.REVERSE,
         semantic_direction="source derives from target",
-        provenance_direction="forward",
+        provenance_direction="reverse",
         evidence_role="support",
     ),
     "depends_on": RelationshipRule(
@@ -116,7 +133,7 @@ RELATIONSHIP_RULES: dict[str, RelationshipRule] = {
         frozenset({RecordKind.EVIDENCE, RecordKind.CLAIM, RecordKind.IMPLICATION, RecordKind.RECOMMENDATION}),
         ImpactDirection.REVERSE,
         semantic_direction="source depends on target",
-        provenance_direction="forward",
+        provenance_direction="reverse",
         evidence_role="context",
     ),
     "informs": RelationshipRule(
