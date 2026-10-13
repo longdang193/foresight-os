@@ -66,6 +66,10 @@ The case is synthetic and contains no customer data or external dependencies.
   that receipt is explicitly marked non-production-ready. FRED's OAuth-protected
   endpoint also requires the explicit read-only allowlist `FRED_MCP_READ_TOOL` and
   `FRED_MCP_READ_ARGS_JSON` for a safe operation probe.
+- `.env.example` is the committed inventory of local environment variables. The
+  evaluation code reads inherited variables directly; it does not load `.env`.
+  CI and production deployments must inject secrets through their secret
+  manager, and missing provider credentials remain `BLOCKED_EXTERNAL`.
 - A local SearXNG adapter is available through the same capability boundary:
   set `FORESIGHT_WEB_SEARCH_PROVIDER=searxng` and point
   `FORESIGHT_WEB_SEARCH_URL` at the SearXNG base URL. The adapter requests

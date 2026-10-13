@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import os
 import subprocess
 import time
@@ -81,17 +82,51 @@ def _provider_result_is_success(provider_id: str, result: object) -> bool:
             isinstance(payload, Mapping)
             and isinstance(payload.get("Global Quote"), Mapping)
             and bool(payload["Global Quote"])
-            and "01. symbol" in payload["Global Quote"]
-            and "05. price" in payload["Global Quote"]
+            and isinstance(payload["Global Quote"].get("01. symbol"), str)
+            and bool(payload["Global Quote"]["01. symbol"].strip())
+            and _is_finite_number(payload["Global Quote"].get("05. price"))
             for payload in payloads
         )
     if provider_id == "github":
         return any(
             isinstance(payload, Mapping)
-            and ((isinstance(payload.get("items"), list) and "total_count" in payload) or isinstance(payload.get("repositories"), list))
+            and (
+                (
+                    isinstance(payload.get("items"), list)
+                    and _is_non_negative_integer(payload.get("total_count"))
+                    and all(isinstance(item, Mapping) for item in payload["items"])
+                )
+                or (isinstance(payload.get("repositories"), list) and all(isinstance(item, Mapping) for item in payload["repositories"]))
+            )
             for payload in payloads
         )
-    return any(isinstance(payload, Mapping) and isinstance(payload.get("observations"), list) for payload in payloads)
+    return any(
+        isinstance(payload, Mapping)
+        and isinstance(payload.get("observations"), list)
+        and all(_is_fred_observation(item) for item in payload["observations"])
+        for payload in payloads
+    )
+
+
+def _is_finite_number(value: object) -> bool:
+    if isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _is_non_negative_integer(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _is_fred_observation(value: object) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    date_value = value.get("date")
+    observation_value = value.get("value")
+    return isinstance(date_value, str) and bool(date_value.strip()) and isinstance(observation_value, (str, int, float)) and not isinstance(observation_value, bool)
 
 
 def _provider_payloads(result: object) -> list[object]:
@@ -109,7 +144,7 @@ def _provider_payloads(result: object) -> list[object]:
         parsed = json.loads(text)
     except json.JSONDecodeError:
         return []
-    return [parsed] if isinstance(parsed, (Mapping, list)) else []
+    return _provider_payloads(parsed) if isinstance(parsed, (Mapping, list)) else []
 
 
 def _provider_error_payload(payload: object) -> bool:

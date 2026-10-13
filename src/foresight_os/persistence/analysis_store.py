@@ -139,6 +139,8 @@ class AnalysisStore:
                 pending = replace(pending, revision=number, revisions=[*current.revisions, revision])
                 pending = self._merge_states(current, pending)
             self._write_validated(validate_analysis(pending), self.pending_analysis_path)
+            if existing_pending is not None:
+                self._remember_consumed_pending_token(existing_pending.pending_token)
         return pending
 
     def load_pending(self) -> AnalysisState:

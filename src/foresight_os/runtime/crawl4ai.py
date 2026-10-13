@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import socket
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urljoin, urlsplit, urlunsplit
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -93,10 +93,15 @@ class Crawl4AICapability:
                 async def guard_page_context(page, context=None, **_):
                     async def guard_request(route):
                         request_url = route.request.url
-                        if request_url.startswith(("http://", "https://")):
+                        if request_url.startswith(("http://", "https://", "ws://", "wss://")):
                             try:
-                                validate_destination(request_url, self.fixture_hosts)
-                                request_host = (urlsplit(request_url).hostname or "").lower().rstrip(".")
+                                request_parts = urlsplit(request_url)
+                                validation_scheme = {"ws": "http", "wss": "https"}.get(request_parts.scheme, request_parts.scheme)
+                                validation_url = urlunsplit(
+                                    (validation_scheme, request_parts.netloc, request_parts.path, request_parts.query, request_parts.fragment)
+                                )
+                                validate_destination(validation_url, self.fixture_hosts)
+                                request_host = (request_parts.hostname or "").lower().rstrip(".")
                                 if request_host != origin_host and request_host not in {item.lower().rstrip(".") for item in self.fixture_hosts}:
                                     await route.abort("blockedbyclient")
                                     return

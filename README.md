@@ -86,6 +86,21 @@ read-only call, result sanitization, and scope cleanup. Missing credentials are
 reported as `BLOCKED_EXTERNAL`; a successful transport with a public demo key
 is not considered production credential readiness.
 
+### Local environment setup
+
+Use the committed `.env.example` as the variable inventory for local work:
+
+```text
+copy .env.example .env
+```
+
+The runtime reads inherited environment variables and does not load `.env`
+automatically. This keeps production behavior explicit: local shells may load
+`.env` through their own tooling, while CI and deployments inject secrets from
+their secret manager. Do not commit `.env`; it is ignored by Git. MCP
+subprocesses must receive the same variables through their launcher rather than
+assuming that a parent application's `.env` loader is inherited.
+
 ## MAF-Agent Web Crawling
 
 Crawl4AI is activated as the optional `web_crawl` capability for MAF agents. It

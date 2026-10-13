@@ -208,6 +208,34 @@ def test_xlsx_expanded_archive_limit_is_checked_before_loading(workbook_path):
         spreadsheet_read(workbook_path, limits=ToolbeltLimits(max_expanded_bytes=1))
 
 
+def test_xlsx_allocation_limits_are_cumulative_across_sheets(tmp_path):
+    source = tmp_path / "multi-sheet-allocation.xlsx"
+    workbook = openpyxl.Workbook()
+    first = workbook.active
+    first.title = "First"
+    first.append(["A", "B"])
+    second = workbook.create_sheet("Second")
+    second.append(["C", "D"])
+    workbook.save(source)
+
+    with pytest.raises(ToolbeltError, match="allocation exceeds cell limit"):
+        spreadsheet_read(source, limits=ToolbeltLimits(max_cells=3))
+    with pytest.raises(ToolbeltError, match="allocation exceeds row limit"):
+        spreadsheet_read(source, limits=ToolbeltLimits(max_rows=1))
+
+
+def test_xlsx_merged_range_count_is_limited_before_loading(tmp_path):
+    source = tmp_path / "merged-range-limit.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.merge_cells("A1:B1")
+    sheet.merge_cells("A2:B2")
+    workbook.save(source)
+
+    with pytest.raises(ToolbeltError, match="merged range limit"):
+        spreadsheet_read(source, limits=ToolbeltLimits(max_merged_ranges=1))
+
+
 def test_calculation_provenance_qualifies_workbook_sheet_and_coordinate(workbook_path):
     result = spreadsheet_read(workbook_path, SheetSelection(sheet_names=("Demand", "Assumptions"), include_hidden=True, include_hidden_rows=True))
     demand_value = next(item for item in result.measurements if item.provenance.sheet == "Demand" and item.provenance.coordinate == "C3")
