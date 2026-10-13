@@ -158,7 +158,7 @@ spec checks on PRs and reserve heavy closure evidence for nightly/release runs.
 - Branch: `codex/closure-patch-canva-delivery`
 - Base commit: `2fe7b4280d989f254647ba2acc142a271e2813f8` (`origin/main`)
 - Expected workspace: tracked files clean after branch recreation from `origin/main`; preserve existing untracked `build/`, `data/`, `src/foresight_os.egg-info/`, and every existing `work/` output without staging, deletion, or cleanup
-- Next action: correct performance/resource measurement semantics in Task 5, preserving Task 0–4 evidence
+- Next action: investigate the pattern-specific optimization p95 failure without weakening the comparator, preserving all accepted local and Canva evidence
 - Blockers: none known; Canva connector availability is an external-boundary condition, not a reason to block local compiler work
 
 | Task | State | Workspace | Executor | Depends On | Required Proof | Evidence |
@@ -167,10 +167,10 @@ spec checks on PRs and reserve heavy closure evidence for nightly/release runs.
 | Task 1 | `completed` | current | `unresolved` | Task 0 | stage execution/fingerprint tests | focused suites passed |
 | Task 2 | `completed` | current | `unresolved` | Task 0 | relation/review/finding tests | required suite passed; Task 2 checkpoint |
 | Task 3 | `completed` | current | `unresolved` | Tasks 1–2 | fresh-process receipt lifecycle probe | automatic receipt/reuse probe passed; Task 3 checkpoint |
-| Task 4 | `completed` | current | `unresolved` | Task 2 | presentation compiler/spec validation | focused suites passed; local Canva boundary remains disconnected by design |
+| Task 4 | `completed` | current | `unresolved` | Task 2 | presentation compiler/spec validation | focused suites passed; Canva delivery receipt verified at `work/closure-patch-canva-20261013/canva-delivery/CanvaDeliveryReceipt.json` |
 | Task 5 | `completed` | current | `unresolved` | Tasks 3–4 | performance/resource receipt comparison | corrected schema and baseline captured; comparator self-check passed |
 | Task 6 | `completed` | current | `unresolved` | Tasks 2–5 | bounded caches, clean-wheel smoke passed; release comparison fail-closed on noisy p95 sample |
-| Task 7 | `active` | current | `unresolved` | Tasks 0–6 | final verification and acceptance evidence | incomplete: fresh optimization comparator rejected a pattern p95 regression; Canva external delivery blocked by unavailable connector/approval |
+| Task 7 | `active` | current | `unresolved` | Tasks 0–6 | final verification and acceptance evidence | incomplete: fresh optimization comparator rejected a pattern p95 regression; Canva external delivery verified through approved Canva write |
 
 ## Task Breakdown
 
@@ -584,8 +584,8 @@ spec checks on PRs and reserve heavy closure evidence for nightly/release runs.
 - [x] Step 1: Run focused regression tests for controller, workflow, relation/review, receipts, presentation, capabilities, and evaluation scope.
 - [x] Step 2: Run `python -m pytest -q` with generated output routed to the new disposable root where applicable.
 - [ ] Step 3: Run the controller/contract matrices, selective-reuse probe, presentation validation, optimization comparison, and clean-wheel smoke using only new disposable output paths. Contract/controller/selective/clean-wheel evidence passed; the fresh optimization comparison failed closed on a pattern p95 regression.
-- [x] Step 4: If a Canva adapter is connected and the user explicitly approves the external write, run a smoke that creates or updates one editable presentation from `PresentationSpec`; otherwise record `BLOCKED_EXTERNAL: connector unavailable or approval not granted` and do not claim Canva delivery success.
-- [ ] Step 5: Reconcile every task state, deviation, evidence path, and completion criterion, then report two independent verdicts: `Core three-increment closure: VERIFIED` or `FAILED`; `Canva external delivery: VERIFIED`, `BLOCKED_EXTERNAL`, or `FAILED`. Only `skill-verification-before-completion` may authorize a terminal `completed` status.
+- [x] Step 4: With the connected Canva surface and explicit user approval, create one editable six-slide presentation from the validated `PresentationSpec`, read back its design metadata, and persist `CanvaDeliveryReceipt.json`.
+- [ ] Step 5: Reconcile every task state, deviation, evidence path, and completion criterion, then report two independent verdicts: `Core three-increment closure: FAILED` pending the pattern-specific p95 investigation; `Canva external delivery: VERIFIED` from the persisted receipt. Only `skill-verification-before-completion` may authorize a terminal `completed` status.
 
 **Verification:**
 - [x] `python -m pytest -q`
@@ -594,6 +594,7 @@ spec checks on PRs and reserve heavy closure evidence for nightly/release runs.
 - [x] `python evaluation/probes/run_selective_reuse_probe.py --output-root work/closure-patch-canva-20261013/final/selective-reuse`
 - [x] `python evaluation/probes/run_optimization_probe.py --mode release --fixture tests/fixtures/analyst_multisheet.xlsx --output work/closure-patch-canva-20261013/final/optimization/release.json` (receipt generated; comparator failed closed)
 - [ ] `python evaluation/probes/compare_optimization_receipts.py --baseline work/closure-patch-canva-20261013/baseline/optimization-corrected.json --release work/closure-patch-canva-20261013/final/optimization/release.json --output work/closure-patch-canva-20261013/final/optimization/comparison.json` (failed: `CHALLENGE_RECOMMENDATION` pattern p95 regression exceeded 20%)
+- [x] `work/closure-patch-canva-20261013/canva-delivery/CanvaDeliveryReceipt.json` (read-back verified: six-page editable Canva presentation `DAHX7WhisGQ`)
 - [x] `git diff --check`
 - [x] `git status --short --branch`
 - Expected: all required local gates pass, no preserved untracked output changes, evidence is fresh and machine-readable, and external Canva status is either verified through an approved connector or explicitly blocked.
