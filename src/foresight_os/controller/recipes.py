@@ -31,6 +31,7 @@ class RecipeStage:
     input_type: str
     output_type: str
     limits: dict[str, int | str]
+    skill_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

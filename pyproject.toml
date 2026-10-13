@@ -25,4 +25,4 @@ addopts = "-q"
 pythonpath = ["src"]
 
 [tool.setuptools.package-data]
-foresight_os = ["schemas/*.json"]
+foresight_os = ["schemas/*.json", "skills/manifest.json", "skills/*/SKILL.md"]

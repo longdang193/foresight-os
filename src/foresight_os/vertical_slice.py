@@ -1,8 +1,9 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from foresight_os.analysis.analyst import draft_analysis
 from foresight_os.analysis.reviewer import ReviewResult, review_reasoning
+from foresight_os.domain.challenge import ReviewOutcome, ReviewRecord, build_material_fingerprint
 from foresight_os.analysis.workbook import extract_evidence, read_workbook
 from foresight_os.artifacts.report import write_report
 from foresight_os.domain.models import AnalysisState, Artifact, Invalidation, Relationship, Revision
@@ -80,6 +81,19 @@ def run_vertical_slice(
         [Revision("revision-1", 1, "accepted benchmark analysis", [item.id for item in [*draft.evidence, *draft.claims, *draft.implications, recommendation, artifact, *draft.calculations, *[*draft.relationships, artifact_link]]])],
         Invalidation(),
         calculations=draft.calculations,
+    )
+    review_target_ids = tuple(item.id for item in [*analysis.claims, *analysis.implications, *analysis.recommendations])
+    analysis = replace(
+        analysis,
+        review_records=[
+            ReviewRecord(
+                review_id="review-vertical-slice",
+                target_ids=review_target_ids,
+                reviewed_state_revision=analysis.revision,
+                input_fingerprint=build_material_fingerprint(analysis, review_target_ids),
+                outcome=ReviewOutcome.ACCEPTED,
+            )
+        ],
     )
     store = AnalysisStore(Path(work_dir))
     pending = store.save_pending(analysis)

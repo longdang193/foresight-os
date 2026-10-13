@@ -54,6 +54,9 @@ class RunMetrics:
     primary_failure_class: str | None = None
     primary_failure_message: str | None = None
     capability_reuses: int = 0
+    cache_hits: int = 0
+    reused_stages: int = 0
+    reassessed_stages: int = 0
     human_correction: int = 0
     input_tokens: int | None = None
     output_tokens: int | None = None

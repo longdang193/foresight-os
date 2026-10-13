@@ -52,23 +52,31 @@ def build_graph(state: AnalysisState) -> GraphView:
             provenance_direction=relationship_rule(relation.relation_type).provenance_direction,
             evidence_role=relationship_rule(relation.relation_type).evidence_role,
         )
-    forward: dict[str, list[str]] = {}
-    reverse: dict[str, list[str]] = {}
+    impact_forward: dict[str, list[str]] = {}
+    impact_reverse: dict[str, list[str]] = {}
     provenance: dict[str, list[str]] = {}
+    support: dict[str, list[str]] = {}
     counterevidence: dict[str, list[str]] = {}
     for source, target, data in graph.edges(data=True):
         if data["impact"] == "forward":
-            forward.setdefault(source, []).append(target)
+            impact_forward.setdefault(source, []).append(target)
         elif data["impact"] == "reverse":
-            reverse.setdefault(target, []).append(source)
-        if data.get("relation_type") in {"supports", "derived_from", "depends_on"}:
+            impact_reverse.setdefault(target, []).append(source)
+        if data.get("provenance_direction") == "forward":
             provenance.setdefault(target, []).append(source)
-        if data.get("relation_type") == "contradicts":
+        elif data.get("provenance_direction") == "reverse":
+            provenance.setdefault(source, []).append(target)
+        if data.get("evidence_role") == "support":
+            support.setdefault(target, []).append(source)
+        if data.get("evidence_role") == "counterevidence":
             counterevidence.setdefault(target, []).append(source)
     indexes = {name: {key: sorted(set(values)) for key, values in mapping.items()} for name, mapping in {
-        "forward": forward,
-        "reverse": reverse,
+        "impact_forward": impact_forward,
+        "impact_reverse": impact_reverse,
+        "forward": impact_forward,
+        "reverse": impact_reverse,
         "provenance": provenance,
+        "support": support,
         "counterevidence": counterevidence,
     }.items()}
     return GraphView(graph, state.investigation_id, state.revision, indexes)

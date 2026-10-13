@@ -118,6 +118,10 @@ class AnalyticalRecord:
     lifecycle: Lifecycle = Lifecycle.CURRENT
     evidence_ids: list[str] = field(default_factory=list)
     relationship_ids: list[str] = field(default_factory=list)
+    assumptions: tuple[str, ...] = ()
+    uncertainty: tuple[str, ...] = ()
+    confidence_rationale: str = ""
+    disconfirmation_conditions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -168,6 +172,7 @@ class AnalysisState:
     revision_status: RevisionStatus = RevisionStatus.ACCEPTED
     calculations: list[CalculationRecord] = field(default_factory=list)
     pending_token: str | None = None
+    review_records: list[Any] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -182,6 +187,9 @@ class WorkStage:
     dependencies: list[str] = field(default_factory=list)
     expected_result: str = ""
     research_needs: list[ResearchNeed | str] = field(default_factory=list)
+    skill_ids: list[str] = field(default_factory=list)
+    execution_pattern_override: str | list[str] | None = None
+    limits: dict[str, int | str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

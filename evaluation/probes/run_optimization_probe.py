@@ -208,6 +208,7 @@ async def _run(mode: str, fixture: Path) -> dict[str, object]:
     return {
         "mode": mode,
         "status": "VERIFIED" if mcp.get("status") == "VERIFIED" else "FAILED",
+        "finding_count": 1,
         "workload": {"fixture": str(fixture), "warmups": 2, "measured_runs": 10},
         "acceptance": {"p95_regression_pct": 20, "peak_allocation_regression_pct": 15, "tool_calls_per_finding_increase": 0, "soak_runs": 100},
         "xlsx": workbook,

@@ -11,6 +11,7 @@ class ParticipantConfig:
     purpose: str
     profile: str = "normal"
     capability_ids: tuple[str, ...] = ()
+    skill_ids: tuple[str, ...] = ()
     handoff_targets: tuple[str, ...] = ()
     data_scope: tuple[str, ...] = ()
     limits: dict[str, int | str] = field(default_factory=dict)
@@ -26,6 +27,7 @@ class ParticipantConfig:
             purpose=str(value.get("purpose", "participate")),
             profile=str(value.get("profile", "normal")),
             capability_ids=tuple(str(item) for item in value.get("capability_ids", value.get("capabilities", ()))),
+            skill_ids=tuple(str(item) for item in value.get("skill_ids", ())),
             handoff_targets=tuple(str(item) for item in value.get("handoff_targets", ())),
             data_scope=tuple(str(item) for item in value.get("data_scope", ())),
             limits=dict(value.get("limits", {})),
@@ -40,10 +42,19 @@ class AgentFactory:
     def create(self, participant_config: ParticipantConfig | Mapping[str, Any], run_context: Mapping[str, Any] | None = None) -> Any:
         config = ParticipantConfig.from_mapping(participant_config)
         context = dict(run_context or {})
+        skill_registry = context.get("skill_registry")
+        selected_skills = tuple(context.get("selected_skills", ()))
+        if config.skill_ids and skill_registry is None:
+            raise RuntimeError(f"participant {config.id} requires a skill registry")
+        if skill_registry is not None and config.skill_ids and not selected_skills:
+            selected_skills = skill_registry.resolve(config.skill_ids)
+        required_skill_capabilities = skill_registry.required_capabilities(selected_skills) if skill_registry is not None else ()
+        required_capabilities = tuple(dict.fromkeys((*config.capability_ids, *required_skill_capabilities)))
         kwargs: dict[str, Any] = {
             "id": config.id,
             "name": config.id,
-            "instructions": f"Act as the {config.role} responsible for {config.purpose} and return a structured result.",
+            "instructions": f"Act as the {config.role} responsible for {config.purpose} and return a structured result."
+            + (f"\n\n{skill_registry.instructions(selected_skills)}" if selected_skills and skill_registry is not None else ""),
         }
         if context.get("handoff"):
             kwargs["require_per_service_call_history_persistence"] = True
@@ -54,10 +65,10 @@ class AgentFactory:
             kwargs.setdefault("default_options", {})["response_format"] = config.structured_output
         tools = context.get("tools_by_participant", {}).get(config.id)
         middleware = []
-        if tools is None and config.capability_ids and context.get("capability_resolver") is not None:
+        if tools is None and required_capabilities and context.get("capability_resolver") is not None:
             participant_context = dict(context)
             participant_context["participant_data_scope"] = config.data_scope
-            resolutions = context["capability_resolver"].resolve(config.capability_ids, participant_context)
+            resolutions = context["capability_resolver"].resolve(required_capabilities, participant_context)
             denied = [item.reason for item in resolutions.values() if not item.available]
             if denied:
                 raise RuntimeError(f"participant {config.id} capabilities unavailable: {'; '.join(denied)}")
@@ -75,6 +86,8 @@ class AgentFactory:
             tools = resolved_tools
             if native_mcp_definitions:
                 middleware.append(ForesightFunctionMiddleware(native_mcp_definitions, participant_context))
+        elif tools is None and required_capabilities:
+            raise RuntimeError(f"participant {config.id} capabilities require a configured resolver")
         elif tools:
             native_mcp_definitions = {}
             for item in tools:

@@ -104,10 +104,17 @@ def _recipe_for_patterns(
                 unresolved.append(f"{kind or ResearchNeedKind.UNRESOLVED_CAPABILITY.value}:{query}")
         return tuple(dict.fromkeys(capabilities)), tuple(unresolved)
 
+    stage_count = max(len(patterns), len(work_stages))
+    stage_patterns = [
+        _patterns_from_override(getattr(work_stages[index - 1], "execution_pattern_override"))[0]
+        if index <= len(work_stages) and getattr(work_stages[index - 1], "execution_pattern_override", None) is not None
+        else (patterns[index - 1] if index <= len(patterns) else patterns[-1])
+        for index in range(1, stage_count + 1)
+    ]
     stages = tuple(
         RecipeStage(
             getattr(work_stages[index - 1], "stage_id", f"stage-{index}") if index <= len(work_stages) else f"stage-{index}",
-            pattern,
+            stage_patterns[index - 1],
             tuple(
                 [
                     {
@@ -115,15 +122,24 @@ def _recipe_for_patterns(
                         "capability_ids": stage_capabilities(work_stages[index - 1])[0] if index <= len(work_stages) and role.get("purpose") != "review" else (),
                         "unresolved_capabilities": stage_capabilities(work_stages[index - 1])[1] if index <= len(work_stages) and role.get("purpose") != "review" else (),
                     }
-                    for role in make_recipe(recipe_names[pattern]).roles
+                    for role in make_recipe(recipe_names[stage_patterns[index - 1]]).roles
                 ]
-                + ([{"id": "reviewer", "role": "reviewer", "purpose": "review", "profile": "normal"}] if review_required and index == len(patterns) and pattern != ExecutionPattern.DIRECT else [])
+                + ([{"id": "reviewer", "role": "reviewer", "purpose": "review", "profile": "normal"}] if review_required and index == stage_count and stage_patterns[index - 1] != ExecutionPattern.DIRECT else [])
             ),
             "typed-result",
             "typed-result",
-            {"max_agent_steps": base.max_agent_steps, "max_total_agent_calls": base.max_total_agent_calls},
+            {
+                **(
+                    getattr(work_stages[index - 1], "limits", {})
+                    if index <= len(work_stages)
+                    else {}
+                ),
+                "max_agent_steps": base.max_agent_steps,
+                "max_total_agent_calls": base.max_total_agent_calls,
+            },
+            tuple(getattr(work_stages[index - 1], "skill_ids", ())) if index <= len(work_stages) else (),
         )
-        for index, pattern in enumerate(patterns, 1)
+        for index in range(1, stage_count + 1)
     )
     return ExecutionRecipe(
         base.name,
