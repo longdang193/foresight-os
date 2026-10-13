@@ -236,10 +236,9 @@ def analyze_portfolio_resilience(source: Path) -> PortfolioAnalysis:
         discount = _number(row.get("Discount_pct"))
         if (
             index not in duplicate_indexes
-            and _number(row.get("Variable_Cost_per_Unit")) is not None
-            and _number(row.get("Gross_Profit")) is not None
             and discount is not None
             and 0 <= discount <= 1
+            and _number(row.get("Revenue")) is not None
             and (_number(row.get("Revenue")) or 0) >= 0
         ):
             quality_rows.append((index, row))
@@ -259,6 +258,7 @@ def analyze_portfolio_resilience(source: Path) -> PortfolioAnalysis:
         units = sum(_number(row.get("Units")) or 0.0 for _, row in items)
         revenue = sum(_number(row.get("Revenue")) or 0.0 for _, row in items)
         gross_profit = sum(_number(row.get("Gross_Profit")) or 0.0 for _, row in items)
+        cost_valid_items = [(index, row) for index, row in items if _number(row.get("Variable_Cost_per_Unit")) is not None and _number(row.get("Gross_Profit")) is not None]
         fixed_cost = fixed_costs.get(segment, 0.0)
         baselines.append(
             PortfolioSegmentBaseline(
@@ -272,7 +272,7 @@ def analyze_portfolio_resilience(source: Path) -> PortfolioAnalysis:
                 gross_profit - fixed_cost,
                 _weighted([(_number(row.get("List_Price")) or 0.0, _number(row.get("Units")) or 0.0) for _, row in items]),
                 _weighted([(_number(row.get("Discount_pct")) or 0.0, _number(row.get("Units")) or 0.0) for _, row in items]),
-                _weighted([(_number(row.get("Variable_Cost_per_Unit")) or 0.0, _number(row.get("Units")) or 0.0) for _, row in items]),
+                _weighted([(_number(row.get("Variable_Cost_per_Unit")) or 0.0, _number(row.get("Units")) or 0.0) for _, row in cost_valid_items]),
                 tuple(sales_evidence[index].id for index, _ in items),
             )
         )
