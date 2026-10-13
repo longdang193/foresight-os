@@ -129,7 +129,7 @@ tests never claim model reasoning quality.
 | Task 0 | `completed` | current | `lead controller` | none | PR/base reconciliation and changed-file inventory | `work/skill-layer-hardening-20261014/reconciliation/` |
 | Task 1 | `completed` | current | `lead controller` | Task 0 | P0 version and capability tests | `python -m pytest -q tests/test_review_records.py tests/test_skill_package.py tests/test_participant_scope.py tests/test_research_needs.py` |
 | Task 2 | `completed` | current | `lead controller` | Task 1 | nine-skill content and routing contract checks | `python -m pytest -q tests/test_skill_package.py tests/test_review_records.py tests/test_participant_scope.py tests/test_research_needs.py`; manifest hash reconciliation |
-| Task 3 | `pending` | current | `unresolved` | Task 2 | package contract tests and nine evaluation fixtures | `work/skill-layer-hardening-20261014/task-3/` |
+| Task 3 | `completed` | current | `lead controller` | Task 2 | package contract tests and nine evaluation fixtures | `python -m pytest -q tests/test_skill_package.py tests/test_skill_exercise_evaluation.py tests/test_skills.py`; `work/skill-layer-hardening-20261014/task-3/structural/` |
 | Task 4 | `pending` | current | `unresolved` | Task 3 | exercise-pack evaluation and final local proof | `work/skill-layer-hardening-20261014/final/` |
 
 ## Task Breakdown
@@ -343,14 +343,14 @@ tests never claim model reasoning quality.
 - Stop for: fixture fields that cannot be checked deterministically, model-quality claims from string presence alone, or any new evaluation service.
 
 **Steps:**
-- [ ] Step 1: Implement a minimal frontmatter reader in the test module for `name` only; keep manifest metadata authoritative at runtime.
-- [ ] Step 2: Assert required sections and capability constraints for every resolved skill, and extract only backticked identifiers under `## Pair with` for deterministic manifest-reference validation.
-- [ ] Step 3: Add nine fixture files with positive/near-miss routing cases and expected observable properties.
-- [ ] Step 4: Add fixture schema validation so malformed or duplicate skill fixture IDs fail locally.
-- [ ] Step 5: Record word count and UTF-8 byte size for every skill and the representative skill combinations named in the plan; fail only when the 700-word upper bound is exceeded.
+- [x] Step 1: Implement a minimal frontmatter reader in the test module for `name` only; keep manifest metadata authoritative at runtime.
+- [x] Step 2: Assert required sections and capability constraints for every resolved skill, and extract only backticked identifiers under `## Pair with` for deterministic manifest-reference validation.
+- [x] Step 3: Add nine fixture files with positive/near-miss routing cases and expected observable properties.
+- [x] Step 4: Add fixture schema validation so malformed or duplicate skill fixture IDs fail locally.
+- [x] Step 5: Record word count and UTF-8 byte size for every skill and the representative skill combinations named in the plan; fail only when the 700-word upper bound is exceeded.
 
 **Verification:**
-- [ ] `python -m pytest -q tests/test_skill_package.py tests/test_skill_exercise_evaluation.py tests/test_skills.py`
+- [x] `python -m pytest -q tests/test_skill_package.py tests/test_skill_exercise_evaluation.py tests/test_skills.py` (15 passed)
 - Expected: package integrity, frontmatter identity, section presence, capability boundaries, fixture schema, and prompt-size measurements all pass without network access; no test derives human correction effort from acceptance state.
 
 **Exit Criteria:**

@@ -42,7 +42,7 @@ def test_skill_capability_denial_happens_before_agent_construction():
 
     with pytest.raises(RuntimeError, match="unavailable"):
         AgentFactory(Client()).create(
-            ParticipantConfig("source", "analyst", "appraise", skill_ids=("source-appraisal",)),
+            ParticipantConfig("source", "analyst", "calculate", skill_ids=("quantitative-sanity-check",)),
             {"skill_registry": SkillRegistry(), "capability_resolver": CapabilityResolver(), "scope": CapabilityScope()},
         )
 

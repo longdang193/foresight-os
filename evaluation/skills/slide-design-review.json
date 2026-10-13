@@ -1,0 +1,14 @@
+{
+  "skill_id": "slide-design-review",
+  "version": "1.0.0",
+  "positive_cases": [
+    {"prompt": "Review rendered slides for analytical fidelity, readability, and accessibility."},
+    {"prompt": "Return a renderer-only DesignBrief with exact corrections for a crowded slide."},
+    {"prompt": "Check deck-level consistency of titles, citations, caveats, and visual grammar."}
+  ],
+  "near_miss": {"prompt": "Claim that a Canva edit was saved because a preview looked correct."},
+  "expected_observable_properties": {
+    "required_output_fields": ["severity", "observed_problem", "correction", "verification_status", "DesignBrief"],
+    "routing_boundary": "Review and hand off renderer instructions; never claim external save or publication without confirmed results."
+  }
+}
