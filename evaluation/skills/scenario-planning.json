@@ -1,0 +1,14 @@
+{
+  "skill_id": "scenario-planning",
+  "version": "1.1.0",
+  "positive_cases": [
+    {"prompt": "Construct bounded scenarios from explicit uncertainties and drivers."},
+    {"prompt": "Define signposts, implications, and actions for each scenario."},
+    {"prompt": "Keep scenario bounds distinct from statistical confidence intervals."}
+  ],
+  "near_miss": {"prompt": "Present one forecast as certain and call it a scenario set."},
+  "expected_observable_properties": {
+    "required_output_fields": ["scenario", "drivers", "signposts", "implications", "actions"],
+    "routing_boundary": "Explore bounded alternatives and signposts; do not present scenarios as predictions or confidence intervals."
+  }
+}

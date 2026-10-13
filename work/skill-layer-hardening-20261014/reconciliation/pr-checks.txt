@@ -1,0 +1,2 @@
+deterministic fail 1m21s https://github.com/longdang193/foresight-os/actions/runs/38475956210/job/115566560251
+deterministic fail 1m11s https://github.com/longdang193/foresight-os/actions/runs/38475998072/job/115566702261

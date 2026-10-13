@@ -1,0 +1,14 @@
+{
+  "skill_id": "presentation-storytelling",
+  "version": "1.0.0",
+  "positive_cases": [
+    {"prompt": "Build the fixed six-slide story around one governing thought."},
+    {"prompt": "Sequence evidence, implication, options, and decision ask with source hierarchy."},
+    {"prompt": "Write concise slide copy and preserve full locators in speaker notes."}
+  ],
+  "near_miss": {"prompt": "Add extra slides and unsupported claims so the deck feels comprehensive."},
+  "expected_observable_properties": {
+    "required_output_fields": ["governing_thought", "slide_sequence", "slide_copy", "sources", "qualifications"],
+    "routing_boundary": "Create a renderer-neutral content brief; do not save, publish, or mutate an external design."
+  }
+}

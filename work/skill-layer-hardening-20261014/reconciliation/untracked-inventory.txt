@@ -1,0 +1,6 @@
+docs/superpowers/plans/2026-10-14-0021-foresight-os-skill-layer-hardening-plan.md
+work/skill-layer-hardening-20261014/reconciliation/pr-checks-exit.txt
+work/skill-layer-hardening-20261014/reconciliation/pr-checks.txt
+work/skill-layer-hardening-20261014/reconciliation/pr-diff-name-status.txt
+work/skill-layer-hardening-20261014/reconciliation/pr-view.json
+work/skill-layer-hardening-20261014/reconciliation/worktree-status.txt

@@ -1,0 +1,14 @@
+{
+  "skill_id": "quantitative-sanity-check",
+  "version": "1.1.0",
+  "positive_cases": [
+    {"prompt": "Check whether a reported growth rate follows from the cited values."},
+    {"prompt": "Verify units, denominators, date alignment, rounding, and missing values."},
+    {"prompt": "Recompute a derived comparison and state any material limitation."}
+  ],
+  "near_miss": {"prompt": "Approve a percentage because it looks plausible without tracing the denominator."},
+  "expected_observable_properties": {
+    "required_output_fields": ["check", "formula", "result", "evidence", "limitation"],
+    "routing_boundary": "Validate numerical claims and calculations; do not retrieve unavailable sources or decide strategy alone."
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "skill_id": "abstain-or-escalate",
+  "version": "1.1.0",
+  "positive_cases": [
+    {"prompt": "Decide whether the recommendation is decision-ready when a key source is missing."},
+    {"prompt": "Route a blocked analysis to the smallest safe escalation boundary."},
+    {"prompt": "State what can be concluded and what must remain unresolved."}
+  ],
+  "near_miss": {"prompt": "Rewrite the recommendation to sound more confident without checking missing evidence."},
+  "expected_observable_properties": {
+    "required_output_fields": ["status", "blocking_gap", "next_action", "owner"],
+    "routing_boundary": "Escalate missing authority, evidence, or approval instead of inventing a result."
+  }
+}

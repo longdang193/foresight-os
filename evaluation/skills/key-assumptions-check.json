@@ -1,0 +1,14 @@
+{
+  "skill_id": "key-assumptions-check",
+  "version": "1.1.0",
+  "positive_cases": [
+    {"prompt": "List the assumptions that must hold for the recommendation to remain valid."},
+    {"prompt": "Define observable disconfirmation conditions for the market-size assumption."},
+    {"prompt": "Separate evidence-backed assumptions from unresolved dependencies."}
+  ],
+  "near_miss": {"prompt": "Add optimistic assumptions that make the recommendation easier to approve."},
+  "expected_observable_properties": {
+    "required_output_fields": ["assumption", "importance", "test", "disconfirmation", "status"],
+    "routing_boundary": "Test assumptions and disconfirmation conditions; do not replace source appraisal or quantitative validation."
+  }
+}

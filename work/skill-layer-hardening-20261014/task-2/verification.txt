@@ -1,0 +1,9 @@
+Task 2 verification
+====================
+Command: PYTHONPATH=src py -m pytest -q tests/test_skill_package.py tests/test_review_records.py tests/test_participant_scope.py tests/test_research_needs.py
+Result: 14 passed
+
+Manifest/content reconciliation: all nine manifest content_sha256 values match SkillRegistry's UTF-8 text hashing behavior on Windows.
+Contract inspection: all nine skills contain Inputs, When to use, Do not use / route instead, Workflow, Output, Completion check, Pair with, and Anti-patterns sections.
+Capability boundary: presentation-storytelling and slide-design-review require no capabilities; evidence-visualization retains data_analysis and calculation; source-appraisal requires none.
+Deferred: Group Chat / CHALLENGE_RECOMMENDATION p95 investigation remains outside this plan.

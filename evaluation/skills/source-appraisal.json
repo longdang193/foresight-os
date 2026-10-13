@@ -1,0 +1,14 @@
+{
+  "skill_id": "source-appraisal",
+  "version": "1.1.0",
+  "positive_cases": [
+    {"prompt": "Assess whether a cited report supports a specific claim for the stated period and population."},
+    {"prompt": "Compare conflicting sources and record scope, freshness, and locator limitations."},
+    {"prompt": "Appraise workbook evidence without retrieving new material outside the approved scope."}
+  ],
+  "near_miss": {"prompt": "Treat a source as authoritative because it is recent without checking scope or provenance."},
+  "expected_observable_properties": {
+    "required_output_fields": ["claim", "source", "support", "limitations", "decision"],
+    "routing_boundary": "Assess support and limitations; route missing retrieval through the existing research-need path."
+  }
+}

@@ -1,11 +1,92 @@
 {
   "schema_version": 1,
   "skills": [
-    {"id": "source-appraisal", "version": "1.0.0", "content_path": "source-appraisal/SKILL.md", "content_sha256": "67ec9634c71ba5244cd45c912d70f9902ef39e94f2a46ac887e4dc50c004b771", "capability_ids": ["page_retrieval"], "output_contract": "source-quality assessment with limitations", "provenance": "bundled-local"},
-    {"id": "key-assumptions-check", "version": "1.0.0", "content_path": "key-assumptions-check/SKILL.md", "content_sha256": "4be79bddb9244d9a9e531c0df3e66aa6fb7437dd175c638759881a42085b8b76", "capability_ids": [], "output_contract": "assumptions and disconfirmation conditions", "provenance": "bundled-local"},
-    {"id": "quantitative-sanity-check", "version": "1.0.0", "content_path": "quantitative-sanity-check/SKILL.md", "content_sha256": "93f6866e8561dcbe624f8038c0e24076149baff3ed9c6d3a3e293312de9c8829", "capability_ids": ["data_analysis", "calculation"], "output_contract": "formula and result checks with limitations", "provenance": "bundled-local"},
-    {"id": "red-team-claim", "version": "1.0.0", "content_path": "red-team-claim/SKILL.md", "content_sha256": "cdc3833cefc57fdee352efcf6125ecb49c21882252403947a9045ee6ea428c24", "capability_ids": [], "output_contract": "objections, counterevidence, unresolved issues", "provenance": "bundled-local"},
-    {"id": "abstain-or-escalate", "version": "1.0.0", "content_path": "abstain-or-escalate/SKILL.md", "content_sha256": "2d206c55c372e505776e8ae1f383fcdf188d3dac579c175fe7c83751967310cf", "capability_ids": [], "output_contract": "abstention or escalation decision", "provenance": "bundled-local"},
-    {"id": "scenario-planning", "version": "1.0.0", "content_path": "scenario-planning/SKILL.md", "content_sha256": "c1779051779251573eefcf201741dfe90109d62e6ef3fc58dfe4205c57ebd74b", "capability_ids": [], "output_contract": "bounded scenarios and signposts", "provenance": "bundled-local"}
+    {
+      "id": "source-appraisal",
+      "version": "1.1.0",
+      "content_path": "source-appraisal/SKILL.md",
+      "content_sha256": "9968bfeec0b465cf14bf949161e43eb98b8876d230d6d64017d245141f67331d",
+      "capability_ids": [],
+      "output_contract": "source-quality assessment with limitations",
+      "provenance": "bundled-local"
+    },
+    {
+      "id": "key-assumptions-check",
+      "version": "1.1.0",
+      "content_path": "key-assumptions-check/SKILL.md",
+      "content_sha256": "66744cbacf9b61cfc74841c085dadce99ad41aef657d034890fd6d7e37e3432d",
+      "capability_ids": [],
+      "output_contract": "assumptions and disconfirmation conditions",
+      "provenance": "bundled-local"
+    },
+    {
+      "id": "quantitative-sanity-check",
+      "version": "1.1.0",
+      "content_path": "quantitative-sanity-check/SKILL.md",
+      "content_sha256": "0711d992f5a8bb6b6f6eadfa01a02e44cf593e9e645ca4531bbb818e63fcdbb4",
+      "capability_ids": [
+        "data_analysis",
+        "calculation"
+      ],
+      "output_contract": "formula and result checks with limitations",
+      "provenance": "bundled-local"
+    },
+    {
+      "id": "red-team-claim",
+      "version": "1.1.0",
+      "content_path": "red-team-claim/SKILL.md",
+      "content_sha256": "5fceb46ebaf75b9be1ec5301896453c459c393b75fa90e29b3569470e971380c",
+      "capability_ids": [],
+      "output_contract": "objections, counterevidence, unresolved issues",
+      "provenance": "bundled-local"
+    },
+    {
+      "id": "abstain-or-escalate",
+      "version": "1.1.0",
+      "content_path": "abstain-or-escalate/SKILL.md",
+      "content_sha256": "0c97607da2ccee44f5a10183977c2ac0fa393b3622f38d4212381cb03b122e31",
+      "capability_ids": [],
+      "output_contract": "abstention or escalation decision",
+      "provenance": "bundled-local"
+    },
+    {
+      "id": "scenario-planning",
+      "version": "1.1.0",
+      "content_path": "scenario-planning/SKILL.md",
+      "content_sha256": "1cc0f970168c92dffb321e2d38b80f29bc7807c87b0c06cd5020305a8dd7e136",
+      "capability_ids": [],
+      "output_contract": "bounded scenarios and signposts",
+      "provenance": "bundled-local"
+    },
+    {
+      "id": "presentation-storytelling",
+      "version": "1.0.0",
+      "content_path": "presentation-storytelling/SKILL.md",
+      "capability_ids": [],
+      "output_contract": "slide brief with supported copy, provenance, citations, and qualifications",
+      "provenance": "bundled-local",
+      "content_sha256": "09a679caf048e3352a9f1ee02cb6e349d7fa582ff468ee66431fca20ae925655"
+    },
+    {
+      "id": "evidence-visualization",
+      "version": "1.0.0",
+      "content_path": "evidence-visualization/SKILL.md",
+      "capability_ids": [
+        "data_analysis",
+        "calculation"
+      ],
+      "output_contract": "traceable chart or table brief with verified values and uncertainty",
+      "provenance": "bundled-local",
+      "content_sha256": "548d1937c282ecad2d677bf2b3c75509a5ff494adb3d5504e4a150b3c7cd0741"
+    },
+    {
+      "id": "slide-design-review",
+      "version": "1.0.0",
+      "content_path": "slide-design-review/SKILL.md",
+      "capability_ids": [],
+      "output_contract": "per-slide fidelity and design issues with corrections and verification status",
+      "provenance": "bundled-local",
+      "content_sha256": "e40e86219041ecc094c196c3926f9d4f318d16ba1cb17b96456d504d3b960256"
+    }
   ]
 }

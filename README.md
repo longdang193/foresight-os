@@ -30,7 +30,7 @@ The current prototype provides:
   protection;
 - relation-aware, bounded NetworkX graph context rebuilt from durable
   relationships;
-- six bundled analytical method skills with manifest hashes and stage-local
+- nine bundled analytical and presentation skills with manifest hashes and stage-local
   injection; no runtime skill downloads;
 - immutable review records bound to material-input fingerprints and derived
   finding views; accepted recommendations require a current accepted review;
@@ -60,6 +60,62 @@ The semantic registry contains `web_search`, `page_retrieval`, `web_crawl`,
 `spreadsheet_read`, `data_analysis`, `calculation`, `graph_context`, and
 `domain_validation`, and `powerbi_project_read`, plus explicitly unavailable `document_read`,
   `internal_knowledge`, and `artifact_generation` follow-ups.
+
+## Selecting analytical and presentation skills
+
+Select only the methods needed for the current stage through
+`RecipeStage.skill_ids` or `ParticipantConfig.skill_ids`. Each bundled skill
+defines inputs, an actionable workflow, an output contract, and completion
+checks. The manifest owns versions, hashes, and required capabilities; skills
+do not grant tools, accept findings, or authorize external writes.
+
+| Skill | Expected work product |
+| --- | --- |
+| `source-appraisal` | Claim-specific support boundaries, source independence, and limitations |
+| `key-assumptions-check` | Material assumptions, sensitivity, and observable disconfirmation conditions |
+| `quantitative-sanity-check` | Reproducible numerical checks, formula trust, and discrepancy explanations |
+| `red-team-claim` | Typed objections, alternative explanations, and resolving evidence |
+| `abstain-or-escalate` | A bounded disposition, useful partial results, and an actionable next step |
+| `scenario-planning` | Distinct plausible futures, comparable options, and monitoring signposts |
+| `presentation-storytelling` | A decision-focused slide brief tied to current findings and sources |
+| `evidence-visualization` | Traceable chart/table values, honest scales, uncertainty, and citations |
+| `slide-design-review` | Per-slide content/design corrections and explicit verification status |
+
+For presentation preparation, select `presentation-storytelling`; add
+`evidence-visualization` when a quantitative display helps the decision, and
+use `slide-design-review` for the final content/rendering review. These methods
+preserve the fixed six-slide compiler contract. Visual instructions are a
+derived handoff to the renderer, not additional `PresentationSpec` fields.
+Visible source labels accompany factual key points; notes preserve full
+locators and calculation references. An unavailable render is reported as
+unverified, and a source ID alone does not prove a claim or a chart is correct.
+
+Skill content changes receive new versions and hashes. Re-run the selected
+methods when continuing an investigation under an updated skill version; old
+reviews remain attributable to their recorded method identity. Registry and
+package tests prove resource integrity, not model reasoning quality.
+
+The skill exercise evaluator keeps those claims separate. Structural mode is
+offline and checks the tracked five-case reference contract, manifest identity,
+content hashes, fixture routing boundaries, and prompt-size measurements:
+
+```text
+PYTHONPATH=src py evaluation/probes/run_skill_exercise_evaluation.py --mode structural --exercise-root evaluation/cases --skill-fixture-root evaluation/skills --output-root work/skill-layer-hardening-20261014/final/structural
+```
+
+Provider mode is an optional second tier. It uses the approved provider
+configuration only when available; missing credentials or runtime dependencies
+are recorded as `BLOCKED_EXTERNAL`, never simulated as quality evidence:
+
+```text
+PYTHONPATH=src py evaluation/probes/run_skill_exercise_evaluation.py --mode provider --exercise-root evaluation/cases --skill-fixture-root evaluation/skills --extended-exercise-root data/exercise --output-root work/skill-layer-hardening-20261014/final/provider
+```
+
+Reports separate deterministic/reference checks, provider/runtime measurements,
+and human/rubric judgments. Human correction effort remains `not_measured`
+unless a human assessment is actually performed. The optional `data/exercise/`
+workbook tier is `BLOCKED_INPUT` when absent; these results do not resolve the
+separate Group Chat p95 follow-up.
 
 ## Presentation and Canva boundary
 

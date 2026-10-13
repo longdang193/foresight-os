@@ -1,0 +1,14 @@
+{
+  "skill_id": "evidence-visualization",
+  "version": "1.0.0",
+  "positive_cases": [
+    {"prompt": "Choose a chart for a verified comparison of demand and capacity."},
+    {"prompt": "Specify units, denominators, uncertainty, and source locators for a scenario visual."},
+    {"prompt": "Propose a cited table when the evidence is qualitative and sparse."}
+  ],
+  "near_miss": {"prompt": "Create a dramatic 3D chart with invented values to fill an empty slide."},
+  "expected_observable_properties": {
+    "required_output_fields": ["visual_type", "values", "units", "provenance", "limitation"],
+    "routing_boundary": "Route source support and numerical validity to their owning skills; never manufacture precision."
+  }
+}

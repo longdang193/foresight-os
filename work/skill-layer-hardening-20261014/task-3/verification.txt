@@ -1,0 +1,6 @@
+Task 3 verification
+====================
+Focused tests: 15 passed.
+Structural evaluator: five tracked cases verified; deterministic/reference checks 35/35; optional data/exercise tier recorded BLOCKED_INPUT; provider and human/rubric metrics remain separate and unmeasured.
+Fixtures: nine unique skill fixtures, three positive cases, one near miss, version-bound to manifest.
+Prompt measurements: word count and UTF-8 bytes recorded per skill and representative combinations; the 700-word bound is applied to individual skill instructions only.

@@ -1,0 +1,14 @@
+{
+  "skill_id": "red-team-claim",
+  "version": "1.1.0",
+  "positive_cases": [
+    {"prompt": "Challenge a recommendation by identifying unsupported assumptions and counterevidence."},
+    {"prompt": "Classify an objection and link it to the claim or evidence it targets."},
+    {"prompt": "State whether a material objection is resolved, unresolved, or non-blocking."}
+  ],
+  "near_miss": {"prompt": "Generate objections that sound forceful but are not tied to a claim or source."},
+  "expected_observable_properties": {
+    "required_output_fields": ["kind", "target_id", "statement", "disposition", "evidence"],
+    "routing_boundary": "Attack claims with traceable objections; do not invent counterevidence or replace human approval."
+  }
+}
