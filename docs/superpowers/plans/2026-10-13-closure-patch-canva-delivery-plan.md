@@ -167,7 +167,7 @@ spec checks on PRs and reserve heavy closure evidence for nightly/release runs.
 | Task 1 | `completed` | current | `unresolved` | Task 0 | stage execution/fingerprint tests | focused suites passed |
 | Task 2 | `completed` | current | `unresolved` | Task 0 | relation/review/finding tests | required suite passed; Task 2 checkpoint |
 | Task 3 | `completed` | current | `unresolved` | Tasks 1–2 | fresh-process receipt lifecycle probe | automatic receipt/reuse probe passed; Task 3 checkpoint |
-| Task 4 | `completed` | current | `unresolved` | Task 2 | presentation compiler/spec validation | focused suites passed; Canva delivery receipt verified at `work/closure-patch-canva-20261013/canva-delivery/CanvaDeliveryReceipt.json` |
+| Task 4 | `completed` | current | `unresolved` | Task 2 | presentation compiler/spec validation | focused suites passed; tracked Canva delivery receipt verified at `docs/superpowers/evidence/2026-10-13-canva-delivery-receipt.json` |
 | Task 5 | `completed` | current | `unresolved` | Tasks 3–4 | performance/resource receipt comparison | corrected schema and baseline captured; comparator self-check passed |
 | Task 6 | `completed` | current | `unresolved` | Tasks 2–5 | bounded caches, clean-wheel smoke passed; release comparison fail-closed on noisy p95 sample |
 | Task 7 | `active` | current | `unresolved` | Tasks 0–6 | final verification and acceptance evidence | incomplete: fresh optimization comparator rejected a pattern p95 regression; Canva external delivery verified through approved Canva write |
@@ -584,7 +584,7 @@ spec checks on PRs and reserve heavy closure evidence for nightly/release runs.
 - [x] Step 1: Run focused regression tests for controller, workflow, relation/review, receipts, presentation, capabilities, and evaluation scope.
 - [x] Step 2: Run `python -m pytest -q` with generated output routed to the new disposable root where applicable.
 - [ ] Step 3: Run the controller/contract matrices, selective-reuse probe, presentation validation, optimization comparison, and clean-wheel smoke using only new disposable output paths. Contract/controller/selective/clean-wheel evidence passed; the fresh optimization comparison failed closed on a pattern p95 regression.
-- [x] Step 4: With the connected Canva surface and explicit user approval, create one editable six-slide presentation from the validated `PresentationSpec`, read back its design metadata, and persist `CanvaDeliveryReceipt.json`.
+- [x] Step 4: With the connected Canva surface and explicit user approval, create one editable six-slide presentation from the validated `PresentationSpec`, read back its design metadata, and persist the tracked receipt at `docs/superpowers/evidence/2026-10-13-canva-delivery-receipt.json`.
 - [ ] Step 5: Reconcile every task state, deviation, evidence path, and completion criterion, then report two independent verdicts: `Core three-increment closure: FAILED` pending the pattern-specific p95 investigation; `Canva external delivery: VERIFIED` from the persisted receipt. Only `skill-verification-before-completion` may authorize a terminal `completed` status.
 
 **Verification:**
@@ -594,7 +594,7 @@ spec checks on PRs and reserve heavy closure evidence for nightly/release runs.
 - [x] `python evaluation/probes/run_selective_reuse_probe.py --output-root work/closure-patch-canva-20261013/final/selective-reuse`
 - [x] `python evaluation/probes/run_optimization_probe.py --mode release --fixture tests/fixtures/analyst_multisheet.xlsx --output work/closure-patch-canva-20261013/final/optimization/release.json` (receipt generated; comparator failed closed)
 - [ ] `python evaluation/probes/compare_optimization_receipts.py --baseline work/closure-patch-canva-20261013/baseline/optimization-corrected.json --release work/closure-patch-canva-20261013/final/optimization/release.json --output work/closure-patch-canva-20261013/final/optimization/comparison.json` (failed: `CHALLENGE_RECOMMENDATION` pattern p95 regression exceeded 20%)
-- [x] `work/closure-patch-canva-20261013/canva-delivery/CanvaDeliveryReceipt.json` (read-back verified: six-page editable Canva presentation `DAHX7WhisGQ`)
+- [x] `docs/superpowers/evidence/2026-10-13-canva-delivery-receipt.json` (read-back verified: six-page editable Canva presentation `DAHX7WhisGQ`)
 - [x] `git diff --check`
 - [x] `git status --short --branch`
 - Expected: all required local gates pass, no preserved untracked output changes, evidence is fresh and machine-readable, and external Canva status is either verified through an approved connector or explicitly blocked.
