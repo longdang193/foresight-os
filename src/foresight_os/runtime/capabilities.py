@@ -293,7 +293,7 @@ def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, cont
                 if metrics is not None:
                     metrics.queue_wait_ms += round((time.perf_counter() - queue_started) * 1000)
                 if metrics is not None:
-                    metrics.tool_calls += 1
+                    metrics.record_tool_call(str(context.get("tool_call_kind", "local")))
                 if mode == ExecutionMode.BLOCKING:
                     if scope is not None and getattr(scope, "executor", None) is None:
                         scope.executor = ThreadPoolExecutor(max_workers=max(1, definition.max_parallelism))
@@ -367,7 +367,7 @@ class ForesightFunctionMiddleware(FunctionMiddleware):
                 raise BudgetExceededError(f"maximum tool calls exceeded before dispatch: {definition.id}")
             async with semaphore:
                 if metrics is not None:
-                    metrics.tool_calls += 1
+                    metrics.record_tool_call(str(self.context.get("tool_call_kind", "mcp")))
                 await call_next()
         except BudgetExceededError as error:
             if metrics is not None:

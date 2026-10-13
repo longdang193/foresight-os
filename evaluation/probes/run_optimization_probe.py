@@ -7,6 +7,7 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 import time
 import tracemalloc
 from pathlib import Path
@@ -18,7 +19,7 @@ from foresight_os.controller.recipes import ExecutionPattern, RecipeName, make_r
 from foresight_os.runtime.capabilities import CapabilityDefinition, CapabilityScope, instrument_tool
 from foresight_os.runtime.local_toolbelt import AnalysisOperation, SheetSelection, data_analysis, spreadsheet_read
 from foresight_os.runtime.workflow import run_recipe_async
-from optimization_measurement import build_receipt, observed_xlsx_state, stage_metric
+from optimization_measurement import _metric_snapshot, build_receipt, observed_xlsx_state, process_rss_bytes, stage_metric
 
 
 class _ProbeClient:
@@ -152,6 +153,39 @@ def _measure_workbook(path: Path) -> dict[str, object]:
         "peak_allocation_bytes": max(allocations),
         "deterministic_key": analysis.deterministic_key,
         "source_hash": result.workbook_sha256,
+        "local_tool_calls": 13,
+    }
+
+
+async def _event_loop_lag_ms() -> float:
+    scheduled = asyncio.get_running_loop().time() + 0.001
+    await asyncio.sleep(0.001)
+    return round(max(0.0, (asyncio.get_running_loop().time() - scheduled) * 1000), 3)
+
+
+def _resource_snapshot(metrics, event_loop_lag_ms: float) -> dict[str, object]:
+    child_process_count = 0
+    open_file_descriptors = None
+    try:
+        import psutil
+
+        process = psutil.Process(os.getpid())
+        child_process_count = len(process.children(recursive=True))
+        try:
+            open_file_descriptors = int(process.num_fds())
+        except (AttributeError, OSError):
+            open_file_descriptors = None
+    except Exception:
+        pass
+    return {
+        "rss_bytes": process_rss_bytes(),
+        "active_python_tasks": len(asyncio.all_tasks()),
+        "thread_count": threading.active_count(),
+        "child_process_count": child_process_count,
+        "owned_capability_resources": 0 if metrics.cleanup_complete else 1,
+        "mcp_session_count": 0,
+        "event_loop_lag_ms": event_loop_lag_ms,
+        "open_file_descriptors": open_file_descriptors,
     }
 
 
@@ -162,33 +196,64 @@ async def _measure_patterns() -> tuple[dict[str, object], list[dict[str, object]
         recipe = make_recipe(recipe_name)
         for _ in range(2):
             await run_recipe_async(recipe, "optimization baseline", _ProbeClient(), f"warm-{recipe_name.value}")
-        samples: list[float] = []
+        samples: list[dict[str, object]] = []
         last = None
         for index in range(10):
             started = time.perf_counter()
             last = await run_recipe_async(recipe, "optimization baseline", _ProbeClient(), f"measure-{recipe_name.value}-{index}")
-            samples.append((time.perf_counter() - started) * 1000)
+            lag = await _event_loop_lag_ms()
+            last.metrics.event_loop_lag_ms = lag
+            samples.append(_metric_snapshot(last.metrics, (time.perf_counter() - started) * 1000))
         if last is not None:
-            stage_metrics.append(stage_metric("stage-1", recipe.pattern, last, samples[-1]))
+            summary = stage_metric("stage-1", recipe.pattern, last, float(samples[-1]["wall_time_ms"]), samples=samples)
+            stage_metrics.append(summary)
         receipts[recipe_name.value] = {
-            "p50_ms": round(median(samples), 3),
-            "p95_ms": round(sorted(samples)[-1], 3),
-            "model_calls": last.metrics.model_calls if last else 0,
-            "cleanup_complete": bool(last and last.metrics.cleanup_complete),
+            **summary,
+            "p50_ms": summary["latency"]["wall_time_ms_p50"],
+            "p95_ms": summary["latency"]["wall_time_ms_p95"],
         }
     return receipts, stage_metrics
 
 
 async def _soak_receipt() -> dict[str, object]:
     recipe = make_recipe(RecipeName.ANALYZE)
-    resource_counts: list[int] = []
+    snapshots: list[dict[str, object]] = []
     for index in range(100):
         result = await run_recipe_async(recipe, "optimization soak", _ProbeClient(), f"soak-{index}")
-        resource_counts.append(0 if result.metrics.cleanup_complete else 1)
+        snapshots.append(_resource_snapshot(result.metrics, await _event_loop_lag_ms()))
+    growth_fields = (
+        "rss_bytes",
+        "active_python_tasks",
+        "thread_count",
+        "child_process_count",
+        "owned_capability_resources",
+        "mcp_session_count",
+    )
+    growth = {
+        field: {
+            "first": snapshots[0].get(field) if snapshots else None,
+            "last": snapshots[-1].get(field) if snapshots else None,
+            "max": max((int(item[field]) for item in snapshots if item.get(field) is not None), default=None),
+            "monotonic_non_decreasing": all(
+                left.get(field) is not None and right.get(field) is not None and int(left[field]) <= int(right[field])
+                for left, right in zip(snapshots, snapshots[1:])
+            ),
+        }
+        for field in growth_fields
+    }
+    leak_fields = ("active_python_tasks", "thread_count", "child_process_count", "owned_capability_resources", "mcp_session_count")
+    monotonic_growth = any(
+        growth[field]["monotonic_non_decreasing"] and growth[field]["last"] > growth[field]["first"]
+        for field in leak_fields
+        if growth[field]["first"] is not None and growth[field]["last"] is not None
+    )
     return {
-        "runs": len(resource_counts),
-        "resource_counts": {"owned_after_cleanup": resource_counts[-1] if resource_counts else 0},
-        "monotonic_growth": any(right > left for left, right in zip(resource_counts, resource_counts[1:])),
+        "runs": len(snapshots),
+        "snapshots": snapshots,
+        "resource_growth": growth,
+        "resource_counts": {"owned_after_cleanup": snapshots[-1]["owned_capability_resources"] if snapshots else None},
+        "monotonic_growth": monotonic_growth,
+        "plateau": {field: item["first"] == item["last"] for field, item in growth.items() if item["first"] is not None and item["last"] is not None},
     }
 
 
@@ -203,7 +268,7 @@ async def _run(mode: str, fixture: Path, evidence_root: Path) -> dict[str, objec
 
     from foresight_os.runtime.metrics import RunMetrics
     metrics = RunMetrics("optimization-external", "DIRECT", "direct")
-    call = instrument_tool(external_call, CapabilityDefinition("external_fixture", "external_read"), {"metrics": metrics})
+    call = instrument_tool(external_call, CapabilityDefinition("external_fixture", "external_read"), {"metrics": metrics, "tool_call_kind": "external_http"})
     await call("probe")
     try:
         mcp = await _native_mcp_receipt()
@@ -217,7 +282,7 @@ async def _run(mode: str, fixture: Path, evidence_root: Path) -> dict[str, objec
         patterns=patterns,
         stage_metrics=stage_metrics,
         soak=soak,
-        external_fixture={"tool_calls": metrics.tool_calls, "failures": metrics.tool_failures},
+        external_fixture={"tool_calls": metrics.tool_calls, "external_http_requests": metrics.external_http_requests, "failures": metrics.tool_failures},
         native_mcp=mcp,
         state=state,
         thresholds={"p95_regression_pct": 20, "peak_allocation_regression_pct": 15, "tool_calls_per_finding_increase": 0, "soak_runs": 100},

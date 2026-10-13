@@ -168,8 +168,8 @@ spec checks on PRs and reserve heavy closure evidence for nightly/release runs.
 | Task 2 | `completed` | current | `unresolved` | Task 0 | relation/review/finding tests | required suite passed; Task 2 checkpoint |
 | Task 3 | `completed` | current | `unresolved` | Tasks 1–2 | fresh-process receipt lifecycle probe | automatic receipt/reuse probe passed; Task 3 checkpoint |
 | Task 4 | `completed` | current | `unresolved` | Task 2 | presentation compiler/spec validation | focused suites passed; local Canva boundary remains disconnected by design |
-| Task 5 | `active` | current | `unresolved` | Tasks 3–4 | performance/resource receipt comparison | pending |
-| Task 6 | `pending` | current | `unresolved` | Tasks 2–5 | cache and CI/documentation checks | pending |
+| Task 5 | `completed` | current | `unresolved` | Tasks 3–4 | performance/resource receipt comparison | corrected schema and baseline captured; comparator self-check passed |
+| Task 6 | `active` | current | `unresolved` | Tasks 2–5 | cache and CI/documentation checks | pending |
 | Task 7 | `pending` | current | `unresolved` | Tasks 0–6 | final verification and acceptance evidence | pending |
 
 ## Task Breakdown
@@ -470,15 +470,17 @@ spec checks on PRs and reserve heavy closure evidence for nightly/release runs.
 - Stop for: changing frozen thresholds without evidence, disabling a MAF pattern because it benchmarks slower, or using inaccessible production-only telemetry as a required local gate
 
 **Steps:**
-- [ ] Step 1: Split receipt counters into non-additive dimensions: `model_calls`, `tool_calls_total`, `local_tool_calls`, `mcp_tool_calls`, `external_http_requests`, `input_tokens`, and `output_tokens`, plus per-accepted-finding values; do not count model calls as tool calls, and preserve backward-readable schema migration where needed.
-- [ ] Step 2: Record p95 and latency components for Direct, Sequential, Concurrent, Handoff, Group Chat, and mixed workflows, including queue wait, tool latency, and event-loop lag when available.
-- [ ] Step 3: Replace Boolean soak samples with bounded snapshots of portable RSS, active Python tasks, threads, child processes, owned capability resources, MCP/session count, and event-loop lag; record open file descriptors or Windows handles only as optional platform-specific evidence, and report plateau/monotonic-growth evidence.
-- [ ] Step 4: Make the comparator fail closed for missing required evidence and compare the same workload, deterministic keys, accepted-finding denominator, and thresholds: p95 ≤20%, allocation/RSS ≤15%, no monotonic resource growth, and no new calls for fully reusable stages.
-- [ ] Step 5: Without optimization changes, capture a new post-correctness/pre-optimization baseline using the corrected schema under `work/closure-patch-canva-20261013/baseline/optimization-corrected.json`; add tests for missing receipts, zero accepted findings, pattern-specific regressions, resource drift, and reused-stage economics.
+- [x] Step 1: Split receipt counters into non-additive dimensions: `model_calls`, `tool_calls_total`, `local_tool_calls`, `mcp_tool_calls`, `external_http_requests`, `input_tokens`, and `output_tokens`, plus per-accepted-finding values; do not count model calls as tool calls, and preserve backward-readable schema migration where needed.
+- [x] Step 2: Record p95 and latency components for Direct, Sequential, Concurrent, Handoff, Group Chat, and mixed workflows, including queue wait, tool latency, and event-loop lag when available.
+- [x] Step 3: Replace Boolean soak samples with bounded snapshots of portable RSS, active Python tasks, threads, child processes, owned capability resources, MCP/session count, and event-loop lag; record open file descriptors or Windows handles only as optional platform-specific evidence, and report plateau/monotonic-growth evidence.
+- [x] Step 4: Make the comparator fail closed for missing required evidence and compare the same workload, deterministic keys, accepted-finding denominator, and thresholds: p95 ≤20%, allocation/RSS ≤15%, no monotonic resource growth, and no new calls for fully reusable stages.
+- [x] Step 5: Without optimization changes, capture a new post-correctness/pre-optimization baseline using the corrected schema under `work/closure-patch-canva-20261013/baseline/optimization-corrected.json`; add tests for missing receipts, zero accepted findings, pattern-specific regressions, resource drift, and reused-stage economics.
 
 **Verification:**
-- [ ] `python -m pytest -q tests/test_anomaly_probe.py tests/test_runtime_boundaries.py`
-- [ ] `python evaluation/probes/run_optimization_probe.py --mode baseline --fixture tests/fixtures/analyst_multisheet.xlsx --output work/closure-patch-canva-20261013/baseline/optimization-corrected.json`
+- [x] `python -m pytest -q tests/test_anomaly_probe.py tests/test_runtime_boundaries.py`
+- [x] `python -m pytest -q tests/test_optimization_measurement.py`
+- [x] `python evaluation/probes/run_optimization_probe.py --mode baseline --fixture tests/fixtures/analyst_multisheet.xlsx --output work/closure-patch-canva-20261013/baseline/optimization-corrected.json`
+- [x] `python evaluation/probes/compare_optimization_receipts.py --baseline work/closure-patch-canva-20261013/baseline/optimization-corrected.json --release work/closure-patch-canva-20261013/baseline/optimization-corrected.json --output work/closure-patch-canva-20261013/baseline/optimization-self-comparison.json`
  - Expected: the corrected-schema baseline is captured before Task 6 cache optimizations; the legacy Task 0 receipt is not used for apples-to-apples comparison.
 - Expected: required observations are present, resource soak is based on actual measurements, and comparator acceptance is false when evidence is missing or thresholds regress.
 

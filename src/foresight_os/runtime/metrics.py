@@ -38,6 +38,9 @@ class RunMetrics:
     wall_time_ms: int = 0
     provider_failures: int = 0
     tool_calls: int = 0
+    local_tool_calls: int = 0
+    mcp_tool_calls: int = 0
+    external_http_requests: int = 0
     tool_failures: int = 0
     tool_latency_ms: int = 0
     queue_wait_ms: int = 0
@@ -60,6 +63,7 @@ class RunMetrics:
     human_correction: int = 0
     input_tokens: int | None = None
     output_tokens: int | None = None
+    event_loop_lag_ms: float = 0.0
     branches: int = 0
     parallelism: int = 0
     handoffs: int = 0
@@ -69,6 +73,15 @@ class RunMetrics:
     failure_message: str | None = None
     failure_counts: dict[str, int] = field(default_factory=dict)
     settled: bool = False
+
+    def record_tool_call(self, kind: str = "local") -> None:
+        self.tool_calls += 1
+        if kind == "mcp":
+            self.mcp_tool_calls += 1
+        elif kind == "external_http":
+            self.external_http_requests += 1
+        else:
+            self.local_tool_calls += 1
 
     def record_failure(self, failure_class: FailureClass, error: BaseException) -> None:
         if failure_class == FailureClass.CLEANUP and self.failure_class is not None:
