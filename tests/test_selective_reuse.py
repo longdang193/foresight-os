@@ -2,7 +2,8 @@ import asyncio
 
 from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, RecipeName, RecipeStage, StageInput, make_recipe
 from foresight_os.persistence.analysis_store import StageReceipt
-from foresight_os.runtime.workflow import _canonical_result_hash, _stage_cache_key, run_recipe_async
+from foresight_os.persistence.analysis_store import AnalysisStore
+from foresight_os.runtime.workflow import CanonicalStageResult, _canonical_result_hash, _stage_cache_key, run_recipe_async
 
 
 def test_stage_receipt_reuse_revalidates_semantic_scope_and_provenance():
@@ -21,6 +22,7 @@ def test_stage_receipt_reuse_revalidates_semantic_scope_and_provenance():
     )
     assert receipt.reusable_for(input_fingerprint="input-v1", skill_hashes=("skill-v1",), capability_fingerprints=("local-v1",), model_config_fingerprint="model-v1", authorization_scope_fingerprint="scope-v1")
     assert not receipt.reusable_for(input_fingerprint="input-v1", authorization_scope_fingerprint="scope-v2")
+    assert not receipt.reusable_for(input_fingerprint="input-v1", execution_policy_fingerprint="policy-v2", skill_hashes=("skill-v1",), capability_fingerprints=("local-v1",), model_config_fingerprint="model-v1", authorization_scope_fingerprint="scope-v1")
 
 
 def test_committed_stage_cache_hits_complete_ordered_stages_without_new_calls():
@@ -76,3 +78,69 @@ def test_pending_or_incomplete_cache_entries_are_not_reused():
 
     assert result.metrics.cache_hits == 0
     assert result.metrics.reassessed_stages == 1
+
+
+def test_successful_canonical_stage_persists_receipt_and_reuses_after_restart(tmp_path):
+    base = make_recipe(RecipeName.DIRECT)
+    stage = RecipeStage("first", ExecutionPattern.DIRECT, ({"id": "first", "purpose": "first"},), "prompt", "typed-result", {})
+    recipe = ExecutionRecipe(
+        base.name,
+        base.pattern,
+        base.roles,
+        base.max_agent_steps,
+        base.max_correction_rounds,
+        base.max_total_agent_calls,
+        base.completion,
+        base.escalation,
+        base.partial_result,
+        stages=(stage,),
+    )
+    store = AnalysisStore(tmp_path / "receipts")
+    committed = {"stage": "canonical"}
+
+    def commit_result(_stage, _output, _context):
+        return CanonicalStageResult(("claim-1",), (_canonical_result_hash(committed),), committed)
+
+    first = asyncio.run(
+        run_recipe_async(
+            recipe,
+            "start",
+            run_context={"analysis_store": store, "canonical_result_committer": commit_result},
+        )
+    )
+    assert first.metrics.reassessed_stages == 1
+    assert store.load_stage_receipts()["first"].reusable()
+
+    second = asyncio.run(
+        run_recipe_async(
+            recipe,
+            "start",
+            run_context={"analysis_store": store, "canonical_records": {"claim-1": committed}},
+        )
+    )
+    assert second.outputs[-1] == committed
+    assert second.metrics.cache_hits == 1
+    assert second.metrics.reassessed_stages == 0
+    assert second.metrics.model_calls == 0
+
+
+def test_temporary_stage_output_does_not_create_a_receipt(tmp_path):
+    base = make_recipe(RecipeName.DIRECT)
+    stage = RecipeStage("first", ExecutionPattern.DIRECT, ({"id": "first", "purpose": "first"},), "prompt", "typed-result", {})
+    recipe = ExecutionRecipe(
+        base.name,
+        base.pattern,
+        base.roles,
+        base.max_agent_steps,
+        base.max_correction_rounds,
+        base.max_total_agent_calls,
+        base.completion,
+        base.escalation,
+        base.partial_result,
+        stages=(stage,),
+    )
+    store = AnalysisStore(tmp_path / "temporary")
+
+    asyncio.run(run_recipe_async(recipe, "start", run_context={"analysis_store": store}))
+
+    assert store.load_stage_receipts() == {}

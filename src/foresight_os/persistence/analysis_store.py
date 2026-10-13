@@ -36,6 +36,7 @@ from foresight_os.domain.validation import migrate_analysis_dict, validate_analy
 class StageReceipt:
     stage_id: str
     input_fingerprint: str
+    execution_policy_fingerprint: str = ""
     skill_hashes: tuple[str, ...] = ()
     capability_fingerprints: tuple[str, ...] = ()
     model_config_fingerprint: str = ""
@@ -54,6 +55,7 @@ class StageReceipt:
         return cls(
             stage_id=str(value["stage_id"]),
             input_fingerprint=str(value["input_fingerprint"]),
+            execution_policy_fingerprint=str(value.get("execution_policy_fingerprint", "")),
             skill_hashes=tuple(value.get("skill_hashes", ())),
             capability_fingerprints=tuple(value.get("capability_fingerprints", ())),
             model_config_fingerprint=str(value.get("model_config_fingerprint", "")),
@@ -72,6 +74,7 @@ class StageReceipt:
         self,
         *,
         input_fingerprint: str,
+        execution_policy_fingerprint: str = "",
         skill_hashes: tuple[str, ...] = (),
         capability_fingerprints: tuple[str, ...] = (),
         model_config_fingerprint: str = "",
@@ -81,6 +84,7 @@ class StageReceipt:
         return bool(
             self.reusable()
             and self.input_fingerprint == input_fingerprint
+            and self.execution_policy_fingerprint == execution_policy_fingerprint
             and self.skill_hashes == tuple(skill_hashes)
             and self.capability_fingerprints == tuple(capability_fingerprints)
             and self.model_config_fingerprint == model_config_fingerprint

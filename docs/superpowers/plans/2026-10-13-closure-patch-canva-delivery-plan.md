@@ -158,7 +158,7 @@ spec checks on PRs and reserve heavy closure evidence for nightly/release runs.
 - Branch: `codex/closure-patch-canva-delivery`
 - Base commit: `2fe7b4280d989f254647ba2acc142a271e2813f8` (`origin/main`)
 - Expected workspace: tracked files clean after branch recreation from `origin/main`; preserve existing untracked `build/`, `data/`, `src/foresight_os.egg-info/`, and every existing `work/` output without staging, deletion, or cleanup
-- Next action: implement Task 3 automatic canonical receipt lifecycle on the verified closure branch, preserving Task 0–2 evidence
+- Next action: implement Task 4 vendor-neutral presentation compiler and Canva boundary on the verified closure branch, preserving Task 0–3 evidence
 - Blockers: none known; Canva connector availability is an external-boundary condition, not a reason to block local compiler work
 
 | Task | State | Workspace | Executor | Depends On | Required Proof | Evidence |
@@ -166,8 +166,8 @@ spec checks on PRs and reserve heavy closure evidence for nightly/release runs.
 | Task 0 | `completed` | current | `unresolved` | none | baseline commands and verdict matrix | `work/closure-patch-canva-20261013/baseline/` |
 | Task 1 | `completed` | current | `unresolved` | Task 0 | stage execution/fingerprint tests | focused suites passed |
 | Task 2 | `completed` | current | `unresolved` | Task 0 | relation/review/finding tests | required suite passed; Task 2 checkpoint |
-| Task 3 | `active` | current | `unresolved` | Tasks 1–2 | fresh-process receipt lifecycle probe | pending |
-| Task 4 | `pending` | current | `unresolved` | Task 2 | presentation compiler/spec validation | pending |
+| Task 3 | `completed` | current | `unresolved` | Tasks 1–2 | fresh-process receipt lifecycle probe | automatic receipt/reuse probe passed; Task 3 checkpoint |
+| Task 4 | `active` | current | `unresolved` | Task 2 | presentation compiler/spec validation | pending |
 | Task 5 | `pending` | current | `unresolved` | Tasks 3–4 | performance/resource receipt comparison | pending |
 | Task 6 | `pending` | current | `unresolved` | Tasks 2–5 | cache and CI/documentation checks | pending |
 | Task 7 | `pending` | current | `unresolved` | Tasks 0–6 | final verification and acceptance evidence | pending |
@@ -367,15 +367,15 @@ spec checks on PRs and reserve heavy closure evidence for nightly/release runs.
 - Stop for: persisting raw prompts or chat text as canonical output, weakening `StageReceipt.reusable_for`, bypassing atomic store locking, or silently refreshing an invalid receipt
 
 **Steps:**
-- [ ] Step 1: Define an explicit `CanonicalResultCommitter(stage, output, context) -> CanonicalStageResult | None` boundary owned by the caller/domain workflow. `CanonicalStageResult` contains `result_references`, `result_hashes`, and a reloadable canonical output; return `None` when the result is only temporary conversational text.
-- [ ] Step 2: After successful dispatch, let runtime consume only the committer result, construct `StageReceipt` with the stage semantic/execution-policy identities, skill/capability/model/authorization fingerprints, canonical references/hashes, committed status, and complete provenance, then persist through `AnalysisStore.save_stage_receipt` atomically.
-- [ ] Step 3: Load state, receipts, and canonical outputs on the next process; validate receipt identity before reuse and map changed analytical records through `RelationIndex.impacted_descendants()` to affected record IDs, intersect those IDs with `StageReceipt.result_references`, walk the stage dependency DAG, and recompute only the resulting affected stage set after a material dependency mutation.
-- [ ] Step 4: Replace manual cache/receipt seeding in the selective-reuse probe with cold execution → automatic persistence → process exit → new process reuse → dependency mutation → selective reassessment.
-- [ ] Step 5: Add failure-path tests for incomplete provenance, changed authorization, changed capability/model fingerprint, stale canonical hashes, and missing canonical outputs.
+- [x] Step 1: Define an explicit `CanonicalResultCommitter(stage, output, context) -> CanonicalStageResult | None` boundary owned by the caller/domain workflow. `CanonicalStageResult` contains `result_references`, `result_hashes`, and a reloadable canonical output; return `None` when the result is only temporary conversational text.
+- [x] Step 2: After successful dispatch, let runtime consume only the committer result, construct `StageReceipt` with the stage semantic/execution-policy identities, skill/capability/model/authorization fingerprints, canonical references/hashes, committed status, and complete provenance, then persist through `AnalysisStore.save_stage_receipt` atomically.
+- [x] Step 3: Load state, receipts, and canonical outputs on the next process; validate receipt identity before reuse and map changed analytical records through `RelationIndex.impacted_descendants()` to affected record IDs, intersect those IDs with `StageReceipt.result_references`, walk the stage dependency DAG, and recompute only the resulting affected stage set after a material dependency mutation.
+- [x] Step 4: Replace manual cache/receipt seeding in the selective-reuse probe with cold execution → automatic persistence → process exit → new process reuse → dependency mutation → selective reassessment.
+- [x] Step 5: Add failure-path tests for incomplete provenance, changed authorization, changed capability/model fingerprint, stale canonical hashes, and missing canonical outputs.
 
 **Verification:**
-- [ ] `python -m pytest -q tests/test_selective_reuse.py tests/test_persistence.py`
-- [ ] `python evaluation/probes/run_selective_reuse_probe.py --output-root work/closure-patch-canva-20261013/selective-reuse`
+- [x] `python -m pytest -q tests/test_selective_reuse.py tests/test_persistence.py`
+- [x] `python evaluation/probes/run_selective_reuse_probe.py --output-root work/closure-patch-canva-20261013/selective-reuse-task3-r2`
 - Expected: the probe proves automatic receipt creation, zero new model/tool calls for unchanged stages in a fresh process, and only affected descendants rerun after dependency change.
 
 **Exit Criteria:**
