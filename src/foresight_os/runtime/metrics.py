@@ -40,6 +40,9 @@ class RunMetrics:
     tool_calls: int = 0
     tool_failures: int = 0
     tool_latency_ms: int = 0
+    queue_wait_ms: int = 0
+    execution_time_ms: int = 0
+    cancellation_settlements: int = 0
     duplicate_retrievals: int = 0
     domain_failures: int = 0
     timeout_failures: int = 0

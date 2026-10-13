@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from foresight_os.runtime.capabilities import instrument_tool
+from foresight_os.runtime.capabilities import ForesightFunctionMiddleware, instrument_tool
 
 
 @dataclass(frozen=True)
@@ -53,6 +53,7 @@ class AgentFactory:
         if config.structured_output and isinstance(config.structured_output, dict):
             kwargs.setdefault("default_options", {})["response_format"] = config.structured_output
         tools = context.get("tools_by_participant", {}).get(config.id)
+        middleware = []
         if tools is None and config.capability_ids and context.get("capability_resolver") is not None:
             participant_context = dict(context)
             participant_context["participant_data_scope"] = config.data_scope
@@ -60,9 +61,32 @@ class AgentFactory:
             denied = [item.reason for item in resolutions.values() if not item.available]
             if denied:
                 raise RuntimeError(f"participant {config.id} capabilities unavailable: {'; '.join(denied)}")
-            tools = [instrument_tool(item.tool, item.definition, participant_context) for item in resolutions.values() if item.tool is not None]
+            resolved_tools = []
+            native_mcp_definitions = {}
+            for item in resolutions.values():
+                if item.tool is None:
+                    continue
+                if item.tool.__class__.__module__.startswith("agent_framework") and hasattr(item.tool, "functions"):
+                    resolved_tools.append(item.tool)
+                    for function in getattr(item.tool, "functions", ()):
+                        native_mcp_definitions[getattr(function, "name", "")] = item.definition
+                else:
+                    resolved_tools.append(instrument_tool(item.tool, item.definition, participant_context))
+            tools = resolved_tools
+            if native_mcp_definitions:
+                middleware.append(ForesightFunctionMiddleware(native_mcp_definitions, participant_context))
+        elif tools:
+            native_mcp_definitions = {}
+            for item in tools:
+                for function in getattr(item, "functions", ()):
+                    native_mcp_definitions[getattr(function, "name", "")] = context.get("capability_definitions", {}).get(getattr(item, "capability_id", ""))
+            native_mcp_definitions = {name: definition for name, definition in native_mcp_definitions.items() if definition is not None}
+            if native_mcp_definitions:
+                middleware.append(ForesightFunctionMiddleware(native_mcp_definitions, context))
         if tools is not None:
             kwargs["tools"] = tools
+        if middleware:
+            kwargs["middleware"] = middleware
         context_providers = context.get("context_providers_by_participant", {}).get(config.id)
         if context_providers is not None:
             kwargs["context_providers"] = context_providers
