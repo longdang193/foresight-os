@@ -6,9 +6,7 @@
       "version": "1.1.0",
       "content_path": "source-appraisal/SKILL.md",
       "content_sha256": "58fec358ae2b61d63dd3d4d5c3c997f434e4ab77f03bece6ec7e979f92b95f2d",
-      "capability_ids": [
-        "page_retrieval"
-      ],
+      "capability_ids": [],
       "output_contract": "source-quality assessment with limitations",
       "provenance": "bundled-local"
     },

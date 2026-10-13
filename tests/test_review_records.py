@@ -27,6 +27,7 @@ from foresight_os.domain.models import (
 )
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.analysis.reviewer import review_reasoning_with_skills
+from foresight_os.controller.skills import SkillRegistry
 
 
 def make_state() -> AnalysisState:
@@ -194,6 +195,7 @@ def test_selected_review_skills_produce_validated_typed_objections():
 
     assert review.accepted
     assert review.skill_ids == ("red-team-claim",)
-    assert review.skill_versions == ("1.0.0",)
+    registry = SkillRegistry()
+    assert review.skill_versions == (registry.manifest("red-team-claim").version,)
     assert review.skill_hashes
     assert review.objections[-1].kind == "UNSUPPORTED_ASSUMPTION"
