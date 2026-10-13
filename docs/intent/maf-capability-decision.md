@@ -25,6 +25,19 @@ MAF only supports OpenAI or Anthropic.
 | Structured output | `ADAPT_AT_BOUNDARY` | Live `9router` call returned the typed `ProbeReply` through MAF response-format handling. |
 | Checkpoint/restart | `USE_NATIVE` | `WorkflowCheckpoint` round-trips through native `FileCheckpointStorage`; process-boundary resume remains recipe-owned. |
 | Web search | `ADAPT_AT_BOUNDARY` | First-class `web_search` capability uses an injected provider adapter, public-scope authorization, runtime instrumentation, and validated `EvidenceCandidate` results; provider availability remains environment-owned. |
+| Page retrieval | `ADAPT_AT_BOUNDARY` | Bounded HTTP(S) retrieval revalidates redirects and public destinations, strips raw payloads, and issues retrieval-only proof before durable evidence normalization. |
+| Crawl4AI web crawl | `ADAPT_AT_BOUNDARY` | Optional Crawl4AI binding is injected as a read-only MAF agent tool, validates public destinations, bounds extracted evidence, and issues crawl retrieval proof before durable evidence normalization. |
+| GitHub MCP signals | `ADAPT_AT_BOUNDARY` | Hosted Streamable HTTP MCP tool is injected into MAF agents under `technology_signals`; the integration restricts the advertised catalog to read-only repository, code, issue, release, and search operations. |
+| Alpha Vantage MCP signals | `ADAPT_AT_BOUNDARY` | Hosted Streamable HTTP MCP tool is injected into MAF agents under `market_signals`; the integration uses the provider's API-key query authentication and a bounded read-only allowlist. |
+| FRED MCP signals | `ADAPT_AT_BOUNDARY` | OAuth-protected hosted Streamable HTTP MCP tool is injected into MAF agents under `macro_signals`; activation remains credential- and operation-configured, with the provider endpoint treated as read-only by policy. |
+| Spreadsheet read | `USE_NATIVE` | Core `openpyxl` binding returns typed multi-sheet workbook data with hidden-content, formula/cache, cell/range provenance, and source-integrity checks. |
+| Data analysis | `USE_NATIVE` | Deterministic bounded table operations cover nulls, duplicates, comparisons, scenarios, and sensitivity ordering. |
+| Calculation | `USE_NATIVE` | Reproducible calculations preserve formula, units, input IDs, and block unusable formula caches. |
+| Graph context | `USE_NATIVE` | Bounded provenance and impact context reuse the existing indexed graph query owner. |
+| Domain validation | `USE_NATIVE` | Existing evidence and analysis validation remain the persistence gate. |
+| Document read | `UNSUPPORTED` | Registered semantic ID with an explicit unavailable result; adapter deferred. |
+| Internal knowledge | `UNSUPPORTED` | Registered semantic ID with explicit internal-scope denial/unavailable result; adapter deferred. |
+| Artifact generation | `UNSUPPORTED` | Registered semantic ID with explicit unavailable result; mutation adapter deferred. |
 | Magentic | `DEFER` | Explicitly outside the current bounded scope; it is not part of the supported pattern contract. |
 
 ## Shared vertical-slice guardrail
@@ -83,8 +96,10 @@ dimensions only.
 
 The disposable MCP fixture is the credential-free protocol proof. The hosted-web
 probe exercises the first-class `web_search` capability through its configured
-provider adapter; real MCP remains a separate boundary. Each external provider
-requires its own approved environment configuration and actual invocation.
+provider adapter. `run_external_signal_probe.py` separately exercises the
+hosted GitHub, Alpha Vantage, and FRED MCP boundaries through injected MAF
+tools. Each external provider requires its own approved environment
+configuration and actual invocation.
 Missing configuration is `BLOCKED_EXTERNAL`, not a synthetic success. Reports
 retain only endpoint host, source identity, retrieval time, typed candidate
 metadata, metrics, and cleanup status; credentials, prompts, headers, and raw

@@ -8,7 +8,8 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).parents[2]
-sys.path.insert(0, str(ROOT / "src"))
+if "--installed" not in sys.argv:
+    sys.path.insert(0, str(ROOT / "src"))
 
 from foresight_os.domain.evidence import normalize_evidence_candidate
 from foresight_os.runtime.capabilities import (
@@ -123,8 +124,13 @@ async def _real_mcp() -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("disposable", "real-mcp"), required=True)
+    parser.add_argument("--installed", action="store_true")
+    parser.add_argument("--output-root", type=Path)
     args = parser.parse_args()
     result = asyncio.run(_disposable() if args.mode == "disposable" else _real_mcp())
+    if args.output_root is not None:
+        args.output_root.mkdir(parents=True, exist_ok=True)
+        (args.output_root / f"mcp-{args.mode}-probe.json").write_text(json.dumps(result, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result, sort_keys=True))
     return 0 if result["status"] in {"verified", "BLOCKED_EXTERNAL"} else 1
 

@@ -142,6 +142,8 @@ class CapabilityResolver:
         definition = self.definitions.get(capability_id)
         if definition is None:
             return CapabilityResolution(CapabilityDefinition(capability_id, "unknown"), CapabilityDecision.UNSUPPORTED, False, "capability is not defined")
+        if definition.capability_class == "unavailable":
+            return CapabilityResolution(definition, CapabilityDecision.UNSUPPORTED, False, "capability is registered but its adapter is not activated")
         if definition.approval_policy == "HUMAN" and not context.get("human_approved", False):
             return CapabilityResolution(definition, CapabilityDecision.UNSUPPORTED, False, "human approval required")
         denied = self._authorization_denial(definition, context)
@@ -149,6 +151,8 @@ class CapabilityResolver:
             return CapabilityResolution(definition, CapabilityDecision.UNSUPPORTED, False, denied)
         candidate, decision, reason = self._candidate(capability_id, context)
         if candidate is None:
+            if definition.capability_class == "unavailable":
+                reason = "capability is registered but its adapter is not activated"
             return CapabilityResolution(definition, decision, False, reason)
         binding = candidate if isinstance(candidate, CapabilityBinding) else CapabilityBinding(candidate, definition.binding_kind)
         cache_key = self._cache_key(capability_id, binding, definition)
@@ -172,6 +176,8 @@ class CapabilityResolver:
         definition = self.definitions.get(capability_id)
         if definition is None:
             return CapabilityResolution(CapabilityDefinition(capability_id, "unknown"), CapabilityDecision.UNSUPPORTED, False, "capability is not defined")
+        if definition.capability_class == "unavailable":
+            return CapabilityResolution(definition, CapabilityDecision.UNSUPPORTED, False, "capability is registered but its adapter is not activated")
         if definition.approval_policy == "HUMAN" and not context.get("human_approved", False):
             return CapabilityResolution(definition, CapabilityDecision.UNSUPPORTED, False, "human approval required")
         denied = self._authorization_denial(definition, context)
@@ -179,6 +185,8 @@ class CapabilityResolver:
             return CapabilityResolution(definition, CapabilityDecision.UNSUPPORTED, False, denied)
         candidate, decision, reason = self._candidate(capability_id, context)
         if candidate is None:
+            if definition.capability_class == "unavailable":
+                reason = "capability is registered but its adapter is not activated"
             return CapabilityResolution(definition, decision, False, reason)
         binding = candidate if isinstance(candidate, CapabilityBinding) else CapabilityBinding(candidate, definition.binding_kind)
         cache_key = self._cache_key(capability_id, binding, definition)
@@ -251,10 +259,20 @@ def instrument_tool(tool: Any, definition: CapabilityDefinition, context: Mappin
 
 
 DEFAULT_CAPABILITIES = {
-    "graph_context": CapabilityDefinition("graph_context", "local_deterministic", "read", "RUN", 1),
-    "calculation": CapabilityDefinition("calculation", "local_deterministic", "read", "RUN", 1),
-    "domain_validation": CapabilityDefinition("domain_validation", "local_deterministic", "read", "RUN", 1),
-    "web_search": CapabilityDefinition("web_search", "external_read", "read", "RUN", 3),
+    "web_search": CapabilityDefinition("web_search", "external_read", "read", "RUN", 3, data_scope="public"),
+    "page_retrieval": CapabilityDefinition("page_retrieval", "external_read", "read", "RUN", 2, data_scope="public"),
+    "web_crawl": CapabilityDefinition("web_crawl", "external_read", "read", "RUN", 1, data_scope="public"),
+    "technology_signals": CapabilityDefinition("technology_signals", "external_read", "read", "RUN", 1, data_scope="public"),
+    "market_signals": CapabilityDefinition("market_signals", "external_read", "read", "RUN", 1, data_scope="public"),
+    "macro_signals": CapabilityDefinition("macro_signals", "external_read", "read", "RUN", 1, data_scope="public"),
+    "spreadsheet_read": CapabilityDefinition("spreadsheet_read", "local_deterministic", "read", "RUN", 1, data_scope="local"),
+    "data_analysis": CapabilityDefinition("data_analysis", "local_deterministic", "read", "RUN", 1, data_scope="local"),
+    "calculation": CapabilityDefinition("calculation", "local_deterministic", "read", "RUN", 1, data_scope="local"),
+    "graph_context": CapabilityDefinition("graph_context", "local_deterministic", "read", "RUN", 1, data_scope="local"),
+    "domain_validation": CapabilityDefinition("domain_validation", "local_deterministic", "read", "RUN", 1, data_scope="local"),
+    "document_read": CapabilityDefinition("document_read", "unavailable", "read", "RUN", 1, data_scope="local"),
+    "internal_knowledge": CapabilityDefinition("internal_knowledge", "unavailable", "read", "RUN", 1, data_scope="internal"),
+    "artifact_generation": CapabilityDefinition("artifact_generation", "unavailable", "write", "RUN", 1, "HUMAN", data_scope="local"),
     "external_mutation": CapabilityDefinition("external_mutation", "external_mutation", "write", "RUN", 1, "HUMAN"),
 }
 

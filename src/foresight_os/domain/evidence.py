@@ -1,9 +1,13 @@
 from .models import Evidence, EvidenceCandidate, SourceLocator
-from .validation import validate_evidence_candidate
+from .validation import ValidationError, validate_evidence_candidate
 
 
 def normalize_evidence_candidate(candidate: EvidenceCandidate | dict) -> Evidence:
     value = validate_evidence_candidate(candidate)
+    if value.acquisition_kind in {"web_search", "page_retrieval", "web_crawl"}:
+        proof = value.retrieval_proof
+        if proof is None or not getattr(proof, "is_valid", lambda: False)():
+            raise ValidationError("external evidence candidates require adapter-issued retrieval proof")
     provenance = value.provenance
     return Evidence(
         id=value.candidate_id,

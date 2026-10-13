@@ -17,6 +17,12 @@ The current prototype provides:
   unavailable/approval results;
 - first-class `web_search` capability with provider adapters, public-scope
   authorization, typed evidence candidates, and sanitized provenance;
+- bounded `page_retrieval` with SSRF checks and adapter-issued retrieval proof;
+- deterministic Analyst toolbelt bindings for CSV/XLSX inspection, table
+  analysis, calculations, graph context, and domain validation;
+- mandatory multi-sheet XLSX release proof covering hidden content, formulas
+  versus cached values, dates/errors, merged headers, cross-sheet references,
+  provenance, scenarios, cancellation limits, and unchanged source bytes;
 - provenance-bearing `EvidenceCandidate` normalization before durable evidence;
 - dependency invalidation, fresh-process continuation, and stale-artifact
   protection;
@@ -30,10 +36,20 @@ and budgets but do not disable an implemented pattern. The configured custom
 
 The first-class `web_search` capability accepts a provider adapter through
 `FORESIGHT_WEB_SEARCH_URL` and optional `FORESIGHT_WEB_SEARCH_TOKEN`. The
-adapter accepts a JSON POST request with `query`, `max_results`, and optional
-`freshness`, and returns `{"results": [{"title", "url", "snippet"}]}`. Search
-results are normalized into sanitized `EvidenceCandidate` records before they
-can enter durable analysis state.
+default `json-post` provider accepts a JSON POST request with `query`,
+`max_results`, and optional `freshness`, and returns
+`{"results": [{"title", "url", "snippet"}]}`. A local SearXNG instance can be
+selected explicitly with `FORESIGHT_WEB_SEARCH_PROVIDER=searxng`; point the
+same URL at its base URL, such as `http://127.0.0.1:8888`, and optionally set
+`FORESIGHT_SEARXNG_CATEGORIES` or `FORESIGHT_SEARXNG_LANGUAGE`. Search results
+are discovery candidates only: a source must pass bounded
+`page_retrieval` and carry adapter-issued retrieval proof before it can enter
+durable analysis state. Source credibility remains a separate human decision.
+
+The semantic registry contains `web_search`, `page_retrieval`, `web_crawl`,
+`spreadsheet_read`, `data_analysis`, `calculation`, `graph_context`, and
+`domain_validation`, plus explicitly unavailable `document_read`,
+`internal_knowledge`, and `artifact_generation` follow-ups.
 
 Verification runs accept a disposable `--output-root`; preserved probe outputs
 under `work/` are not used as evaluation storage or rewritten by default.
@@ -47,3 +63,36 @@ hosted-web probe is a health check for the first-class `web_search` capability.
 Provider-backed search requires explicit environment configuration; unavailable
 external providers remain `BLOCKED_EXTERNAL` and are reported separately from
 implementation verification.
+
+## External Signal MCP Integrations
+
+Foresight exposes three hosted, read-only signal providers as MAF-agent tools
+through the vendor-neutral `technology_signals`, `market_signals`, and
+`macro_signals` capabilities. The controller never calls these providers
+directly. Credentials are read at run time and are never written to receipts.
+
+- **GitHub MCP** — technology, repository, ecosystem, and competitor signals;
+  configure `GITHUB_MCP_TOKEN` or use the local `gh` keyring only for a probe.
+- **Alpha Vantage MCP** — market and financial foresight; configure
+  `ALPHAVANTAGE_API_KEY`.
+- **FRED MCP Connector** — macroeconomic and quantitative foresight; configure
+  the OAuth bearer token in `FRED_MCP_TOKEN` plus a bounded read operation for
+  the live probe.
+
+Run `python evaluation/probes/run_external_signal_probe.py --output-root
+work/toolbelt-probes` to verify MAF injection, remote discovery, a bounded
+read-only call, result sanitization, and scope cleanup. Missing credentials are
+reported as `BLOCKED_EXTERNAL`; a successful transport with a public demo key
+is not considered production credential readiness.
+
+## MAF-Agent Web Crawling
+
+Crawl4AI is activated as the optional `web_crawl` capability for MAF agents. It
+provides bounded crawling for company reports, policy websites, and hard-to-extract
+pages. Crawl results pass public-destination validation, provenance normalization,
+read-only authorization, raw-payload stripping, and scope-owned cleanup before
+they can become durable evidence.
+External MCP results must enter the same sanitized evidence boundary as web
+search: no raw payloads in durable analysis state, explicit source identity,
+retrieval time, query provenance, read-only authorization, and independent
+`VERIFIED`/`BLOCKED_EXTERNAL`/`FAILED` receipts.

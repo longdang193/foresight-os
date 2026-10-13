@@ -1,4 +1,4 @@
-from foresight_os.domain.models import WorkBrief, WorkStage
+from foresight_os.domain.models import ResearchNeed, ResearchNeedKind, WorkBrief, WorkStage
 
 
 def create_work_brief(decision_question: str, investigation_id: str = "case-001") -> WorkBrief:
@@ -24,7 +24,10 @@ def create_work_brief(decision_question: str, investigation_id: str = "case-001"
                 participants=["reviewer"],
                 dependencies=["assess-capacity"],
                 expected_result="reviewed contradiction and evidence needs",
-                research_needs=["capacity expansion cost"],
+                research_needs=[
+                    ResearchNeed(ResearchNeedKind.EXTERNAL_FACT, "capacity expansion cost"),
+                    ResearchNeed(ResearchNeedKind.SOURCE_DETAIL, "source details for capacity expansion cost"),
+                ],
             ),
         ],
     )

@@ -48,12 +48,12 @@ async def _run_once(index: int) -> dict:
     }
 
 
-async def run_probe(runs: int, seed: str) -> dict:
+async def run_probe(runs: int, seed: str, warmup: int = 10) -> dict:
     import random
 
     random.seed(seed)
     tracemalloc.start()
-    for index in range(10):
+    for index in range(warmup):
         await _run_once(index)
     samples = []
     state_hashes = []
@@ -81,7 +81,7 @@ async def run_probe(runs: int, seed: str) -> dict:
         "status": "failed" if failures or len(set(state_hashes)) != 1 or monotonic_handles else "verified",
         "runs": runs,
         "seed": seed,
-        "warmup_runs": 10,
+        "warmup_runs": warmup,
         "state_hash_stable": len(set(state_hashes)) == 1,
         "monotonic_handle_accumulation": monotonic_handles,
         "memory_min": min(memory_values) if memory_values else None,
@@ -97,8 +97,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--runs", type=int, default=100)
     parser.add_argument("--seed", default="846f4ed")
+    parser.add_argument("--warmup", type=int, default=10)
     args = parser.parse_args()
-    report = asyncio.run(run_probe(args.runs, args.seed))
+    report = asyncio.run(run_probe(args.runs, args.seed, args.warmup))
     print(json.dumps(report, sort_keys=True))
     return 0 if report["status"] == "verified" else 1
 
