@@ -100,4 +100,16 @@ external payloads are not durable evidence.
 
 `run_selective_reuse_probe.py` validates fresh-process reuse and sidecar receipt provenance. `run_strategic_exercise.py` stages participant-visible workbooks without the validator key and proves filesystem scope denial. `run_clean_wheel_smoke.py` builds and installs only the new wheel in a disposable environment outside the repository tree.
 
+`run_full_pipeline_exercise.py` verifies the complete local XLSX path across the
+five participant workbooks. It copies participant inputs into an allowlisted
+scope, selects a numeric table column, runs the finding workflow with explicit
+acceptance, reloads the committed state in a fresh store, and requires one
+accepted `CURRENT` `FindingView` plus a persisted review record per workbook.
+It also verifies source hashes remain unchanged and the validator workbook is
+denied by the participant scope:
+
+```text
+python evaluation/probes/run_full_pipeline_exercise.py --exercise-root data/exercise --output-root work/closure-full-pipeline-20261013-r3
+```
+
 The optimization contract keeps blocking XLSX work off the event loop, shares run-scoped capacity and cancellation settlement, keeps provider construction selective, and uses public Agent Framework function middleware for native MCP invocations. XLSX cache entries are immutable and run-local; keys include canonical source identity, digest, selection, and effective limits. Browser controls retain certificate verification, redirect/DNS validation, WebSocket interception, and service-worker blocking.

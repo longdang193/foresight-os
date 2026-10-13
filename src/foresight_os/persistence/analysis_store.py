@@ -195,7 +195,7 @@ class AnalysisStore:
                 self.pending_analysis_path.unlink(missing_ok=True)
                 return current
             status = RevisionStatus.ACCEPTED if accepted else RevisionStatus.REJECTED
-            committed = replace(pending or state, revision_status=status, pending_token=None)
+            committed = replace(state, revision_status=status, pending_token=None)
             if pending is not None and current is not None and accepted:
                 committed = self._merge_states(current, committed)
             elif current is not None and current.revision_status != RevisionStatus.PENDING_REVIEW and committed.revision <= current.revision:

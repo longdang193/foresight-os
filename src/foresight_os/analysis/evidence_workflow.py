@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
 from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_reasoning
 from foresight_os.domain.evidence import normalize_evidence_candidate
+from foresight_os.domain.challenge import ReviewOutcome, ReviewRecord, build_material_fingerprint
 from foresight_os.domain.models import (
     AnalysisState,
     AnalyticalRecord,
@@ -34,6 +35,24 @@ from foresight_os.runtime.local_toolbelt import (
     spreadsheet_read,
 )
 
+
+def _with_review_record(state: AnalysisState, review: ReviewResult, review_id: str) -> AnalysisState:
+    target_ids = tuple(item.id for collection in (state.claims, state.implications, state.recommendations) for item in collection)
+    record = ReviewRecord(
+        review_id=review_id,
+        target_ids=target_ids,
+        reviewed_state_revision=state.revision,
+        input_fingerprint=build_material_fingerprint(state, target_ids),
+        skill_ids=review.skill_ids,
+        skill_versions=review.skill_versions,
+        objections=review.objections,
+        outcome=review.outcome,
+        unresolved_issues=tuple(review.issues),
+        policy_id=review.policy_id,
+        policy_version=review.policy_version,
+        skill_hashes=review.skill_hashes,
+    )
+    return replace(state, review_records=[*state.review_records, record])
 
 @dataclass(frozen=True)
 class EvidenceWorkflowResult:
@@ -103,7 +122,8 @@ async def run_evidence_workflow(
         if not review.accepted or human_decision.upper() != "ACCEPT":
             rejected = store.commit_revision(pending, expected_revision=pending.revision, accepted=False)
             return EvidenceWorkflowResult("rejected", candidates, evidence.source_locator.file_version, evidence, claim, review, rejected, tuple(tools), "explicit acceptance was not granted")
-        committed = store.commit_revision(pending, expected_revision=pending.revision, accepted=True)
+        reviewed = _with_review_record(pending, review, f"review-{pending.investigation_id}-{pending.revision}")
+        committed = store.commit_revision(reviewed, expected_revision=reviewed.revision, accepted=True)
         return EvidenceWorkflowResult("accepted", candidates, evidence.source_locator.file_version, evidence, claim, review, committed, tuple(tools))
     except Exception as error:
         return EvidenceWorkflowResult("failed", tuple(), None, None, None, None, None, tuple(tools), type(error).__name__)
@@ -119,7 +139,8 @@ def accept_pending_evidence(store: AnalysisStore, *, human_decision: str, source
     if human_decision != "ACCEPT" or not review.accepted:
         committed = store.commit_revision(state, expected_revision=state.revision, accepted=False)
         return EvidenceWorkflowResult("rejected", tuple(), None, state.evidence[0] if state.evidence else None, state.claims[0] if state.claims else None, review, committed, tuple(), "explicit acceptance was not granted")
-    committed = store.commit_revision(state, expected_revision=state.revision, accepted=True)
+    reviewed = _with_review_record(state, review, f"review-{state.investigation_id}-{state.revision}")
+    committed = store.commit_revision(reviewed, expected_revision=reviewed.revision, accepted=True)
     return EvidenceWorkflowResult("accepted", tuple(), None, state.evidence[0] if state.evidence else None, state.claims[0] if state.claims else None, review, committed, tuple())
 
 
@@ -141,6 +162,16 @@ def run_xlsx_finding_workflow(
         if not workbook.tables:
             raise ToolbeltError("workbook selection produced no table")
         table = workbook.tables[0]
+        if selection is not None and selection.tables:
+            requested = set(selection.tables)
+            table = next((candidate for candidate in workbook.tables if (candidate.sheet, candidate.name) in requested), None)
+            if table is None:
+                raise ToolbeltError("selected table was not found in workbook")
+        elif selection is not None and selection.ranges:
+            requested = set(selection.ranges)
+            table = next((candidate for candidate in workbook.tables if (candidate.sheet, candidate.source_range) in requested), None)
+            if table is None:
+                raise ToolbeltError("selected range was not found in workbook")
         result = data_analysis(table, operation)
         measurements = {(item.provenance.sheet, item.provenance.coordinate): item for item in workbook.measurements}
         evidence: list[Evidence] = []
@@ -205,7 +236,8 @@ def run_xlsx_finding_workflow(
         if human_decision.upper() != "ACCEPT" or not review.accepted:
             rejected = store.commit_revision(pending, expected_revision=pending.revision, accepted=False)
             return EvidenceWorkflowResult("rejected", tuple(), table.sheet, evidence[0], claim, review, rejected, ("spreadsheet_read", "data_analysis"), "explicit acceptance was not granted")
-        committed = store.commit_revision(pending, expected_revision=pending.revision, accepted=True)
+        reviewed = _with_review_record(pending, review, f"review-{pending.investigation_id}-{pending.revision}")
+        committed = store.commit_revision(reviewed, expected_revision=reviewed.revision, accepted=True)
         return EvidenceWorkflowResult("accepted", tuple(), table.sheet, evidence[0], claim, review, committed, ("spreadsheet_read", "data_analysis"))
     except Exception as error:
         return EvidenceWorkflowResult("failed", tuple(), None, None, None, None, None, ("spreadsheet_read", "data_analysis"), type(error).__name__)

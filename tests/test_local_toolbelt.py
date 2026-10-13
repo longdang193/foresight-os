@@ -294,3 +294,20 @@ def test_calculation_provenance_qualifies_workbook_sheet_and_coordinate(workbook
     record = calculation([demand_value, assumption_value], __import__("foresight_os.runtime.local_toolbelt", fromlist=["FormulaSpec"]).FormulaSpec("Demand!C3 + Assumptions!B2"), __import__("foresight_os.runtime.local_toolbelt", fromlist=["UnitSpec"]).UnitSpec("units"))
     assert any(":Demand!C3" in locator for locator in record.source_locators)
     assert any(":Assumptions!B2" in locator for locator in record.source_locators)
+
+def test_xlsx_reader_skips_blank_and_title_rows_before_data_header(tmp_path):
+    source = tmp_path / "titled-range.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Data"
+    sheet.append([None, None, None])
+    sheet.append(["Portfolio Data", None, None])
+    sheet.append(["Region", "Value", "Unit"])
+    sheet.append(["North", 10, "EUR"])
+    sheet.append(["South", 20, "EUR"])
+    workbook.save(source)
+
+    table = spreadsheet_read(source).tables[0]
+
+    assert table.columns == ("Region", "Value", "Unit")
+    assert table.rows == (("North", 10, "EUR"), ("South", 20, "EUR"))
