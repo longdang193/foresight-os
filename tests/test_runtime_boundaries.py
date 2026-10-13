@@ -132,3 +132,19 @@ def test_tool_semaphore_enforces_declared_parallelism():
     asyncio.run(run_both())
 
     assert peak == 1
+
+
+def test_mcp_tool_calls_are_instrumented_through_maf_boundary():
+    calls = []
+
+    class MCPTool:
+        async def call_tool(self, name, **kwargs):
+            calls.append((name, kwargs))
+            return "ok"
+
+    metrics = RunMetrics("mcp-tool", "DIRECT", "direct")
+    wrapped = instrument_tool(MCPTool(), CapabilityDefinition("mcp", "external_read"), {"metrics": metrics})
+    assert asyncio.run(wrapped.call_tool("read", query="capacity")) == "ok"
+    assert calls == [("read", {"query": "capacity"})]
+    assert metrics.tool_calls == 1
+    assert metrics.tool_failures == 0

@@ -1,15 +1,17 @@
 import asyncio
+import http.client
 import hashlib
 import ipaddress
 import re
 import socket
+import ssl
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlsplit
-from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+from urllib.request import HTTPHandler, HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Request, build_opener
 
 from foresight_os.domain.models import EvidenceCandidate
 from foresight_os.domain.validation import ValidationError, validate_evidence_candidate
@@ -48,10 +50,11 @@ class SourceRetrievalProof:
     final_url: str
     retrieved_at: str
     content_hash: str
+    excerpt_hash: str
     _issuer: object
 
     def is_valid(self) -> bool:
-        return self._issuer is _PROOF_ISSUER and all((self.original_url, self.final_url, self.retrieved_at, self.content_hash))
+        return self._issuer is _PROOF_ISSUER and all((self.original_url, self.final_url, self.retrieved_at, self.content_hash, self.excerpt_hash))
 
 
 _PROOF_ISSUER = object()
@@ -63,11 +66,54 @@ class _NoRedirectHandler(HTTPRedirectHandler):
         return None
 
 
+def _hostname_from_connection_host(host: str) -> str:
+    return (urlsplit(f"//{host}").hostname or host).lower().rstrip(".")
+
+
+def _pinned_connection_classes(pins: dict[str, str]):
+    class PinnedHTTPConnection(http.client.HTTPConnection):
+        def connect(self):
+            target = pins.get(_hostname_from_connection_host(self.host), self.host)
+            self.sock = socket.create_connection((target, self.port), self.timeout, self.source_address)
+            if self._tunnel_host:
+                self._tunnel()
+
+    class PinnedHTTPSConnection(http.client.HTTPSConnection):
+        def connect(self):
+            target = pins.get(_hostname_from_connection_host(self.host), self.host)
+            self.sock = socket.create_connection((target, self.port), self.timeout, self.source_address)
+            if self._tunnel_host:
+                self._tunnel()
+            self.sock = self._context.wrap_socket(self.sock, server_hostname=self._tunnel_host or self.host)
+
+    return PinnedHTTPConnection, PinnedHTTPSConnection
+
+
+class _PinnedHTTPHandler(HTTPHandler):
+    def __init__(self, pins: dict[str, str]):
+        super().__init__()
+        self._pins = pins
+
+    def http_open(self, request):
+        http_class, _ = _pinned_connection_classes(self._pins)
+        return self.do_open(http_class, request)
+
+
+class _PinnedHTTPSHandler(HTTPSHandler):
+    def __init__(self, pins: dict[str, str]):
+        super().__init__()
+        self._pins = pins
+
+    def https_open(self, request):
+        _, https_class = _pinned_connection_classes(self._pins)
+        return self.do_open(https_class, request, context=ssl.create_default_context())
+
+
 def _is_fixture_host(hostname: str, fixture_hosts: set[str]) -> bool:
     return hostname.lower().rstrip(".") in {item.lower().rstrip(".") for item in fixture_hosts}
 
 
-def validate_destination(url: str, fixture_hosts: set[str]) -> None:
+def validate_destination(url: str, fixture_hosts: set[str]) -> tuple[str, ...]:
     parsed = urlsplit(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise PageRetrievalError("invalid_url", "page retrieval accepts only HTTP(S) URLs")
@@ -75,7 +121,7 @@ def validate_destination(url: str, fixture_hosts: set[str]) -> None:
         raise PageRetrievalError("unsafe_url", "page retrieval rejects URL credentials")
     hostname = parsed.hostname
     if _is_fixture_host(hostname, fixture_hosts):
-        return
+        return ()
     try:
         addresses = {info[4][0] for info in socket.getaddrinfo(hostname, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)}
     except OSError as error:
@@ -84,6 +130,7 @@ def validate_destination(url: str, fixture_hosts: set[str]) -> None:
         ip = ipaddress.ip_address(address)
         if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or not ip.is_global:
             raise PageRetrievalError("blocked_network_target", "page retrieval rejected a non-public network target")
+    return tuple(sorted(addresses))
 
 
 class PageRetrievalCapability:
@@ -99,9 +146,18 @@ class PageRetrievalCapability:
     def _fetch(self, url: str) -> tuple[str, str, bytes, str]:
         original = url
         current = url
-        opener = build_opener(ProxyHandler({}), _NoRedirectHandler())
+        pins: dict[str, str] = {}
+        opener = build_opener(
+            ProxyHandler({}),
+            _NoRedirectHandler(),
+            _PinnedHTTPHandler(pins),
+            _PinnedHTTPSHandler(pins),
+        )
         for _ in range(self.max_redirects + 1):
-            validate_destination(current, self.fixture_hosts)
+            parsed = urlsplit(current)
+            addresses = validate_destination(current, self.fixture_hosts)
+            if addresses:
+                pins[parsed.hostname.lower().rstrip(".")] = addresses[0]
             request = Request(current, headers={"User-Agent": "foresight-os/page-retrieval"})
             try:
                 with opener.open(request, timeout=self.timeout_seconds) as response:
@@ -153,14 +209,15 @@ class PageRetrievalCapability:
         if any(marker in text.lower() for marker in _AUTHORITY_MARKERS):
             raise PageRetrievalError("authority_altering_content", "retrieved content attempted to alter runtime authority")
         retrieved_at = datetime.now(timezone.utc).isoformat()
-        proof = SourceRetrievalProof(original_url, final_url, retrieved_at, hashlib.sha256(body).hexdigest(), _PROOF_ISSUER)
+        excerpt = text[:4000]
+        proof = SourceRetrievalProof(original_url, final_url, retrieved_at, hashlib.sha256(body).hexdigest(), hashlib.sha256(excerpt.encode("utf-8")).hexdigest(), _PROOF_ISSUER)
         candidate_id = "page-" + hashlib.sha256(f"{final_url}\n{proof.content_hash}".encode()).hexdigest()[:16]
         result = validate_evidence_candidate({
             "candidate_id": candidate_id,
             "capability_id": self.capability_id,
             "source": final_url,
             "request": request or final_url,
-            "excerpt": text[:4000],
+            "excerpt": excerpt,
             "provenance": {
                 "url": final_url,
                 "source_version": proof.content_hash,
@@ -182,4 +239,3 @@ class PageRetrievalCapability:
 def bind_page_retrieval(capability: PageRetrievalCapability):
     from foresight_os.runtime.capabilities import CapabilityBinding, CapabilityBindingKind, CapabilityOwnership
     return CapabilityBinding(capability, kind=CapabilityBindingKind.TOOL, ownership=CapabilityOwnership.BORROWED, fingerprint=capability.fingerprint)
-

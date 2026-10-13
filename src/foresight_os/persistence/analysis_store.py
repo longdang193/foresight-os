@@ -40,6 +40,10 @@ class AnalysisStore:
         return self.root / "analysis.json"
 
     @property
+    def pending_analysis_path(self) -> Path:
+        return self.root / "analysis.pending.json"
+
+    @property
     def lock_path(self) -> Path:
         return self.root / ".analysis.lock"
 
@@ -63,31 +67,59 @@ class AnalysisStore:
 
     def commit_revision(self, state: AnalysisState, expected_revision: int, accepted: bool) -> AnalysisState:
         with FileLock(str(self.lock_path)):
-            current = self.load_analysis() if self.analysis_path.exists() else None
-            if current is not None and current.revision != expected_revision:
+            current = self._load_path(self.analysis_path) if self.analysis_path.exists() else None
+            sidecar_pending = self.pending_analysis_path.exists()
+            if sidecar_pending and state.revision != expected_revision:
+                raise ValueError(f"stale pending revision: expected {expected_revision}, pending {state.revision}")
+            if not sidecar_pending and current is not None and current.revision != expected_revision:
                 raise ValueError(f"stale revision: expected {expected_revision}, current {current.revision}")
+            if sidecar_pending and current is not None and not accepted:
+                self.pending_analysis_path.unlink(missing_ok=True)
+                return current
             status = RevisionStatus.ACCEPTED if accepted else RevisionStatus.REJECTED
             committed = replace(state, revision_status=status)
-            if current is not None and committed.revision <= current.revision and current.revision_status != RevisionStatus.PENDING_REVIEW:
+            if sidecar_pending and current is not None and accepted:
+                committed = self._merge_states(current, committed)
+            elif current is not None and current.revision_status != RevisionStatus.PENDING_REVIEW and committed.revision <= current.revision:
                 number = current.revision + 1
                 revision = Revision(
                     f"revision-{number}",
                     number,
-                    "accepted mutation",
-                    [item.id for collection in [committed.evidence, committed.claims, committed.implications, committed.recommendations, committed.artifacts] for item in collection],
+                    "accepted mutation" if accepted else "rejected mutation",
+                    [item.id for collection in [committed.evidence, committed.claims, committed.implications, committed.recommendations, committed.artifacts] for item in collection] + [item.id for item in committed.calculations],
                 )
                 committed = replace(committed, revision=number, revisions=[*current.revisions, revision])
             self._write_validated(validate_analysis(committed))
+            self.pending_analysis_path.unlink(missing_ok=True)
             return committed
 
     def save_pending(self, state: AnalysisState) -> AnalysisState:
         pending = replace(state, revision_status=RevisionStatus.PENDING_REVIEW)
         with FileLock(str(self.lock_path)):
-            self._write_validated(validate_analysis(pending))
+            current = self.load_analysis() if self.analysis_path.exists() else None
+            if current is not None and current.revision_status != RevisionStatus.PENDING_REVIEW:
+                number = current.revision + 1
+                revision = Revision(
+                    f"revision-{number}",
+                    number,
+                    "pending mutation",
+                    [item.id for collection in [pending.evidence, pending.claims, pending.implications, pending.recommendations, pending.artifacts] for item in collection] + [item.id for item in pending.calculations],
+                )
+                pending = replace(pending, revision=number, revisions=[*current.revisions, revision])
+                self._write_validated(validate_analysis(pending), self.pending_analysis_path)
+            else:
+                self._write_validated(validate_analysis(pending))
         return pending
 
+    def load_pending(self) -> AnalysisState:
+        return self.load_analysis()
+
     def load_analysis(self) -> AnalysisState:
-        value = migrate_analysis_dict(json.loads(self.analysis_path.read_text(encoding="utf-8")))
+        path = self.pending_analysis_path if self.pending_analysis_path.exists() else self.analysis_path
+        return self._load_path(path)
+
+    def _load_path(self, path: Path) -> AnalysisState:
+        value = migrate_analysis_dict(json.loads(path.read_text(encoding="utf-8")))
         value = validate_analysis(value)
         evidence = [
             Evidence(
@@ -150,8 +182,32 @@ class AnalysisStore:
             calculations=calculations,
         )
 
-    def _write_validated(self, value: dict) -> None:
-        self._atomic_write(self.analysis_path, json.dumps(value, indent=2) + "\n")
+    def _write_validated(self, value: dict, path: Path | None = None) -> None:
+        self._atomic_write(path or self.analysis_path, json.dumps(value, indent=2) + "\n")
+
+    @staticmethod
+    def _merge_states(current: AnalysisState, pending: AnalysisState) -> AnalysisState:
+        def merge(items):
+            result = list(items[0])
+            seen = {item.id for item in result}
+            for collection in items[1:]:
+                for item in collection:
+                    if item.id not in seen:
+                        result.append(item)
+                        seen.add(item.id)
+            return result
+
+        return replace(
+            pending,
+            evidence=merge((current.evidence, pending.evidence)),
+            claims=merge((current.claims, pending.claims)),
+            implications=merge((current.implications, pending.implications)),
+            recommendations=merge((current.recommendations, pending.recommendations)),
+            artifacts=merge((current.artifacts, pending.artifacts)),
+            relationships=merge((current.relationships, pending.relationships)),
+            calculations=merge((current.calculations, pending.calculations)),
+            invalidation=current.invalidation,
+        )
 
     @staticmethod
     def _atomic_write(path: Path, content: str) -> None:

@@ -64,7 +64,7 @@ The case is synthetic and contains no customer data or external dependencies.
   `ALPHAVANTAGE_API_KEY`, and `FRED_MCP_TOKEN`. For local smoke testing only,
   `FORESIGHT_ALLOW_ALPHA_DEMO=1` enables Alpha Vantage's public demo credential;
   that receipt is explicitly marked non-production-ready. FRED's OAuth-protected
-  endpoint also requires `FRED_MCP_READ_TOOL` and
+  endpoint also requires the explicit read-only allowlist `FRED_MCP_READ_TOOL` and
   `FRED_MCP_READ_ARGS_JSON` for a safe operation probe.
 - A local SearXNG adapter is available through the same capability boundary:
   set `FORESIGHT_WEB_SEARCH_PROVIDER=searxng` and point
@@ -75,7 +75,8 @@ The case is synthetic and contains no customer data or external dependencies.
 - Real MCP and provider-backed web search require environment-gated adapters.
   Missing approved configuration is reported as `BLOCKED_EXTERNAL`, never as a
   passing fake result.
-- XLSX inspection is a release requirement, not an optional probe. The fixed
+- CSV and XLSX inspection are release capabilities; XLSX inspection is a release
+  requirement, not an optional probe. The fixed
   multi-sheet fixture proves sheet/row visibility, table and range selection,
   merged headers, dates, types, errors, formulas versus cached values,
   cross-sheet references, duplicate/null/scenario analysis, cell/range

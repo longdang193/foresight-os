@@ -72,3 +72,15 @@ def test_unknown_provider_is_rejected():
         assert getattr(error, "failure_class", None) == "configuration"
     else:
         raise AssertionError("unknown provider should fail")
+
+
+def test_fred_requires_explicit_read_only_allowlist():
+    try:
+        bind_hosted_mcp("fred", "token", tool_factory=FakeMCPTool)
+    except Exception as error:
+        assert getattr(error, "failure_class", None) == "read_policy_missing"
+    else:
+        raise AssertionError("FRED should require a read-only allowlist")
+
+    binding = bind_hosted_mcp("fred", "token", tool_factory=FakeMCPTool, allowed_tools=("series_observations",))
+    assert binding.value.kwargs["allowed_tools"] == ("series_observations",)

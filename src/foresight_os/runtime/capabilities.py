@@ -218,13 +218,10 @@ class CapabilityResolver:
         return None
 
 
-def instrument_tool(tool: Any, definition: CapabilityDefinition, context: Mapping[str, Any]) -> Any:
-    if not callable(tool) or getattr(tool, "__foresight_instrumented__", False):
-        return tool
+def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, context: Mapping[str, Any]):
     semaphores = context.setdefault("_capability_semaphores", {})  # type: ignore[attr-defined]
     semaphore = semaphores.setdefault(definition.id, asyncio.Semaphore(max(1, definition.max_parallelism)))
 
-    @functools.wraps(tool)
     async def invoke(*args: Any, **kwargs: Any) -> Any:
         from foresight_os.runtime.metrics import BudgetExceededError, FailureClass
 
@@ -237,7 +234,7 @@ def instrument_tool(tool: Any, definition: CapabilityDefinition, context: Mappin
             async with semaphore:
                 if metrics is not None:
                     metrics.tool_calls += 1
-                result = tool(*args, **kwargs)
+                result = dispatch(*args, **kwargs)
                 if inspect.isawaitable(result):
                     result = await result
                 return result
@@ -252,6 +249,41 @@ def instrument_tool(tool: Any, definition: CapabilityDefinition, context: Mappin
         finally:
             if metrics is not None:
                 metrics.tool_latency_ms += round((time.perf_counter() - started) * 1000)
+
+    return invoke
+
+
+class _InstrumentedMCPTool:
+    def __init__(self, tool: Any, call_tool: Any):
+        self._tool = tool
+        self._call_tool = call_tool
+        self.__foresight_instrumented__ = True
+        self.capability_id = ""
+
+    async def call_tool(self, tool_name: str, **kwargs: Any) -> Any:
+        return await self._call_tool(tool_name, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._tool, name)
+
+
+def instrument_tool(tool: Any, definition: CapabilityDefinition, context: Mapping[str, Any]) -> Any:
+    if getattr(tool, "__foresight_instrumented__", False):
+        return tool
+
+    mcp_call = getattr(tool, "call_tool", None)
+    if callable(mcp_call) and not callable(tool):
+        wrapped = _InstrumentedMCPTool(tool, _instrumented_dispatch(mcp_call, definition, context))
+        wrapped.capability_id = definition.id
+        return wrapped
+    if not callable(tool):
+        return tool
+
+    dispatch = _instrumented_dispatch(tool, definition, context)
+
+    @functools.wraps(tool)
+    async def invoke(*args: Any, **kwargs: Any) -> Any:
+        return await dispatch(*args, **kwargs)
 
     setattr(invoke, "__foresight_instrumented__", True)
     setattr(invoke, "capability_id", definition.id)

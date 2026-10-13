@@ -1,4 +1,5 @@
 import hashlib
+import re
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -10,6 +11,7 @@ from foresight_os.runtime.local_toolbelt import (
     AnalysisOperation,
     FormulaStatus,
     SheetSelection,
+    ToolbeltLimits,
     ToolbeltError,
     calculation,
     data_analysis,
@@ -96,9 +98,11 @@ def test_formula_cache_and_manual_recalculation_state_are_truthful(workbook_path
     with zipfile.ZipFile(cached_path, "r") as archive:
         entries = {name: archive.read(name) for name in archive.namelist()}
     sheet = entries["xl/worksheets/sheet1.xml"].decode("utf-8")
-    sheet = sheet.replace('<c r="E3"><f>Assumptions!B2*C3</f><v></v></c>', '<c r="E3"><f>Assumptions!B2*C3</f><v>10</v></c>')
+    sheet, replacements = re.subn(r'(<c[^>]*\br="E3"[^>]*>.*?<f>Assumptions!B2\*C3</f>.*?<v>).*?(</v>)', r'\g<1>10\g<2>', sheet, count=1, flags=re.DOTALL)
+    assert replacements == 1
     entries["xl/worksheets/sheet1.xml"] = sheet.encode("utf-8")
-    workbook_xml = entries["xl/workbook.xml"].decode("utf-8").replace('<calcPr calcId="124519"/>', '<calcPr calcId="124519" calcMode="manual"/>')
+    workbook_xml, replacements = re.subn(r'<calcPr([^>]*)/>', r'<calcPr\1 calcMode="manual"/>', entries["xl/workbook.xml"].decode("utf-8"), count=1)
+    assert replacements == 1
     entries["xl/workbook.xml"] = workbook_xml.encode("utf-8")
     with zipfile.ZipFile(cached_path, "w") as archive:
         for name, content in entries.items():
@@ -125,3 +129,19 @@ def test_spreadsheet_and_analysis_honor_cancellation_checkpoints(workbook_path):
     result = spreadsheet_read(workbook_path, SheetSelection(tables=(("Demand", "DemandTable"),)))
     with pytest.raises(ToolbeltError, match="cancelled"):
         data_analysis(result.tables[0], AnalysisOperation("duplicates"), cancel_check=cancelled)
+
+
+def test_csv_read_is_supported_with_typed_values_and_provenance(tmp_path):
+    source = tmp_path / "signals.csv"
+    source.write_text("Region,Value\nNorth,10\nSouth,20\n", encoding="utf-8")
+    result = spreadsheet_read(source)
+    table = result.tables[0]
+    assert table.columns == ("Region", "Value")
+    assert table.rows == (("North", 10), ("South", 20))
+    assert result.measurements[1].provenance.sheet == "signals"
+    assert data_analysis(table, AnalysisOperation("sum", value_column="Value")).rows[0]["sum"] == 30.0
+
+
+def test_xlsx_expanded_archive_limit_is_checked_before_loading(workbook_path):
+    with pytest.raises(ToolbeltError, match="expanded content"):
+        spreadsheet_read(workbook_path, limits=ToolbeltLimits(max_expanded_bytes=1))

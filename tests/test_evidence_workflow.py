@@ -66,6 +66,15 @@ def test_evidence_workflow_requires_explicit_acceptance_and_supports_restart(tmp
         resumed = accept_pending_evidence(pending_store, human_decision="ACCEPT")
         assert resumed.status == "accepted"
         assert provider.calls == 1
+
+        preserved_store = AnalysisStore(tmp_path / "preserved")
+        accepted = asyncio.run(run_evidence_workflow(preserved_store, "capacity expansion cost", _Provider(url), retrieval=PageRetrievalCapability(fixture_hosts={"127.0.0.1"}), human_decision="ACCEPT"))
+        rejected = asyncio.run(run_evidence_workflow(preserved_store, "capacity expansion cost", _Provider(url), retrieval=PageRetrievalCapability(fixture_hosts={"127.0.0.1"})))
+        assert accepted.status == "accepted"
+        assert rejected.status == "rejected"
+        assert preserved_store.analysis_path.exists()
+        assert preserved_store.load_analysis().revision_status.value == "ACCEPTED"
+        assert preserved_store.load_analysis().evidence[0].id == accepted.analysis.evidence[0].id
     finally:
         server.shutdown()
         thread.join(timeout=2)

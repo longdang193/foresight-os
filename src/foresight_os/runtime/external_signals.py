@@ -95,6 +95,7 @@ def create_hosted_mcp_tool(
     *,
     endpoint: str | None = None,
     tool_factory: Any | None = None,
+    allowed_tools: tuple[str, ...] | None = None,
 ) -> Any:
     provider = HOSTED_MCP_PROVIDERS.get(provider_id)
     if provider is None:
@@ -116,6 +117,9 @@ def create_hosted_mcp_tool(
         target = _alpha_endpoint(target, credential)
     else:
         raise HostedMCPError("configuration", f"unsupported auth mode: {provider.auth_mode}")
+    effective_allowed_tools = allowed_tools or provider.allowed_tools
+    if provider_id == "fred" and not effective_allowed_tools:
+        raise HostedMCPError("read_policy_missing", "FRED MCP requires an explicit read-only tool allowlist")
     kwargs: dict[str, Any] = {
         "name": f"foresight-{provider.provider_id}",
         "url": target,
@@ -123,8 +127,8 @@ def create_hosted_mcp_tool(
         "approval_mode": "never_require",
         "terminate_on_close": False,
     }
-    if provider.allowed_tools is not None:
-        kwargs["allowed_tools"] = provider.allowed_tools
+    if effective_allowed_tools is not None:
+        kwargs["allowed_tools"] = effective_allowed_tools
     if static_headers:
         kwargs["static_headers"] = static_headers
     return tool_factory(**kwargs)
@@ -142,7 +146,12 @@ def load_hosted_mcp_bindings(
         if not credential:
             continue
         endpoint = str(values.get(f"FORESIGHT_{provider_id.upper()}_MCP_URL", provider.endpoint)).strip()
-        tool = create_hosted_mcp_tool(provider_id, credential, endpoint=endpoint, tool_factory=tool_factory)
+        allowed_tools = None
+        if provider_id == "fred":
+            read_tool = str(values.get("FRED_MCP_READ_TOOL", "")).strip()
+            if read_tool:
+                allowed_tools = (read_tool,)
+        tool = create_hosted_mcp_tool(provider_id, credential, endpoint=endpoint, tool_factory=tool_factory, allowed_tools=allowed_tools)
         bindings[provider.capability_id] = CapabilityBinding(
             tool,
             ownership=CapabilityOwnership.OWNED,
@@ -156,7 +165,13 @@ def bind_hosted_mcp(provider_id: str, credential: str, **kwargs: Any) -> Capabil
     if provider is None:
         raise HostedMCPError("configuration", f"unknown hosted MCP provider: {provider_id}")
     endpoint = str(kwargs.get("endpoint") or provider.endpoint)
-    tool = create_hosted_mcp_tool(provider_id, credential, tool_factory=kwargs.get("tool_factory"), endpoint=endpoint)
+    tool = create_hosted_mcp_tool(
+        provider_id,
+        credential,
+        tool_factory=kwargs.get("tool_factory"),
+        endpoint=endpoint,
+        allowed_tools=kwargs.get("allowed_tools"),
+    )
     return CapabilityBinding(
         tool,
         ownership=CapabilityOwnership.OWNED,

@@ -74,13 +74,27 @@ async def _probe(provider_id: str) -> dict[str, object]:
     scope = CapabilityScope()
     captured: dict[str, object] = {}
 
+    class ProbeAgent:
+        def __init__(self, tools):
+            self.id = "analyst"
+            self.tools = tools
+
+        async def run(self, prompt: str):
+            if not self.tools:
+                raise RuntimeError("MAF agent received no tools")
+            return await self.tools[0].call_tool(tool_name, **arguments)
+
     class Client:
         def as_agent(self, **kwargs):
             captured.update(kwargs)
-            return type("Agent", (), {"id": kwargs["id"]})()
+            agent = ProbeAgent(kwargs.get("tools", ()))
+            captured["agent"] = agent
+            return agent
 
     started = time.perf_counter()
-    binding = bind_hosted_mcp(provider_id, credential)
+    binding = bind_hosted_mcp(provider_id, credential, allowed_tools=(tool_name,) if provider_id == "fred" else None)
+    receipt: dict[str, object] | None = None
+    cleanup_error: BaseException | None = None
     try:
         AgentFactory(Client()).create(
             ParticipantConfig(
@@ -95,11 +109,19 @@ async def _probe(provider_id: str) -> dict[str, object]:
         tool = captured["tools"][0]
         await tool.connect()
         discovered = len(getattr(tool, "functions", ()) or ())
-        result = await tool.call_tool(tool_name, **arguments)
-        return {
+        agent = captured.get("agent")
+        if agent is None:
+            raise RuntimeError("MAF agent was not created")
+        result = await agent.run(f"request {tool_name}")
+        if getattr(result, "is_error", False) or (isinstance(result, dict) and (result.get("is_error") or result.get("error"))):
+            raise RuntimeError("MCP server returned an error result")
+        if result is None or (isinstance(result, (str, list, tuple, dict)) and not result):
+            raise RuntimeError("MCP server returned an empty result")
+        receipt = {
             **base,
             "status": "VERIFIED",
             "maf_agent_tool_injected": captured.get("tools", [None])[0] is tool,
+            "maf_agent_request_cycle": True,
             "discovered_tool_count": discovered,
             "invoked_tool": tool_name,
             "result_type": type(result).__name__,
@@ -110,7 +132,7 @@ async def _probe(provider_id: str) -> dict[str, object]:
         }
     except Exception as error:
         status = "BLOCKED_EXTERNAL" if "401" in str(error) or "Unauthorized" in str(error) else "FAILED"
-        return {
+        receipt = {
             **base,
             "status": status,
             "failure_class": "authentication" if status == "BLOCKED_EXTERNAL" else "provider",
@@ -120,8 +142,11 @@ async def _probe(provider_id: str) -> dict[str, object]:
     finally:
         try:
             await scope.close()
-        except BaseException:
-            pass
+        except BaseException as error:
+            cleanup_error = error
+    if cleanup_error is not None:
+        return {**(receipt or base), "status": "FAILED", "failure_class": "cleanup", "error_type": type(cleanup_error).__name__}
+    return receipt or {**base, "status": "FAILED", "failure_class": "provider", "error_type": "unknown"}
 
 
 async def _main(output_root: Path | None) -> list[dict[str, object]]:

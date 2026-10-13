@@ -110,7 +110,7 @@ async def run_evidence_workflow(
 
 
 def accept_pending_evidence(store: AnalysisStore, *, human_decision: str, source_trust_accepted: bool = True) -> EvidenceWorkflowResult:
-    state = store.load_analysis()
+    state = store.load_pending()
     if state.revision_status != RevisionStatus.PENDING_REVIEW:
         raise ValueError("analysis does not contain a pending evidence review")
     review = review_reasoning(state.evidence, state.claims)
@@ -142,14 +142,14 @@ def run_xlsx_finding_workflow(
             raise ToolbeltError("workbook selection produced no table")
         table = workbook.tables[0]
         result = data_analysis(table, operation)
-        measurements = {item.provenance.coordinate: item for item in workbook.measurements}
+        measurements = {(item.provenance.sheet, item.provenance.coordinate): item for item in workbook.measurements}
         evidence: list[Evidence] = []
         selected_columns = {table.columns.index(operation.value_column)} if operation.value_column in table.columns else set(range(len(table.columns)))
         for row in table.row_provenance:
             for index, locator in enumerate(row):
                 if index not in selected_columns:
                     continue
-                measurement = measurements.get(locator.coordinate)
+                measurement = measurements.get((locator.sheet, locator.coordinate))
                 if measurement is None or measurement.value is None or isinstance(measurement.value, str) and measurement.value.startswith("#"):
                     continue
                 if measurement.formula_status in {FormulaStatus.FORMULA_WITHOUT_CACHE, FormulaStatus.FORMULA_STALE_OR_UNKNOWN, FormulaStatus.ERROR}:

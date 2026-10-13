@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import socket
+from urllib.parse import urljoin
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -23,10 +24,11 @@ class CrawlRetrievalProof:
     final_url: str
     retrieved_at: str
     content_hash: str
+    excerpt_hash: str
     _issuer: object
 
     def is_valid(self) -> bool:
-        return self._issuer is _PROOF_ISSUER and all((self.original_url, self.final_url, self.retrieved_at, self.content_hash))
+        return self._issuer is _PROOF_ISSUER and all((self.original_url, self.final_url, self.retrieved_at, self.content_hash, self.excerpt_hash))
 
 
 _PROOF_ISSUER = object()
@@ -55,13 +57,28 @@ class Crawl4AICapability:
             failure_class = getattr(error, "failure_class", "invalid_url")
             raise Crawl4AIError(failure_class, str(error)) from error
         try:
-            from crawl4ai import AsyncWebCrawler
+            import crawl4ai
+
+            AsyncWebCrawler = crawl4ai.AsyncWebCrawler
+            config_type = getattr(crawl4ai, "CrawlerRunConfig", None)
         except ImportError as error:
             raise Crawl4AIError("dependency_missing", "crawl4ai is not installed") from error
         retrieved_at = datetime.now(timezone.utc).isoformat()
         try:
             async with AsyncWebCrawler() as crawler:
-                result = await asyncio.wait_for(crawler.arun(url=url), timeout=self.timeout_seconds)
+                if config_type is not None:
+                    config = config_type(
+                        only_text=True,
+                        process_iframes=False,
+                        exclude_external_links=True,
+                        exclude_external_images=True,
+                        deep_crawl_strategy=None,
+                        max_retries=0,
+                    )
+                    operation = crawler.arun(url=url, config=config)
+                else:
+                    operation = crawler.arun(url=url)
+                result = await asyncio.wait_for(operation, timeout=self.timeout_seconds)
         except asyncio.TimeoutError as error:
             raise Crawl4AIError("timeout", "Crawl4AI exceeded its time limit") from error
         except (OSError, socket.error) as error:
@@ -74,9 +91,23 @@ class Crawl4AICapability:
         if not markdown.strip():
             raise Crawl4AIError("empty_source", "Crawl4AI returned no readable content")
         final_url = str(getattr(result, "url", "") or url)
+        try:
+            validate_destination(final_url, self.fixture_hosts)
+        except Exception as error:
+            failure_class = getattr(error, "failure_class", "unsafe_redirect")
+            raise Crawl4AIError(failure_class, str(error)) from error
         content_hash = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
-        proof = CrawlRetrievalProof(url, final_url, retrieved_at, content_hash, _PROOF_ISSUER)
+        excerpt = " ".join(markdown.split())[: self.max_content_chars]
+        proof = CrawlRetrievalProof(url, final_url, retrieved_at, content_hash, hashlib.sha256(excerpt.encode("utf-8")).hexdigest(), _PROOF_ISSUER)
         links = getattr(result, "links", {}) or {}
+        for values in links.values() if isinstance(links, dict) else ():
+            for link in values:
+                if isinstance(link, str) and link.startswith(("http://", "https://")):
+                    try:
+                        validate_destination(urljoin(final_url, link), self.fixture_hosts)
+                    except Exception as error:
+                        failure_class = getattr(error, "failure_class", "unsafe_subresource")
+                        raise Crawl4AIError(failure_class, str(error)) from error
         link_count = sum(len(value) for value in links.values()) if isinstance(links, dict) else len(links)
         candidate = validate_evidence_candidate(
             {
@@ -84,7 +115,7 @@ class Crawl4AICapability:
                 "capability_id": self.capability_id,
                 "source": final_url,
                 "request": request or final_url,
-                "excerpt": " ".join(markdown.split())[: self.max_content_chars],
+                "excerpt": excerpt,
                 "provenance": {
                     "url": final_url,
                     "source_version": content_hash,
@@ -115,4 +146,3 @@ def bind_crawl4ai(capability: Crawl4AICapability):
         ownership=CapabilityOwnership.BORROWED,
         fingerprint=capability.fingerprint,
     )
-

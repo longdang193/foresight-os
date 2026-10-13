@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import ast
+import csv
 import hashlib
 import operator
 import re
+import zipfile
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from enum import StrEnum
@@ -43,6 +45,7 @@ class ExcelError:
 @dataclass(frozen=True)
 class ToolbeltLimits:
     max_bytes: int = 25_000_000
+    max_expanded_bytes: int = 100_000_000
     max_rows: int = 50_000
     max_cells: int = 250_000
     max_result_rows: int = 10_000
@@ -213,6 +216,65 @@ def _check_cancel(cancel_check: Callable[[], bool] | None) -> None:
         raise ToolbeltError("cancelled")
 
 
+def _delimited_value(value: str) -> Any:
+    value = value.strip()
+    if not value:
+        return None
+    if value.startswith("#"):
+        return ExcelError(value)
+    if value.lower() in {"true", "false"}:
+        return value.lower() == "true"
+    try:
+        return int(value)
+    except ValueError:
+        try:
+            return float(value)
+        except ValueError:
+            return value
+
+
+def _read_delimited(source: Path, selection: SheetSelection | None, limits: ToolbeltLimits, cancel_check: Callable[[], bool] | None) -> WorkbookReadResult:
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    sheet = source.stem
+    if selection and selection.sheet_names and sheet not in selection.sheet_names:
+        return WorkbookReadResult(str(source), digest, (), (), ())
+    delimiter = "\t" if source.suffix.lower() == ".tsv" else ","
+    with source.open(newline="", encoding="utf-8-sig") as handle:
+        raw_rows = [tuple(_delimited_value(value) for value in row) for row in csv.reader(handle, delimiter=delimiter)]
+    if len(raw_rows) > limits.max_rows:
+        raise ToolbeltError("workbook selection exceeds row limit")
+    if selection and selection.ranges:
+        ranges = [cell_range for selected_sheet, cell_range in selection.ranges if selected_sheet == sheet]
+        if ranges:
+            min_col, min_row, max_col, max_row = _range_bounds(ranges[0])
+            raw_rows = [row[min_col - 1:max_col] for row in raw_rows[min_row - 1:max_row]]
+    if selection and selection.tables and not any(selected_sheet == sheet and table_name == source.stem for selected_sheet, table_name in selection.tables):
+        return WorkbookReadResult(str(source), digest, (), (), ())
+    cell_count = sum(len(row) for row in raw_rows)
+    if cell_count > limits.max_cells:
+        raise ToolbeltError("workbook selection exceeds cell limit")
+    hidden_rows: tuple[int, ...] = ()
+    summary = SheetSummary(sheet, "visible", len(raw_rows), max((len(row) for row in raw_rows), default=0), hidden_rows, (), (source.stem,))
+    measurements: list[TypedMeasurement] = []
+    provenance_rows: list[tuple[CellProvenance, ...]] = []
+    for row_number, row in enumerate(raw_rows, 1):
+        _check_cancel(cancel_check)
+        row_provenance = []
+        for column_number, value in enumerate(row, 1):
+            coordinate = f"{openpyxl.utils.get_column_letter(column_number)}{row_number}"
+            locator = CellProvenance(digest, sheet, coordinate, f"{sheet}!{coordinate}")
+            measurements.append(TypedMeasurement(f"{digest[:12]}:{sheet}:{coordinate}", value, _excel_type(value), None, None, FormulaStatus.VALUE, locator))
+            row_provenance.append(locator)
+        provenance_rows.append(tuple(row_provenance))
+    header_rows = min(1, len(raw_rows))
+    if len(raw_rows) > 1 and sum(value not in (None, "") for value in raw_rows[0]) <= 1 and sum(value not in (None, "") for value in raw_rows[1]) > 1:
+        header_rows = 2
+    headers = tuple(tuple("" if value is None else str(value) for value in raw_rows[index]) for index in range(header_rows))
+    source_range = f"A1:{openpyxl.utils.get_column_letter(summary.max_column)}{summary.max_row}" if raw_rows else ""
+    table = TypedTable(f"{digest[:12]}:{sheet}:{source_range}", source.stem, sheet, headers, tuple(raw_rows[header_rows:]), tuple(provenance_rows[header_rows:]), False, source_range)
+    return WorkbookReadResult(str(source), digest, (summary,), (table,), tuple(measurements))
+
+
 def spreadsheet_read(
     source: Path,
     selection: SheetSelection | None = None,
@@ -225,6 +287,17 @@ def spreadsheet_read(
     _check_cancel(cancel_check)
     if source.stat().st_size > limits.max_bytes:
         raise ToolbeltError("workbook exceeds byte limit")
+    if source.suffix.lower() in {".csv", ".tsv"}:
+        return _read_delimited(source, selection, limits, cancel_check)
+    if source.suffix.lower() not in {".xlsx", ".xlsm", ".xltx", ".xltm"}:
+        raise ToolbeltError("unsupported spreadsheet format")
+    try:
+        with zipfile.ZipFile(source) as archive:
+            expanded_bytes = sum(item.file_size for item in archive.infolist())
+    except zipfile.BadZipFile as error:
+        raise ToolbeltError("invalid workbook archive") from error
+    if expanded_bytes > limits.max_expanded_bytes:
+        raise ToolbeltError("workbook expanded content exceeds byte limit")
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
     workbook = openpyxl.load_workbook(source, data_only=False, read_only=False)
     cached = openpyxl.load_workbook(source, data_only=True, read_only=False)
@@ -369,6 +442,8 @@ def data_analysis(
             matches = right_index.get(row.get(left_key), [])
             for match in matches:
                 result.append({**row, **{f"right.{name}": value for name, value in match.items()}})
+                if len(result) > limits.max_result_rows:
+                    raise ToolbeltError("analysis result exceeds row limit")
         if duplicate_keys:
             warnings.append("many-to-many join expanded duplicate right-side keys")
     elif kind in {"nulls", "missing"}:

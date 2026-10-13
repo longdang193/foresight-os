@@ -58,12 +58,18 @@ def _normalize_work_brief(value: dict[str, Any]) -> dict[str, Any]:
                 })
             elif isinstance(need, ResearchNeed):
                 needs.append({
-                    "kind": str(need.kind),
+                    "kind": need.kind.value if isinstance(need.kind, ResearchNeedKind) else str(need.kind),
                     "query": need.query,
                     **({"source_hint": need.source_hint} if need.source_hint else {}),
                 })
             else:
-                needs.append(dict(need))
+                normalized_need = dict(need)
+                kind = normalized_need.get("kind")
+                if isinstance(kind, ResearchNeedKind):
+                    normalized_need["kind"] = kind.value
+                elif kind is not None:
+                    normalized_need["kind"] = str(kind)
+                needs.append(normalized_need)
         current["research_needs"] = needs
         stages.append(current)
     normalized["stages"] = stages

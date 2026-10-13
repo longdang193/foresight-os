@@ -14,6 +14,43 @@ from foresight_os.controller.recipes import RecipeName, make_recipe
 from foresight_os.runtime.workflow import run_recipe_async
 
 
+async def _boundary_probes() -> dict[str, bool]:
+    from foresight_os.controller.budgets import BudgetState
+    from foresight_os.runtime.capabilities import CapabilityDefinition, instrument_tool
+    from foresight_os.runtime.local_toolbelt import ToolbeltError, spreadsheet_read
+    from foresight_os.runtime.metrics import BudgetExceededError, RunMetrics
+
+    calls = []
+
+    async def tool():
+        calls.append(True)
+
+    metrics = RunMetrics("anomaly-boundaries", "DIRECT", "direct")
+    wrapped = instrument_tool(tool, CapabilityDefinition("probe", "local_deterministic"), {"budget": BudgetState(5, 1, 5, max_tool_calls=1), "metrics": metrics})
+    await wrapped()
+    try:
+        await wrapped()
+    except BudgetExceededError:
+        budget = len(calls) == 1 and metrics.budget_failures == 1
+    else:
+        budget = False
+
+    try:
+        spreadsheet_read(ROOT / "tests" / "fixtures" / "analyst_multisheet.xlsx", cancel_check=lambda: True)
+    except ToolbeltError as error:
+        cancellation = str(error) == "cancelled"
+    else:
+        cancellation = False
+
+    try:
+        await asyncio.wait_for(asyncio.sleep(0.01), timeout=0)
+    except asyncio.TimeoutError:
+        timeout = True
+    else:
+        timeout = False
+    return {"budget": budget, "cancellation": cancellation, "timeout": timeout}
+
+
 def _snapshot() -> dict[str, int | None]:
     try:
         import psutil
@@ -76,9 +113,10 @@ async def run_probe(runs: int, seed: str, warmup: int = 10) -> dict:
     memory_values = [sample["after"]["memory_bytes"] for sample in samples]
     handle_values = [sample["after"]["handles"] for sample in samples if sample["after"]["handles"] is not None]
     monotonic_handles = bool(handle_values) and all(left <= right for left, right in zip(handle_values, handle_values[1:])) and handle_values[-1] > handle_values[0]
+    boundaries = await _boundary_probes()
     result = {
         "mode": "anomaly",
-        "status": "failed" if failures or len(set(state_hashes)) != 1 or monotonic_handles else "verified",
+        "status": "failed" if failures or len(set(state_hashes)) != 1 or monotonic_handles or not all(boundaries.values()) else "verified",
         "runs": runs,
         "seed": seed,
         "warmup_runs": warmup,
@@ -87,6 +125,7 @@ async def run_probe(runs: int, seed: str, warmup: int = 10) -> dict:
         "memory_min": min(memory_values) if memory_values else None,
         "memory_max": max(memory_values) if memory_values else None,
         "failures": failures,
+        "boundary_probes": boundaries,
         "samples": samples,
     }
     tracemalloc.stop()
@@ -98,8 +137,11 @@ def main() -> int:
     parser.add_argument("--runs", type=int, default=100)
     parser.add_argument("--seed", default="846f4ed")
     parser.add_argument("--warmup", type=int, default=10)
+    parser.add_argument("--output-root", type=Path, default=ROOT / "work" / "toolbelt-probes")
     args = parser.parse_args()
     report = asyncio.run(run_probe(args.runs, args.seed, args.warmup))
+    args.output_root.mkdir(parents=True, exist_ok=True)
+    (args.output_root / "anomaly-probe.json").write_text(json.dumps(report, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, sort_keys=True))
     return 0 if report["status"] == "verified" else 1
 

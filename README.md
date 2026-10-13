@@ -77,7 +77,8 @@ directly. Credentials are read at run time and are never written to receipts.
   `ALPHAVANTAGE_API_KEY`.
 - **FRED MCP Connector** — macroeconomic and quantitative foresight; configure
   the OAuth bearer token in `FRED_MCP_TOKEN` plus a bounded read operation for
-  the live probe.
+  the live probe. Activation also requires `FRED_MCP_READ_TOOL`; only that
+  explicitly allowlisted tool is exposed to the MAF agent.
 
 Run `python evaluation/probes/run_external_signal_probe.py --output-root
 work/toolbelt-probes` to verify MAF injection, remote discovery, a bounded
