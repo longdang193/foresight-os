@@ -23,6 +23,22 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
         missing.append("stage_metrics")
     if receipt.get("resource", {}).get("rss_bytes") is None:
         missing.append("resource.rss_bytes")
+    if int(receipt.get("accepted_finding_count", 0) or 0) <= 0:
+        missing.append("accepted_finding_count>0")
+    if any(item.get("failure_class") for item in receipt.get("stage_metrics", ())):
+        missing.append("stage_metrics.successful")
+    soak = receipt.get("soak", {})
+    required_soak_runs = int(receipt.get("acceptance", {}).get("soak_runs", 0) or 0)
+    if int(soak.get("runs", 0) or 0) < required_soak_runs:
+        missing.append("soak.runs")
+    if soak.get("monotonic_growth") is not False:
+        missing.append("soak.monotonic_growth=false")
+    if soak.get("resource_counts", {}).get("owned_after_cleanup") != 0:
+        missing.append("soak.resource_counts.owned_after_cleanup=0")
+    if not receipt.get("maf_patterns") or any(not item.get("cleanup_complete", False) for item in receipt["maf_patterns"].values()):
+        missing.append("maf_patterns.cleanup_complete")
+    if receipt.get("native_mcp", {}).get("status") != "VERIFIED":
+        missing.append("native_mcp.status=VERIFIED")
     return sorted(set(missing))
 
 

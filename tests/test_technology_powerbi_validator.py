@@ -16,7 +16,7 @@ from foresight_os.persistence.analysis_store import AnalysisStore
 
 
 ROOT = Path(__file__).parents[1]
-EXERCISE = ROOT / "data" / "exercise"
+EXERCISE = ROOT / "tests" / "fixtures" / "exercise"
 
 
 def test_technology_radar_deduplicates_source_families_and_assigns_actions():

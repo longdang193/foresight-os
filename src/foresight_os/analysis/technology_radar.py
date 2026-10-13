@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from foresight_os.analysis.evidence_workflow import attach_review_record
-from foresight_os.analysis.reviewer import ReviewResult, review_reasoning
+from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
 from foresight_os.persistence.analysis_store import AnalysisStore
@@ -94,12 +94,10 @@ def _canonical_source(source: str, notes: str) -> str:
         return "Vendor press release"
     return value
 
-def _action(technology: str) -> str:
-    if technology == "SiC Power Electronics":
+def _action(evidence_strength: float, deployment: int, relevance: float, impact: float, urgency: float) -> str:
+    if evidence_strength >= 4.0 and deployment >= 3 and relevance >= 4.0 and impact >= 4.0:
         return "Invest"
-    if technology == "Zonal Architecture":
-        return "Experiment"
-    if technology == "AI Engineering Copilots":
+    if (impact >= 4.0 and deployment >= 1 and relevance >= 3.0 and urgency >= 3.0) or (urgency >= 4.0 and relevance >= 4.0):
         return "Experiment"
     return "Monitor"
 
@@ -139,7 +137,10 @@ def analyze_technology_radar(source: Path) -> TechnologyAnalysis:
         naive = _number(priority_row.get("Naive_Product")) or 0.0
         if priority_row.get("Caution"):
             issues.append(TechnologyDataQualityIssue("NAIVE_SCORE_RISK", f"{technology} has a multiplicative priority score that must not be treated as an investment decision without reversibility and uncertainty review.", (by_row[(priority_table.sheet, next((i for i, row in enumerate(priorities) if str(row.get("Technology")) == technology), 0))].id,)))
-        assessments.append(TechnologyAssessment(technology, len(items), len(independent), quality, media_volume, deployment, _number(assessment_row.get("Company_Relevance_1_5")) or 0.0, _number(assessment_row.get("Potential_Impact_1_5")) or 0.0, _number(assessment_row.get("Urgency_1_5")) or 0.0, naive, _action(technology), tuple(by_row[(signal_table.sheet, index)].id for index, _ in items)))
+        relevance = _number(assessment_row.get("Company_Relevance_1_5")) or 0.0
+        impact = _number(assessment_row.get("Potential_Impact_1_5")) or 0.0
+        urgency = _number(assessment_row.get("Urgency_1_5")) or 0.0
+        assessments.append(TechnologyAssessment(technology, len(items), len(independent), quality, media_volume, deployment, relevance, impact, urgency, naive, _action(quality, deployment, relevance, impact, urgency), tuple(by_row[(signal_table.sheet, index)].id for index, _ in items)))
     assumptions = ("Source families are canonicalized before counting corroboration; syndicated vendor stories are not independent sources.", "Evidence strength is separated from media volume and company relevance.", "Action categories preserve reversibility: strong evidence can justify investment, while transformative but uncertain technologies remain monitor/experiment candidates.", "Competitor actions are corroborating context, not proof of commercial success.")
     relationships: list[Relationship] = []
     claims: list[AnalyticalRecord] = []
@@ -195,7 +196,7 @@ def run_technology_radar_workflow(store: AnalysisStore, source: Path, *, human_d
     try:
         technology = analyze_technology_radar(Path(source))
         pending = store.save_pending(technology.state)
-        review = review_reasoning(pending.evidence, [*pending.claims, *pending.implications, *pending.recommendations], calculations=pending.calculations)
+        review = review_analysis_state(pending)
         decision = human_decision.upper()
         if decision in {"PENDING", "PENDING_REVIEW"}:
             return TechnologyWorkflowResult("pending", pending, replace(technology, state=pending), review, None)

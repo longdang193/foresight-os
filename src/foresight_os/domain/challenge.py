@@ -201,7 +201,7 @@ def select_review_record(state: AnalysisState, target_ids: tuple[str, ...] | lis
         review
         for review in state.review_records
         if target_key.issubset(set(review.target_ids))
-        and tuple(sorted(review.skill_ids)) == tuple(sorted(set(skill_ids)))
+        and (not skill_ids or tuple(sorted(review.skill_ids)) == tuple(sorted(set(skill_ids))))
         and review_validity(state, review) == ReviewValidity.CURRENT
     ]
     return min(candidates, key=lambda item: (-item.reviewed_state_revision, item.review_id), default=None)

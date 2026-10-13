@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from foresight_os.analysis.evidence_workflow import attach_review_record
-from foresight_os.analysis.reviewer import ReviewResult, review_reasoning
+from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
 from foresight_os.persistence.analysis_store import AnalysisStore
@@ -98,6 +98,10 @@ def _row_evidence(table: Any, index: int, digest: str) -> Evidence:
 def _record(record_id: str, statement: str, evidence_ids: list[str], assumptions: tuple[str, ...], uncertainty: tuple[str, ...], disconfirmation: tuple[str, ...], monitoring: tuple[str, ...]) -> AnalyticalRecord:
     return AnalyticalRecord(record_id, statement, Basis.DERIVED, Assessment.SUPPORTED, evidence_ids=list(dict.fromkeys(evidence_ids)), assumptions=assumptions, uncertainty=uncertainty, confidence_rationale="Derived from deterministic workbook rows while preserving observed/projected basis and unresolved inputs.", disconfirmation_conditions=disconfirmation, monitoring_indicators=monitoring)
 
+
+def _capacity_dependency_ids(capacity_rows: list[tuple[int, dict[str, Any]]], by_row: dict[tuple[str, int], Evidence], year: int) -> tuple[str, ...]:
+    return tuple(by_row[("Capacity", index)].id for index, row in capacity_rows if int(row.get("Year")) == year)
+
 def analyze_ev_capacity_investment(source: Path) -> EVAnalysis:
     source = Path(source)
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
@@ -121,10 +125,14 @@ def analyze_ev_capacity_investment(source: Path) -> EVAnalysis:
     scenario_groups: dict[tuple[str, int], list[tuple[int, dict[str, Any]]]] = {}
     for index, row in enumerate(rows["Demand_Scenarios"]):
         scenario_groups.setdefault((str(row.get("Scenario")), int(row.get("Year"))), []).append((index, row))
+    capacity_evidence_by_year = {
+        year: _capacity_dependency_ids(list(enumerate(rows["Capacity"])), by_row, year)
+        for year in capacity_by_year
+    }
     scenarios: list[EVScenarioProjection] = []
     for (scenario, year), items in sorted(scenario_groups.items()):
         demand = sum(_number(row.get("Demand_Units")) or 0.0 for _, row in items)
-        scenarios.append(EVScenarioProjection(scenario, year, demand, capacity_by_year.get(year, 0.0), demand - capacity_by_year.get(year, 0.0), "Projected", tuple(by_row[("Demand_Scenarios", index)].id for index, _ in items)))
+        scenarios.append(EVScenarioProjection(scenario, year, demand, capacity_by_year.get(year, 0.0), demand - capacity_by_year.get(year, 0.0), "Projected", tuple(dict.fromkeys([*(by_row[("Demand_Scenarios", index)].id for index, _ in items), *capacity_evidence_by_year.get(year, ())]))))
     issues: list[EVDataQualityIssue] = []
     kpi_rows = rows["Reported_KPIs"]
     for index, row in enumerate(kpi_rows):
@@ -176,8 +184,10 @@ def analyze_ev_capacity_investment(source: Path) -> EVAnalysis:
         for evidence_id in issue.evidence_ids:
             relationships.append(Relationship(f"ev-issue-{issue_index}-{issue.kind.lower()}-{evidence_id}", evidence_id, recommendation.id, "contradicts"))
     recommendation = replace(recommendation, relationship_ids=[item.id for item in relationships if item.to_id == recommendation.id])
-    calculations = [CalculationRecord(f"ev-{item.scenario.lower()}-{item.year}-gap", MeasurementKey(item.scenario, "capacity_gap", str(item.year), "units", item.scenario), "projected_demand - existing_practical_capacity", list(item.evidence_ids), item.capacity_gap, "units", [f"Demand_Scenarios:{item}" for item in item.evidence_ids]) for item in scenarios]
-    calculations.extend(CalculationRecord(f"ev-capacity-{year}", MeasurementKey("all regions", "practical_capacity", str(year), "units"), "sum(nominal_capacity * practical_availability)", [by_row[("Capacity", index)].id for index, row in enumerate(rows["Capacity"]) if int(row.get("Year")) == year], value, "units", [f"Capacity:{year}"]) for year, value in sorted(capacity_by_year.items()))
+    capacity_calculations = [CalculationRecord(f"ev-capacity-{year}", MeasurementKey("all regions", "practical_capacity", str(year), "units"), "sum(nominal_capacity * practical_availability)", list(capacity_evidence_by_year[year]), value, "units", [f"Capacity:{year}"]) for year, value in sorted(capacity_by_year.items())]
+    capacity_calculation_ids = {item.key.period: item.id for item in capacity_calculations}
+    calculations = [CalculationRecord(f"ev-{item.scenario.lower()}-{item.year}-gap", MeasurementKey(item.scenario, "capacity_gap", str(item.year), "units", item.scenario), "projected_demand - existing_practical_capacity", [*item.evidence_ids, capacity_calculation_ids.get(str(item.year), "")], item.capacity_gap, "units", [f"Demand_Scenarios:{item.year}", f"Capacity:{item.year}"]) for item in scenarios]
+    calculations.extend(capacity_calculations)
     state = AnalysisState("ev-capacity-investment", 1, evidence=evidence, claims=claims, implications=[implication], recommendations=[recommendation], relationships=relationships, revisions=[Revision("revision-1", 1, "EV capacity analysis pending acceptance", [item.id for item in [*evidence, *calculations, *claims, implication, recommendation]])], invalidation=Invalidation(), revision_status=RevisionStatus.DRAFT, calculations=calculations)
     decision_question = next((str(row[1]) for row in tables["Brief"].rows if row and row[0] == "Decision question" and len(row) > 1), "Should the company expand, pilot, outsource, or defer EV service capacity?")
     horizon = next((str(row[1]) for row in tables["Brief"].rows if row and row[0] == "Horizon" and len(row) > 1), "2026–2030")
@@ -223,7 +233,7 @@ def run_ev_capacity_investment_workflow(store: AnalysisStore, source: Path, *, h
     try:
         ev = analyze_ev_capacity_investment(Path(source))
         pending = store.save_pending(ev.state)
-        review = review_reasoning(pending.evidence, [*pending.claims, *pending.implications, *pending.recommendations], calculations=pending.calculations)
+        review = review_analysis_state(pending)
         decision = human_decision.upper()
         if decision in {"PENDING", "PENDING_REVIEW"}:
             return EVWorkflowResult("pending", pending, replace(ev, state=pending), review, None)

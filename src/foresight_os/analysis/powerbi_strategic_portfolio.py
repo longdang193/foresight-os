@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from foresight_os.analysis.evidence_workflow import attach_review_record
-from foresight_os.analysis.reviewer import ReviewResult, review_reasoning
+from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
 from foresight_os.persistence.analysis_store import AnalysisStore
@@ -107,6 +107,16 @@ def _date(value: Any) -> datetime | None:
 def _source_quality(value: str) -> float:
     return {"High": 3.0, "Medium": 2.0, "Low": 1.0}.get(value, 1.0)
 
+
+def _forward_signal_index(signal_rows: list[dict[str, Any]], segment: str | None = None) -> float:
+    rows = [
+        row for row in signal_rows
+        if str(row.get("Type")) != "Narrative"
+        and (segment is None or str(row.get("Segment")) in {segment, "All"})
+    ]
+    values = [(_number(row.get("Change_Index")) or 0.0) for row in rows]
+    return sum(values) / len(values) if values else 0.0
+
 def analyze_powerbi_strategic_portfolio(source: Path) -> PowerBIAnalysis:
     source = Path(source)
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
@@ -154,7 +164,8 @@ def analyze_powerbi_strategic_portfolio(source: Path) -> PowerBIAnalysis:
     if measure_issue_rows:
         issues.append(PowerBIDataQualityIssue("FILTER_CONTEXT_TRAP", "The YoY measure must compare 2026 Jan–Sep with 2025 Jan–Sep; a full-year versus YTD comparison is invalid.", tuple(by_row[("Measure_Definitions", index)].id for index in measure_issue_rows)))
     signal_rows = rows["Forward_Signals"]
-    weighted_forward = sum((_number(row.get("Change_Index")) or 0.0) * _source_quality(str(row.get("Source_Quality"))) for row in signal_rows if str(row.get("Type")) != "Narrative") / sum(_source_quality(str(row.get("Source_Quality"))) for row in signal_rows if str(row.get("Type")) != "Narrative")
+    decision_signal_rows = [row for row in signal_rows if str(row.get("Type")) != "Narrative"]
+    weighted_forward = sum((_number(row.get("Change_Index")) or 0.0) * _source_quality(str(row.get("Source_Quality"))) for row in decision_signal_rows) / sum(_source_quality(str(row.get("Source_Quality"))) for row in decision_signal_rows)
     dashboard_growth = {str(row.get("KPI")): _number(row.get("Displayed_Value")) or 0.0 for row in rows["Dashboard_Snapshot"]}
     if (dashboard_growth.get("YoY Revenue %", 0.0) > 0 and weighted_forward < 0) or any((_number(row.get("Change_Index")) or 0.0) < 0 for row in signal_rows if str(row.get("Type")) == "Leading"):
         issues.append(PowerBIDataQualityIssue("CONTRADICTORY_FORWARD_SIGNAL", "Booked dashboard growth is positive while leading order, pipeline, tender, budget, or macro signals weaken.", tuple(by_row[("Forward_Signals", index)].id for index, row in enumerate(signal_rows) if (_number(row.get("Change_Index")) or 0.0) < 0)))
@@ -163,10 +174,10 @@ def analyze_powerbi_strategic_portfolio(source: Path) -> PowerBIAnalysis:
         rev25 = sum(_number(row.get("Revenue_EUR")) or 0.0 for _, row in valid_facts if str(row.get("Segment")) == segment and int(row.get("Year")) == 2025 and int(row.get("Month")) <= 9)
         rev26 = sum(_number(row.get("Revenue_EUR")) or 0.0 for _, row in valid_facts if str(row.get("Segment")) == segment and int(row.get("Year")) == 2026 and int(row.get("Month")) <= 9)
         gp26 = sum(_number(row.get("Gross_Profit_EUR")) or 0.0 for _, row in valid_facts if str(row.get("Segment")) == segment and int(row.get("Year")) == 2026 and int(row.get("Month")) <= 9)
-        signal_values = [(_number(row.get("Change_Index")) or 0.0) for row in signal_rows if str(row.get("Segment")) in {segment, "All"}]
-        forward = sum(signal_values) / len(signal_values) if signal_values else 0.0
+        segment_signals = [row for row in decision_signal_rows if str(row.get("Segment")) in {segment, "All"}]
+        forward = _forward_signal_index(signal_rows, segment)
         action = "Selective/staged" if forward < 0 else "Protect/scale"
-        ids = tuple(by_row[("Fact_Performance", index)].id for index, row in valid_facts if str(row.get("Segment")) == segment) + tuple(by_row[("Forward_Signals", index)].id for index, row in enumerate(signal_rows) if str(row.get("Segment")) in {segment, "All"})
+        ids = tuple(by_row[("Fact_Performance", index)].id for index, row in valid_facts if str(row.get("Segment")) == segment) + tuple(by_row[("Forward_Signals", index)].id for index, row in enumerate(signal_rows) if row in segment_signals)
         segment_assessments.append(PowerBISegmentAssessment(segment, rev25, rev26, rev26 / rev25 - 1 if rev25 else 0.0, gp26 / rev26 if rev26 else 0.0, forward, action, ids))
     assumptions = ("All reconciled KPI comparisons use Jan–Sep 2025 versus Jan–Sep 2026.", "The later duplicate composite fact row is excluded; the workbook is not silently edited.", "Target attainment is provisional when a denominator is missing.", "Forward signals are appraised by type and source quality; narrative media is not treated as booked demand.", "Power BI metadata, filter context, and refresh timestamps are part of evidence quality.")
     all_ids = [item.id for item in evidence]
@@ -224,7 +235,7 @@ def run_powerbi_strategic_portfolio_workflow(store: AnalysisStore, source: Path,
     try:
         powerbi = analyze_powerbi_strategic_portfolio(Path(source))
         pending = store.save_pending(powerbi.state)
-        review = review_reasoning(pending.evidence, [*pending.claims, *pending.implications, *pending.recommendations], calculations=pending.calculations)
+        review = review_analysis_state(pending)
         decision = human_decision.upper()
         if decision in {"PENDING", "PENDING_REVIEW"}:
             return PowerBIWorkflowResult("pending", pending, replace(powerbi, state=pending), review, None)

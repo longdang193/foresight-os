@@ -154,6 +154,23 @@ def _committed_cache_output(entry: Any) -> tuple[bool, object]:
     return valid, getattr(entry, "output", None)
 
 
+def _canonical_result_hash(value: object) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _canonical_provenance_matches(
+    references: tuple[str, ...] | list[str],
+    hashes: tuple[str, ...] | list[str],
+    canonical_records: dict[str, object] | None,
+) -> bool:
+    if canonical_records is None or len(references) != len(hashes) or not references:
+        return False
+    return all(
+        reference in canonical_records and _canonical_result_hash(canonical_records[reference]) == expected_hash
+        for reference, expected_hash in zip(references, hashes, strict=True)
+    )
+
+
 def run_sequential_steps(stage_names: list[str]) -> dict[str, Any]:
     executors = [
         FunctionExecutor(
@@ -286,6 +303,10 @@ async def run_recipe_async(
                 capability_fingerprints=tuple(context.get("capability_fingerprints", ())),
                 model_config_fingerprint=str(context.get("model_config_fingerprint", "")),
                 authorization_scope_fingerprint=str(context.get("authorization_scope_fingerprint", "")),
+            ) and _canonical_provenance_matches(
+                receipt.result_references,
+                receipt.result_hashes,
+                context.get("canonical_records"),
             ):
                 cache_entry = {"status": "committed", "provenance_complete": True, "result_references": receipt.result_references, "result_hashes": receipt.result_hashes, "output": canonical_output}
         if cache_entry is not None:

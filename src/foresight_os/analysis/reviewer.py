@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+from foresight_os.controller.policy import ReviewPolicyResolver
 from foresight_os.domain.challenge import ChallengeObjection, ObjectionDisposition, ReviewOutcome
 from foresight_os.domain.models import AnalyticalRecord, CalculationRecord, Evidence
 
@@ -56,6 +57,29 @@ def review_reasoning(
     if unresolved_classification:
         issues.append(unresolved_classification)
         objections.append(ChallengeObjection("INSUFFICIENT_EVIDENCE", records[-1].id if records else "review", unresolved_classification, disposition=ObjectionDisposition.UNRESOLVED))
+    outcome = ReviewOutcome.ACCEPTED if not issues else ReviewOutcome.REJECTED
+    acceptable_outcomes = tuple(str(item) for item in getattr(policy, "acceptable_outcomes", (ReviewOutcome.ACCEPTED.value,)))
+    if outcome.value not in acceptable_outcomes:
+        issues.append(f"review outcome {outcome.value} is not acceptable under the selected policy")
+    blocking_kinds = {str(item) for item in getattr(policy, "blocking_objection_kinds", ())}
+    if blocking_kinds:
+        for objection in objections:
+            if objection.kind in blocking_kinds and objection.disposition != ObjectionDisposition.REJECTED:
+                issues.append(f"{objection.target_id}: blocking objection {objection.kind}")
     accepted = not issues
-    outcome = ReviewOutcome.ACCEPTED if accepted else ReviewOutcome.REJECTED
+    if not accepted:
+        outcome = ReviewOutcome.REJECTED
     return ReviewResult(accepted, issues, objections=tuple(objections), outcome=outcome, policy_id=policy_id, policy_version=policy_version, skill_ids=skill_ids)
+
+
+def review_analysis_state(state: object) -> ReviewResult:
+    calculations = list(getattr(state, "calculations", ()))
+    policy = ReviewPolicyResolver().resolve(
+        target_kind="QUANTITATIVE_ANALYSIS" if calculations else "CLAIM",
+    )
+    return review_reasoning(
+        list(getattr(state, "evidence", ())),
+        [*getattr(state, "claims", ()), *getattr(state, "implications", ()), *getattr(state, "recommendations", ())],
+        calculations=calculations,
+        policy=policy,
+    )

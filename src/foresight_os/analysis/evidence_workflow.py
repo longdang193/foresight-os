@@ -6,7 +6,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from foresight_os.analysis.reviewer import ReviewResult, review_reasoning
+from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state, review_reasoning
 from foresight_os.domain.evidence import normalize_evidence_candidate
 from foresight_os.domain.challenge import ReviewOutcome, ReviewRecord, build_material_fingerprint
 from foresight_os.domain.models import (
@@ -42,7 +42,14 @@ def attach_review_record(state: AnalysisState, review: ReviewResult, review_id: 
         review_id=review_id,
         target_ids=target_ids,
         reviewed_state_revision=state.revision,
-        input_fingerprint=build_material_fingerprint(state, target_ids),
+        input_fingerprint=build_material_fingerprint(
+            state,
+            target_ids,
+            review.skill_ids,
+            review.skill_versions,
+            review.skill_hashes,
+            (review.policy_id, review.policy_version) if review.policy_id and review.policy_version else None,
+        ),
         skill_ids=review.skill_ids,
         skill_versions=review.skill_versions,
         objections=review.objections,
@@ -103,7 +110,7 @@ async def run_evidence_workflow(
             evidence_ids=claim.evidence_ids,
             relationship_ids=[relationship.id],
         )
-        review = review_reasoning([evidence], [claim])
+        review = review_analysis_state(AnalysisState(investigation_id, 1, evidence=[evidence], claims=[claim]))
         if not source_trust_accepted:
             review = ReviewResult(False, ["human source-trust decision rejected the retrieved source"])
         state = AnalysisState(
@@ -133,7 +140,7 @@ def accept_pending_evidence(store: AnalysisStore, *, human_decision: str, source
     state = store.load_pending()
     if state.revision_status != RevisionStatus.PENDING_REVIEW:
         raise ValueError("analysis does not contain a pending evidence review")
-    review = review_reasoning(state.evidence, state.claims)
+    review = review_analysis_state(state)
     if not source_trust_accepted:
         review = ReviewResult(False, ["human source-trust decision rejected the retrieved source"])
     if human_decision != "ACCEPT" or not review.accepted:
@@ -230,7 +237,7 @@ def run_xlsx_finding_workflow(
             calculations=[calculation],
         )
         pending = store.save_pending(state)
-        review = review_reasoning(pending.evidence, pending.claims)
+        review = review_analysis_state(pending)
         if human_decision.upper() in {"PENDING", "PENDING_REVIEW"}:
             return EvidenceWorkflowResult("pending", tuple(), table.sheet, evidence[0], claim, review, pending, ("spreadsheet_read", "data_analysis"))
         if human_decision.upper() != "ACCEPT" or not review.accepted:

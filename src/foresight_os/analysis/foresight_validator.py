@@ -12,7 +12,7 @@ from foresight_os.analysis.ev_capacity_investment import EVAnalysis, analyze_ev_
 from foresight_os.analysis.evidence_workflow import attach_review_record
 from foresight_os.analysis.portfolio_resilience import PortfolioAnalysis, analyze_portfolio_resilience
 from foresight_os.analysis.powerbi_strategic_portfolio import PowerBIAnalysis, analyze_powerbi_strategic_portfolio
-from foresight_os.analysis.reviewer import ReviewResult, review_reasoning
+from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.supplier_resilience import SupplierAnalysis, analyze_supplier_resilience
 from foresight_os.analysis.technology_radar import TechnologyAnalysis, analyze_technology_radar
 from foresight_os.domain.challenge import derive_finding_views
@@ -469,7 +469,7 @@ def run_validator_workflow(
     try:
         result = validate_exercises(Path(validator_source), Path(exercise_dir))
         pending = store.save_pending(result.state)
-        review = review_reasoning(pending.evidence, [*pending.claims, *pending.implications, *pending.recommendations], calculations=pending.calculations)
+        review = review_analysis_state(pending)
         decision = human_decision.upper()
         if decision in {"PENDING", "PENDING_REVIEW"}:
             return ValidatorWorkflowResult("pending", pending, replace(result, state=pending), review, None)

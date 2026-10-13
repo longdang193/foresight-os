@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from foresight_os.analysis.evidence_workflow import attach_review_record
-from foresight_os.analysis.reviewer import ReviewResult, review_reasoning
+from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import (
     AnalyticalRecord,
@@ -691,11 +691,7 @@ def run_portfolio_resilience_workflow(
     try:
         portfolio = analyze_portfolio_resilience(Path(source))
         pending = store.save_pending(portfolio.state)
-        review = review_reasoning(
-            pending.evidence,
-            [*pending.claims, *pending.implications, *pending.recommendations],
-            calculations=pending.calculations,
-        )
+        review = review_analysis_state(pending)
         decision = human_decision.upper()
         if decision in {"PENDING", "PENDING_REVIEW"}:
             return PortfolioWorkflowResult("pending", pending, replace(portfolio, state=pending), review, None)

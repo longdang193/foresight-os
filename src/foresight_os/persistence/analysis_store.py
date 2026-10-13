@@ -358,13 +358,18 @@ class AnalysisStore:
     def _merge_states(current: AnalysisState, pending: AnalysisState) -> AnalysisState:
         def merge(items):
             result = list(items[0])
-            seen = {getattr(item, "id", getattr(item, "review_id", None)) for item in result}
+            positions = {
+                getattr(item, "id", getattr(item, "review_id", None)): index
+                for index, item in enumerate(result)
+            }
             for collection in items[1:]:
                 for item in collection:
                     item_id = getattr(item, "id", getattr(item, "review_id", None))
-                    if item_id not in seen:
+                    if item_id in positions:
+                        result[positions[item_id]] = item
+                    else:
                         result.append(item)
-                        seen.add(item_id)
+                        positions[item_id] = len(result) - 1
             return result
 
         return replace(
