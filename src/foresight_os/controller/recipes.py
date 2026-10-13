@@ -32,6 +32,10 @@ class RecipeStage:
     output_type: str
     limits: dict[str, int | str]
     skill_ids: tuple[str, ...] = ()
+    objective: str = ""
+    dependencies: tuple[str, ...] = ()
+    expected_result: str = ""
+    research_needs: tuple[object, ...] = ()
 
 
 @dataclass(frozen=True)

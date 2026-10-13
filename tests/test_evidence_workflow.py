@@ -137,3 +137,39 @@ def test_xlsx_finding_workflow_persists_provenance_calculation_and_restart(tmp_p
     assert resumed.status == "accepted"
     assert resumed.analysis.calculations[0].input_ids
     assert hashlib.sha256(source.read_bytes()).hexdigest() == before
+    from foresight_os.domain.challenge import derive_finding_views
+
+    views = derive_finding_views(resumed.analysis)
+    assert len(views) == 1
+    assert views[0].accepted is True
+    assert views[0].review_status == "CURRENT"
+
+def test_xlsx_finding_workflow_uses_selected_table_when_workbook_has_multiple_tables(tmp_path: Path):
+    from foresight_os.analysis.evidence_workflow import run_xlsx_finding_workflow
+
+    source = tmp_path / "multi-table.xlsx"
+    workbook = openpyxl.Workbook()
+    brief = workbook.active
+    brief.title = "Brief"
+    brief.append(["Question"])
+    brief.append(["Which table should be analyzed?"])
+    brief.tables.add(openpyxl.worksheet.table.Table(displayName="BriefTable", ref="A1:A2"))
+    data = workbook.create_sheet("Data")
+    data.append(["Region", "Value"])
+    data.append(["North", 10])
+    data.append(["South", 20])
+    data.tables.add(openpyxl.worksheet.table.Table(displayName="DataTable", ref="A1:B3"))
+    workbook.save(source)
+
+    result = run_xlsx_finding_workflow(
+        AnalysisStore(tmp_path / "multi-table-case"),
+        source,
+        AnalysisOperation("sum", value_column="Value"),
+        selection=SheetSelection(tables=(("Data", "DataTable"),)),
+        human_decision="PENDING",
+    )
+
+    assert result.status == "pending"
+    assert result.selected_source == "Data"
+    assert result.analysis is not None
+    assert result.analysis.calculations[0].output == 30.0

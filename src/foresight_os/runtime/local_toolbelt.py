@@ -518,8 +518,15 @@ def spreadsheet_read(
                     rows.append(tuple(values))
                     row_provenance.append(tuple(provenance))
                     row_measurements.append(tuple(row_cells))
+                nonempty_counts = [sum(value not in (None, "") for value in row) for row in rows]
+                first_dense_row = next((index for index, count in enumerate(nonempty_counts) if count > 1), None)
+                if first_dense_row is not None and first_dense_row > 0 and any(count == 0 for count in nonempty_counts[:first_dense_row]):
+                    rows = rows[first_dense_row:]
+                    row_provenance = row_provenance[first_dense_row:]
+                    row_measurements = row_measurements[first_dense_row:]
+                    nonempty_counts = nonempty_counts[first_dense_row:]
                 header_rows = min(1, len(rows))
-                if len(rows) > 1 and sum(value not in (None, "") for value in rows[0]) <= 1 and sum(value not in (None, "") for value in rows[1]) > 1:
+                if len(rows) > 1 and nonempty_counts[0] <= 1 and nonempty_counts[1] > 1:
                     header_rows = 2
                 headers = tuple(tuple("" if value is None else str(value) for value in rows[index]) for index in range(header_rows))
                 table_id = f"{digest[:12]}:{ws.title}:{source_range}"

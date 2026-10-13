@@ -10,6 +10,8 @@ def create_work_brief(
     desired_deliverables: list[str] | None = None,
     assumptions: list[str] | None = None,
     open_dependencies: list[str] | None = None,
+    stages: list[WorkStage] | None = None,
+    consequence_level: str = "standard",
 ) -> WorkBrief:
     resolved_scope = list(scope or [])
     resolved_deliverables = list(desired_deliverables or ["analysis", "executive report"])
@@ -20,27 +22,11 @@ def create_work_brief(
         decision_question=decision_question,
         scope=resolved_scope,
         desired_deliverables=resolved_deliverables,
-        assumptions=resolved_assumptions or [f"planning horizon is {horizon}"],
+        assumptions=resolved_assumptions,
         open_dependencies=resolved_dependencies,
         current_direction="Assess the decision question using the declared scope and evidence.",
         next_useful_step="Collect the next missing evidence and validate material contradictions.",
-        stages=[
-            WorkStage(
-                "assess-capacity",
-                "Assess forecast demand against available capacity.",
-                participants=["analyst"],
-                expected_result="bounded demand-capacity assessment",
-            ),
-            WorkStage(
-                "validate-contradiction",
-                "Review the capacity contradiction and identify missing evidence.",
-                participants=["reviewer"],
-                dependencies=["assess-capacity"],
-                expected_result="reviewed contradiction and evidence needs",
-                research_needs=[
-                    ResearchNeed(ResearchNeedKind.EXTERNAL_FACT, "capacity expansion cost"),
-                    ResearchNeed(ResearchNeedKind.SOURCE_DETAIL, "source details for capacity expansion cost"),
-                ],
-            ),
-        ],
+        stages=list(stages or []),
+        horizon=horizon,
+        consequence_level=consequence_level,
     )

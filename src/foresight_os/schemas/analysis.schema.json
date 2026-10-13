@@ -93,6 +93,7 @@
         "uncertainty": { "type": "array", "items": { "type": "string" } },
         "confidence_rationale": { "type": "string" },
         "disconfirmation_conditions": { "type": "array", "items": { "type": "string" } }
+        ,"monitoring_indicators": { "type": "array", "items": { "type": "string" } }
       }
     },
     "review_record": {
@@ -110,6 +111,9 @@
         "outcome": { "enum": ["ACCEPTED", "PROVISIONAL", "REJECTED"] },
         "limitations": { "type": "array", "items": { "type": "string" } },
         "unresolved_issues": { "type": "array", "items": { "type": "string" } }
+        ,"policy_id": { "type": "string" }
+        ,"policy_version": { "type": "string" }
+        ,"skill_hashes": { "type": "array", "items": { "type": "string" } }
       }
     },
     "artifact": {

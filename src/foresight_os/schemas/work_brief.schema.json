@@ -23,11 +23,13 @@
     "open_dependencies": { "type": "array", "items": { "type": "string" } },
     "current_direction": { "type": "string" },
     "next_useful_step": { "type": "string" },
+    "horizon": { "type": "string" },
+    "consequence_level": { "type": "string" },
     "execution_pattern_override": {
       "anyOf": [
         { "type": "null" },
         { "type": "string", "enum": ["direct", "sequential", "concurrent", "handoff", "group_chat"] },
-        { "type": "array", "maxItems": 4, "items": { "type": "string", "enum": ["direct", "sequential", "concurrent", "handoff", "group_chat"] } }
+        { "type": "array", "maxItems": 32, "items": { "type": "string", "enum": ["direct", "sequential", "concurrent", "handoff", "group_chat"] } }
       ]
     },
     "stages": {
@@ -48,7 +50,7 @@
             "anyOf": [
               { "type": "null" },
               { "type": "string", "enum": ["direct", "sequential", "concurrent", "handoff", "group_chat"] },
-              { "type": "array", "maxItems": 4, "items": { "type": "string", "enum": ["direct", "sequential", "concurrent", "handoff", "group_chat"] } }
+              { "type": "array", "maxItems": 32, "items": { "type": "string", "enum": ["direct", "sequential", "concurrent", "handoff", "group_chat"] } }
             ]
           },
           "limits": { "type": "object", "additionalProperties": { "type": ["integer", "string"] } },

@@ -5,7 +5,7 @@ import uuid
 from pathlib import Path
 
 import yaml
-from dataclasses import replace
+from dataclasses import asdict, dataclass, replace
 from filelock import FileLock
 
 from foresight_os.domain.models import (
@@ -32,6 +32,63 @@ from foresight_os.domain.challenge import ChallengeObjection, ObjectionDispositi
 from foresight_os.domain.validation import migrate_analysis_dict, validate_analysis, validate_work_brief
 
 
+@dataclass(frozen=True)
+class StageReceipt:
+    stage_id: str
+    input_fingerprint: str
+    skill_hashes: tuple[str, ...] = ()
+    capability_fingerprints: tuple[str, ...] = ()
+    model_config_fingerprint: str = ""
+    authorization_scope_fingerprint: str = ""
+    result_references: tuple[str, ...] = ()
+    result_hashes: tuple[str, ...] = ()
+    status: str = "incomplete"
+    committed: bool = False
+    provenance_complete: bool = False
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, value: dict[str, object]) -> "StageReceipt":
+        return cls(
+            stage_id=str(value["stage_id"]),
+            input_fingerprint=str(value["input_fingerprint"]),
+            skill_hashes=tuple(value.get("skill_hashes", ())),
+            capability_fingerprints=tuple(value.get("capability_fingerprints", ())),
+            model_config_fingerprint=str(value.get("model_config_fingerprint", "")),
+            authorization_scope_fingerprint=str(value.get("authorization_scope_fingerprint", "")),
+            result_references=tuple(value.get("result_references", ())),
+            result_hashes=tuple(value.get("result_hashes", ())),
+            status=str(value.get("status", "incomplete")),
+            committed=bool(value.get("committed", False)),
+            provenance_complete=bool(value.get("provenance_complete", False)),
+        )
+
+    def reusable(self) -> bool:
+        return self.status == "committed" and self.committed and self.provenance_complete and bool(self.result_references) and bool(self.result_hashes)
+
+    def reusable_for(
+        self,
+        *,
+        input_fingerprint: str,
+        skill_hashes: tuple[str, ...] = (),
+        capability_fingerprints: tuple[str, ...] = (),
+        model_config_fingerprint: str = "",
+        authorization_scope_fingerprint: str = "",
+        result_hashes: tuple[str, ...] = (),
+    ) -> bool:
+        return bool(
+            self.reusable()
+            and self.input_fingerprint == input_fingerprint
+            and self.skill_hashes == tuple(skill_hashes)
+            and self.capability_fingerprints == tuple(capability_fingerprints)
+            and self.model_config_fingerprint == model_config_fingerprint
+            and self.authorization_scope_fingerprint == authorization_scope_fingerprint
+            and (not result_hashes or self.result_hashes == tuple(result_hashes))
+        )
+
+
 class AnalysisStore:
     def __init__(self, root: Path):
         self.root = Path(root)
@@ -51,6 +108,10 @@ class AnalysisStore:
     @property
     def pending_tokens_path(self) -> Path:
         return self.root / "analysis.pending.tokens.json"
+
+    @property
+    def stage_receipts_path(self) -> Path:
+        return self.root / "stage-receipts.json"
 
     @property
     def lock_path(self) -> Path:
@@ -92,6 +153,23 @@ class AnalysisStore:
             ))
         return WorkBrief(**{**value, "stages": stages})
 
+    def load_stage_receipts(self) -> dict[str, StageReceipt]:
+        if not self.stage_receipts_path.exists():
+            return {}
+        value = json.loads(self.stage_receipts_path.read_text(encoding="utf-8"))
+        return {key: StageReceipt.from_dict(item) for key, item in value.get("receipts", {}).items()}
+
+    def save_stage_receipt(self, receipt: StageReceipt) -> None:
+        if receipt.status == "committed" and not receipt.reusable():
+            raise ValueError("committed stage receipt requires canonical result references, hashes, and complete provenance")
+        with FileLock(str(self.lock_path)):
+            receipts = self.load_stage_receipts()
+            receipts[receipt.stage_id] = receipt
+            self._atomic_write(
+                self.stage_receipts_path,
+                json.dumps({"schema_version": 1, "receipts": {key: item.to_dict() for key, item in sorted(receipts.items())}}, sort_keys=True, indent=2) + "\n",
+            )
+
     def save_analysis(self, state: AnalysisState) -> None:
         value = validate_analysis(state)
         with FileLock(str(self.lock_path)):
@@ -117,7 +195,7 @@ class AnalysisStore:
                 self.pending_analysis_path.unlink(missing_ok=True)
                 return current
             status = RevisionStatus.ACCEPTED if accepted else RevisionStatus.REJECTED
-            committed = replace(pending or state, revision_status=status, pending_token=None)
+            committed = replace(state, revision_status=status, pending_token=None)
             if pending is not None and current is not None and accepted:
                 committed = self._merge_states(current, committed)
             elif current is not None and current.revision_status != RevisionStatus.PENDING_REVIEW and committed.revision <= current.revision:
@@ -191,6 +269,7 @@ class AnalysisStore:
                 tuple(item.get("uncertainty", ())),
                 item.get("confidence_rationale", ""),
                 tuple(item.get("disconfirmation_conditions", ())),
+                tuple(item.get("monitoring_indicators", ())),
             )
 
         calculations = [
@@ -226,6 +305,9 @@ class AnalysisStore:
                 outcome=ReviewOutcome(item.get("outcome", "PROVISIONAL")),
                 limitations=tuple(item.get("limitations", ())),
                 unresolved_issues=tuple(item.get("unresolved_issues", ())),
+                policy_id=item.get("policy_id", ""),
+                policy_version=item.get("policy_version", ""),
+                skill_hashes=tuple(item.get("skill_hashes", ())),
             )
             for item in value.get("review_records", ())
         ]
@@ -276,13 +358,18 @@ class AnalysisStore:
     def _merge_states(current: AnalysisState, pending: AnalysisState) -> AnalysisState:
         def merge(items):
             result = list(items[0])
-            seen = {getattr(item, "id", getattr(item, "review_id", None)) for item in result}
+            positions = {
+                getattr(item, "id", getattr(item, "review_id", None)): index
+                for index, item in enumerate(result)
+            }
             for collection in items[1:]:
                 for item in collection:
                     item_id = getattr(item, "id", getattr(item, "review_id", None))
-                    if item_id not in seen:
+                    if item_id in positions:
+                        result[positions[item_id]] = item
+                    else:
                         result.append(item)
-                        seen.add(item_id)
+                        positions[item_id] = len(result) - 1
             return result
 
         return replace(

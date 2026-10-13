@@ -9,6 +9,7 @@ from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.runtime.workflow import run_recipe
 from foresight_os.vertical_slice import run_vertical_slice
 from foresight_os.wayfinding import create_work_brief
+from participant_scope import ParticipantScope
 
 
 def run_candidate(
@@ -16,11 +17,13 @@ def run_candidate(
     candidate: str,
     work_dir: Path | None = None,
     output_root: Path | None = None,
+    participant_scope: ParticipantScope | None = None,
 ) -> dict:
     if work_dir is not None and output_root is not None:
         raise ValueError("pass work_dir or output_root, not both")
     work_dir = work_dir or (output_root / case_dir.name / candidate if output_root else Path(tempfile.mkdtemp(prefix="foresight-eval-") ) / case_dir.name / candidate)
-    outcome = run_vertical_slice(case_dir / "workbook.csv", work_dir, human_accept=True)
+    workbook = participant_scope.resolve(case_dir / "workbook.csv") if participant_scope is not None else case_dir / "workbook.csv"
+    outcome = run_vertical_slice(workbook, work_dir, human_accept=True)
     state = AnalysisStore(work_dir).load_analysis() if outcome.accepted else None
     recipe_name = {
         "direct": RecipeName.DIRECT,

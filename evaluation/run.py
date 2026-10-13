@@ -212,6 +212,15 @@ def run_live_smoke(pattern: str, env_file: Path, config_file: Path) -> dict:
 
 
 def render_markdown(report: dict) -> str:
+    if "case_id" not in report:
+        lines = [f"# Evaluation Matrix: {report.get('matrix', 'unknown')}", "", f"- Passed: `{report.get('passed', False)}`"]
+        if "accuracy" in report:
+            lines.append(f"- Accuracy: `{report['accuracy']}`")
+        lines.append("")
+        lines.append("```json")
+        lines.append(json.dumps(report, sort_keys=True, indent=2, default=str))
+        lines.append("```")
+        return "\n".join(lines) + "\n"
     lines = [f"# Evaluation Report: {report['case_id']}", "", "## Thresholds", json.dumps(report["thresholds"], sort_keys=True), "", "## Comparison"]
     for name, metrics in report.get("comparison", {}).items():
         lines.append(f"- `{name}`: {json.dumps(metrics, sort_keys=True)}")

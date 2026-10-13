@@ -80,6 +80,8 @@ def _normalize_work_brief(value: dict[str, Any]) -> dict[str, Any]:
         current.setdefault("limits", {})
         stages.append(current)
     normalized["stages"] = stages
+    normalized.setdefault("horizon", "unspecified")
+    normalized.setdefault("consequence_level", "standard")
     return normalized
 
 
