@@ -165,14 +165,29 @@ async def run_recipe_async(
     context["metrics"] = metrics
     context["budget"] = budget
     context.setdefault("capability_resolver", CapabilityResolver())
+    required_capabilities: set[str] = set()
+    for stage in recipe.stages or ():
+        for participant in getattr(stage, "participants", ()):
+            required_capabilities.update(ParticipantConfig.from_mapping(participant).capability_ids)
+    if not recipe.stages:
+        for participant in recipe.roles:
+            required_capabilities.update(ParticipantConfig.from_mapping(participant).capability_ids)
+    context["required_capabilities"] = tuple(sorted(required_capabilities))
     local_bindings = context.setdefault("local_capabilities", {})
     for name, binding in bind_local_toolbelt().items():
         local_bindings.setdefault(name, binding)
     if context.get("mcp_bindings") is not None:
-        context.setdefault("mcp_tools", {}).update(context["mcp_bindings"])
+        context.setdefault("mcp_tools", {}).update(
+            {key: value for key, value in context["mcp_bindings"].items() if not required_capabilities or key in required_capabilities}
+        )
     else:
-        for capability_id, binding in load_hosted_mcp_bindings(context.get("mcp_environment")).items():
-            context.setdefault("mcp_tools", {}).setdefault(capability_id, binding)
+        if required_capabilities:
+            for capability_id, binding in load_hosted_mcp_bindings(
+                context.get("mcp_environment"),
+                required_capabilities=required_capabilities,
+            ).items():
+                if capability_id in required_capabilities:
+                    context.setdefault("mcp_tools", {}).setdefault(capability_id, binding)
     if context.get("web_search_provider") is not None:
         context.setdefault("adapters", {}).setdefault("web_search", bind_web_search(context["web_search_provider"]))
     if context.get("page_retrieval") is not None:

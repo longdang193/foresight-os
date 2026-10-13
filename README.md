@@ -112,3 +112,13 @@ External MCP results must enter the same sanitized evidence boundary as web
 search: no raw payloads in durable analysis state, explicit source identity,
 retrieval time, query provenance, read-only authorization, and independent
 `VERIFIED`/`BLOCKED_EXTERNAL`/`FAILED` receipts.
+
+## Optimization release evidence
+
+The optimization probe records the frozen baseline and release receipts under ignored `work/optimization-baseline/` and `work/optimization-release/`.
+
+- Baseline: `python evaluation/probes/run_optimization_probe.py --mode baseline --output work/optimization-baseline/receipt.json`
+- Release: `python evaluation/probes/run_optimization_probe.py --mode release --output work/optimization-release/receipt.json`
+- Acceptance is frozen at two warmups and ten measured runs per MAF pattern, with p95/event-loop regressions capped at 20%, peak allocation at 15%, no tool-call increase per accepted finding, and a 100-run no-growth soak.
+- `CapabilityScope` owns run-scoped semaphores, bounded blocking execution, cancellation settlement, workbook reuse, and cleanup. Native MCP tools use public Agent Framework middleware; local XLSX reads remain read-only and preserve source-path provenance.
+- Browser crawling keeps certificate validation enabled, validates each destination and same-host DNS change, and uses native WebSocket/service-worker controls.

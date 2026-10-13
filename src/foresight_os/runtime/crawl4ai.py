@@ -83,7 +83,7 @@ class Crawl4AICapability:
                     headless=True,
                     java_script_enabled=True,
                     verbose=False,
-                    ignore_https_errors=True,
+                    ignore_https_errors=False,
                     extra_args=extra_args,
                 )
             if strategy_type is not None:
@@ -134,6 +134,22 @@ class Crawl4AICapability:
                             """
                         )
                         await context.route("**/*", guard_request)
+                        if hasattr(context, "route_web_socket"):
+                            async def guard_websocket(websocket):
+                                try:
+                                    websocket_parts = urlsplit(websocket.url)
+                                    validation_scheme = {"ws": "http", "wss": "https"}.get(websocket_parts.scheme, websocket_parts.scheme)
+                                    validation_url = urlunsplit(
+                                        (validation_scheme, websocket_parts.netloc, websocket_parts.path, websocket_parts.query, websocket_parts.fragment)
+                                    )
+                                    validate_destination(validation_url, self.fixture_hosts)
+                                    websocket_host = (websocket_parts.hostname or "").lower().rstrip(".")
+                                    if websocket_host != origin_host and websocket_host not in {item.lower().rstrip(".") for item in self.fixture_hosts}:
+                                        await websocket.close()
+                                except Exception:
+                                    await websocket.close()
+
+                            await context.route_web_socket("**/*", guard_websocket)
                     else:
                         await page.route("**/*", guard_request)
 

@@ -93,3 +93,9 @@ The case is synthetic and contains no customer data or external dependencies.
 Probe reports retain endpoint hosts, source identity, timestamps, typed
 metadata, metrics, and cleanup status only. Tokens, prompts, headers, and raw
 external payloads are not durable evidence.
+
+## Optimization pass evidence
+
+`run_optimization_probe.py` is the release-level measurement entry point. It compares cold/warm XLSX reads and all four MAF patterns, proves a credential-free native Streamable HTTP MCP discovery path, records external-call and cleanup metrics, and runs a 100-run resource soak. Thresholds are frozen in `work/optimization-baseline/acceptance.json` before implementation changes.
+
+The optimization contract keeps blocking XLSX work off the event loop, shares run-scoped capacity and cancellation settlement, keeps provider construction selective, and uses public Agent Framework function middleware for native MCP invocations. XLSX cache entries are immutable and run-local; keys include canonical source identity, digest, selection, and effective limits. Browser controls retain certificate verification, redirect/DNS validation, WebSocket interception, and service-worker blocking.

@@ -46,6 +46,23 @@ def test_load_bindings_requires_explicit_credentials():
     assert set(bindings) == {"technology_signals", "market_signals"}
 
 
+def test_load_bindings_only_constructs_requested_capabilities():
+    created = []
+
+    class TrackingTool(FakeMCPTool):
+        def __init__(self, **kwargs):
+            created.append(kwargs["name"])
+            super().__init__(**kwargs)
+
+    bindings = load_hosted_mcp_bindings(
+        {"GITHUB_MCP_TOKEN": "github-token", "ALPHAVANTAGE_API_KEY": "alpha-key"},
+        tool_factory=TrackingTool,
+        required_capabilities={"technology_signals"},
+    )
+    assert set(bindings) == {"technology_signals"}
+    assert created == ["foresight-github"]
+
+
 def test_hosted_mcp_tool_is_injected_into_maf_agent_and_scope_closes_it():
     captured = {}
 

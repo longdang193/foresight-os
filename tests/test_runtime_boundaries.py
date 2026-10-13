@@ -1,10 +1,12 @@
 import asyncio
+import time
+from types import SimpleNamespace
 import pytest
 
 from agent_framework import Agent, ChatResponse, ChatResponseUpdate, Content, Message, ResponseStream
 from foresight_os.controller.recipes import ExecutionPattern, RecipeName, ExecutionRecipe, RecipeStage, make_recipe
 from foresight_os.runtime.metrics import BudgetExceededError, FailureClass, RunMetrics
-from foresight_os.runtime.capabilities import CapabilityDefinition, instrument_tool
+from foresight_os.runtime.capabilities import CapabilityDefinition, ExecutionMode, ForesightFunctionMiddleware, ScopeOwnership, CapabilityScope, instrument_tool
 from foresight_os.controller.budgets import BudgetState
 from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
 from foresight_os.runtime.workflow import run_recipe_async
@@ -150,7 +152,7 @@ def test_mcp_tool_calls_are_instrumented_through_maf_boundary():
     assert metrics.tool_failures == 0
 
 
-def test_mcp_instrumentation_preserves_agent_framework_sdk_type():
+def test_mcp_instrumentation_uses_thin_public_adapter():
     from agent_framework import MCPStreamableHTTPTool
 
     tool = MCPStreamableHTTPTool("probe", "http://127.0.0.1", load_prompts=False)
@@ -161,7 +163,7 @@ def test_mcp_instrumentation_preserves_agent_framework_sdk_type():
     tool.call_tool = fake_call_tool
     wrapped = instrument_tool(tool, CapabilityDefinition("mcp", "external_read"), {})
     assert wrapped is not tool
-    assert isinstance(wrapped, MCPStreamableHTTPTool)
+    assert wrapped.__foresight_instrumented__
     assert asyncio.run(wrapped.call_tool("read", query="capacity"))["name"] == "read"
 
 
@@ -184,31 +186,141 @@ def test_reused_mcp_tool_rebinds_budget_and_metrics_per_run():
     assert second_metrics.tool_calls == 1
 
 
-def test_reused_mcp_tool_rebinds_discovered_function_to_each_run():
-    from agent_framework import FunctionTool
+def test_blocking_capability_runs_off_event_loop_and_settles_cancellation():
+    async def scenario():
+        scope = CapabilityScope(ownership=ScopeOwnership.RUN)
+        metrics = RunMetrics("blocking", "DIRECT", "direct")
 
-    class SDKTool:
-        def __init__(self):
-            self._functions = [FunctionTool(name="read", description="read", func=self._make_caller(self), input_model={"type": "object", "properties": {}})]
+        def blocking(cancel_check=None):
+            for _ in range(100):
+                time.sleep(0.001)
+                if cancel_check and cancel_check():
+                    return "cancelled"
+            return "done"
 
-        @staticmethod
-        def _make_caller(mcp_tool):
-            async def caller(**kwargs):
-                return await mcp_tool.call_tool("read", **kwargs)
+        wrapped = instrument_tool(
+            blocking,
+            CapabilityDefinition("spreadsheet_read", "local_deterministic", execution_mode=ExecutionMode.BLOCKING),
+            {"scope": scope, "metrics": metrics},
+        )
+        heartbeat = asyncio.Event()
 
-            return caller
+        async def pulse():
+            await asyncio.sleep(0.005)
+            heartbeat.set()
 
-        async def call_tool(self, name, **kwargs):
-            return {"name": name, **kwargs}
+        task = asyncio.create_task(wrapped())
+        await pulse()
+        assert heartbeat.is_set()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await scope.close()
+        assert metrics.cancellation_settlements == 1
+        assert scope.executor is None
 
-    tool = SDKTool()
-    first_metrics = RunMetrics("first-discovered", "DIRECT", "direct")
-    second_metrics = RunMetrics("second-discovered", "DIRECT", "direct")
-    first = instrument_tool(tool, CapabilityDefinition("mcp", "external_read"), {"metrics": first_metrics})
-    second = instrument_tool(tool, CapabilityDefinition("mcp", "external_read"), {"metrics": second_metrics})
+    asyncio.run(scenario())
 
-    asyncio.run(first._functions[0].invoke(arguments={}))
-    asyncio.run(second._functions[0].invoke(arguments={}))
 
-    assert first_metrics.tool_calls == 1
-    assert second_metrics.tool_calls == 1
+def test_public_function_middleware_accounts_for_native_function_invocation():
+    async def scenario():
+        metrics = RunMetrics("middleware", "DIRECT", "direct")
+        scope = CapabilityScope(ownership=ScopeOwnership.RUN)
+        middleware = ForesightFunctionMiddleware(
+            {"read_evidence": CapabilityDefinition("mcp_read", "external_read")},
+            {"scope": scope, "metrics": metrics, "budget": BudgetState(5, 1, 5, max_tool_calls=1)},
+        )
+        context = SimpleNamespace(function=SimpleNamespace(name="read_evidence"))
+        called = []
+
+        async def call_next():
+            called.append(True)
+
+        await middleware.process(context, call_next)
+        assert called == [True]
+        assert metrics.tool_calls == 1
+        await scope.close()
+
+    asyncio.run(scenario())
+
+
+def test_public_function_middleware_preserves_provider_errors_and_cleanup():
+    async def scenario():
+        metrics = RunMetrics("middleware-error", "DIRECT", "direct")
+        scope = CapabilityScope(ownership=ScopeOwnership.RUN)
+        middleware = ForesightFunctionMiddleware(
+            {"read_evidence": CapabilityDefinition("mcp_read", "external_read")},
+            {"scope": scope, "metrics": metrics, "budget": BudgetState(5, 1, 5, max_tool_calls=1)},
+        )
+
+        async def provider():
+            raise RuntimeError("provider failed")
+
+        function = SimpleNamespace(name="read_evidence")
+        context = SimpleNamespace(function=function, arguments={"query": "capacity"})
+
+        async def call_next():
+            await provider()
+
+        with pytest.raises(RuntimeError, match="provider failed"):
+            await middleware.process(context, call_next)
+        assert metrics.tool_calls == 1
+        assert metrics.tool_failures == 1
+        await scope.close()
+        assert scope._closed
+
+    asyncio.run(scenario())
+
+
+def test_public_function_middleware_rejects_budget_before_provider_call():
+    async def scenario():
+        metrics = RunMetrics("middleware-budget", "DIRECT", "direct")
+        scope = CapabilityScope(ownership=ScopeOwnership.RUN)
+        middleware = ForesightFunctionMiddleware(
+            {"read_evidence": CapabilityDefinition("mcp_read", "external_read")},
+            {"scope": scope, "metrics": metrics, "budget": BudgetState(5, 1, 5, max_tool_calls=0)},
+        )
+        provider_calls = 0
+        context = SimpleNamespace(function=SimpleNamespace(name="read_evidence"), arguments={})
+
+        async def call_next():
+            nonlocal provider_calls
+            provider_calls += 1
+
+        with pytest.raises(BudgetExceededError):
+            await middleware.process(context, call_next)
+        assert provider_calls == 0
+        assert metrics.tool_calls == 0
+        assert metrics.budget_failures == 1
+        await scope.close()
+
+    asyncio.run(scenario())
+
+
+def test_public_function_middleware_settles_cancellation_after_provider_exit():
+    async def scenario():
+        metrics = RunMetrics("middleware-cancel", "DIRECT", "direct")
+        scope = CapabilityScope(ownership=ScopeOwnership.RUN)
+        middleware = ForesightFunctionMiddleware(
+            {"read_evidence": CapabilityDefinition("mcp_read", "external_read")},
+            {"scope": scope, "metrics": metrics, "budget": BudgetState(5, 1, 5, max_tool_calls=1)},
+        )
+        provider_exited = asyncio.Event()
+        context = SimpleNamespace(function=SimpleNamespace(name="read_evidence"), arguments={})
+
+        async def call_next():
+            try:
+                await asyncio.sleep(60)
+            finally:
+                provider_exited.set()
+
+        task = asyncio.create_task(middleware.process(context, call_next))
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert provider_exited.is_set()
+        assert metrics.tool_calls == 1
+        await scope.close()
+
+    asyncio.run(scenario())

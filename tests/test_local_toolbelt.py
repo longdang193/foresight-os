@@ -16,6 +16,7 @@ from foresight_os.runtime.local_toolbelt import (
     calculation,
     data_analysis,
     spreadsheet_read,
+    WorkbookReadCache,
 )
 
 
@@ -234,6 +235,56 @@ def test_xlsx_merged_range_count_is_limited_before_loading(tmp_path):
 
     with pytest.raises(ToolbeltError, match="merged range limit"):
         spreadsheet_read(source, limits=ToolbeltLimits(max_merged_ranges=1))
+
+
+def test_xlsx_merged_area_is_limited_before_loading(tmp_path):
+    source = tmp_path / "merged-area-limit.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.merge_cells("A1:C4")
+    workbook.save(source)
+
+    with pytest.raises(ToolbeltError, match="merged area exceeds per-range"):
+        spreadsheet_read(source, limits=ToolbeltLimits(max_merged_cells_per_range=3))
+
+
+def test_compare_preserves_missing_values_and_reports_incomplete_status(tmp_path):
+    source = tmp_path / "compare.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.append(["Left", "Right"])
+    sheet.append([10, None])
+    workbook.save(source)
+
+    result = data_analysis(spreadsheet_read(source).tables[0], AnalysisOperation("compare", columns=("Left", "Right")))
+    assert result.rows[0]["delta"] is None
+    assert result.rows[0]["status"] == "INCOMPLETE_INPUT"
+
+
+@pytest.mark.parametrize("kind", ["aggregate", "sum", "mean"])
+def test_aggregate_aliases_return_deterministic_numeric_results(tmp_path, kind):
+    source = tmp_path / f"{kind}.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.append(["Value"])
+    sheet.append([2])
+    sheet.append([4])
+    workbook.save(source)
+
+    result = data_analysis(spreadsheet_read(source).tables[0], AnalysisOperation(kind, value_column="Value"))
+    assert result.rows[0]["sum"] == 6.0
+    assert result.rows[0]["mean"] == 3.0
+
+
+def test_run_local_workbook_cache_keeps_path_provenance(tmp_path, workbook_path):
+    second = tmp_path / "same-content.xlsx"
+    second.write_bytes(workbook_path.read_bytes())
+    cache = WorkbookReadCache()
+    first_result = spreadsheet_read(workbook_path, _cache=cache)
+    second_result = spreadsheet_read(second, _cache=cache)
+    assert cache.size == 2
+    assert first_result.source == str(workbook_path)
+    assert second_result.source == str(second)
+    assert first_result.workbook_sha256 == second_result.workbook_sha256
 
 
 def test_calculation_provenance_qualifies_workbook_sheet_and_coordinate(workbook_path):

@@ -1,12 +1,13 @@
 import inspect
 import asyncio
-import copy
 import functools
 import time
-import types
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Mapping
+
+from agent_framework import FunctionMiddleware
 
 
 class CapabilityDecision(StrEnum):
@@ -32,6 +33,12 @@ class ScopeOwnership(StrEnum):
     BORROWED = "BORROWED"
 
 
+class ExecutionMode(StrEnum):
+    ASYNC = "ASYNC"
+    INLINE = "INLINE"
+    BLOCKING = "BLOCKING"
+
+
 @dataclass(frozen=True)
 class CapabilityBinding:
     value: Any
@@ -51,6 +58,7 @@ class CapabilityDefinition:
     approval_policy: str = "NONE"
     binding_kind: CapabilityBindingKind = CapabilityBindingKind.TOOL
     data_scope: str = "public"
+    execution_mode: ExecutionMode = ExecutionMode.ASYNC
 
 
 @dataclass(frozen=True)
@@ -67,6 +75,9 @@ class CapabilityScope:
     ownership: ScopeOwnership = ScopeOwnership.BORROWED
     resources: list[Any] = field(default_factory=list)
     cache: dict[tuple[str, str, str], Any] = field(default_factory=dict)
+    semaphores: dict[str, asyncio.Semaphore] = field(default_factory=dict)
+    executor: ThreadPoolExecutor | None = None
+    workbook_cache: Any = None
     _closed: bool = field(default=False, init=False, repr=False)
 
     def register(self, resource: Any, ownership: CapabilityOwnership = CapabilityOwnership.OWNED) -> Any:
@@ -82,6 +93,21 @@ class CapabilityScope:
             return
         self._closed = True
         errors: list[BaseException] = []
+        if self.executor is not None:
+            executor = self.executor
+            self.executor = None
+            try:
+                await asyncio.to_thread(executor.shutdown, wait=True, cancel_futures=False)
+            except BaseException as error:
+                errors.append(error)
+        if self.workbook_cache is not None:
+            clear = getattr(self.workbook_cache, "clear", None)
+            if clear is not None:
+                try:
+                    clear()
+                except BaseException as error:
+                    errors.append(error)
+            self.workbook_cache = None
         for resource in reversed(self.resources):
             close = getattr(resource, "close", None)
             if close is None:
@@ -221,8 +247,36 @@ class CapabilityResolver:
 
 
 def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, context: Mapping[str, Any]):
-    semaphores = context.setdefault("_capability_semaphores", {})  # type: ignore[attr-defined]
+    scope = context.get("scope")
+    semaphores = getattr(scope, "semaphores", None) if scope is not None else None
+    if semaphores is None:
+        semaphores = context.setdefault("_capability_semaphores", {})  # type: ignore[attr-defined]
     semaphore = semaphores.setdefault(definition.id, asyncio.Semaphore(max(1, definition.max_parallelism)))
+    mode = definition.execution_mode
+
+    def blocking_call(args: tuple[Any, ...], kwargs: dict[str, Any], cancel_event: asyncio.Event | None) -> Any:
+        effective_kwargs = dict(kwargs)
+        if definition.id == "spreadsheet_read" and scope is not None:
+            try:
+                accepts_cache = "_cache" in inspect.signature(dispatch).parameters
+            except (TypeError, ValueError):
+                accepts_cache = False
+            if accepts_cache:
+                if getattr(scope, "workbook_cache", None) is None:
+                    from foresight_os.runtime.local_toolbelt import WorkbookReadCache
+                    scope.workbook_cache = WorkbookReadCache()
+                effective_kwargs.setdefault("_cache", scope.workbook_cache)
+        if cancel_event is not None:
+            try:
+                parameters = inspect.signature(dispatch).parameters
+            except (TypeError, ValueError):
+                parameters = {}
+            if "cancel_check" in parameters:
+                effective_kwargs.setdefault("cancel_check", cancel_event.is_set)
+        result = dispatch(*args, **effective_kwargs)
+        if inspect.isawaitable(result):
+            return asyncio.run(result)
+        return result
 
     async def invoke(*args: Any, **kwargs: Any) -> Any:
         from foresight_os.runtime.metrics import BudgetExceededError, FailureClass
@@ -230,15 +284,43 @@ def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, cont
         budget = context.get("budget")
         metrics = context.get("metrics")
         started = time.perf_counter()
+        queue_started = time.perf_counter()
+        cancel_event = asyncio.Event() if mode == ExecutionMode.BLOCKING else None
         try:
             if budget is not None and not budget.reserve(tool_calls=1):
                 raise BudgetExceededError(f"maximum tool calls exceeded before dispatch: {definition.id}")
             async with semaphore:
                 if metrics is not None:
+                    metrics.queue_wait_ms += round((time.perf_counter() - queue_started) * 1000)
+                if metrics is not None:
                     metrics.tool_calls += 1
-                result = dispatch(*args, **kwargs)
-                if inspect.isawaitable(result):
-                    result = await result
+                if mode == ExecutionMode.BLOCKING:
+                    if scope is not None and getattr(scope, "executor", None) is None:
+                        scope.executor = ThreadPoolExecutor(max_workers=max(1, definition.max_parallelism))
+                    executor = getattr(scope, "executor", None)
+                    if executor is None:
+                        raise RuntimeError("blocking capability scope has no executor")
+                    loop = asyncio.get_running_loop()
+                    future = loop.run_in_executor(executor, blocking_call, args, dict(kwargs), cancel_event)
+                    try:
+                        result = await asyncio.shield(future)
+                    except asyncio.CancelledError:
+                        if cancel_event is not None:
+                            cancel_event.set()
+                        if metrics is not None:
+                            metrics.cancellation_settlements += 1
+                        await asyncio.shield(future)
+                        raise
+                else:
+                    effective_kwargs = dict(kwargs)
+                    if definition.id == "spreadsheet_read" and scope is not None:
+                        if getattr(scope, "workbook_cache", None) is None:
+                            from foresight_os.runtime.local_toolbelt import WorkbookReadCache
+                            scope.workbook_cache = WorkbookReadCache()
+                        effective_kwargs.setdefault("_cache", scope.workbook_cache)
+                    result = dispatch(*args, **effective_kwargs)
+                    if inspect.isawaitable(result):
+                        result = await result
                 return result
         except BudgetExceededError as error:
             if metrics is not None:
@@ -250,9 +332,56 @@ def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, cont
             raise
         finally:
             if metrics is not None:
-                metrics.tool_latency_ms += round((time.perf_counter() - started) * 1000)
+                elapsed_ms = round((time.perf_counter() - started) * 1000)
+                metrics.tool_latency_ms += elapsed_ms
+                metrics.execution_time_ms += elapsed_ms
 
     return invoke
+
+
+class ForesightFunctionMiddleware(FunctionMiddleware):
+    """Public Agent Framework middleware for native MCP function calls."""
+
+    def __init__(self, definitions: Mapping[str, CapabilityDefinition], context: Mapping[str, Any]) -> None:
+        self.definitions = dict(definitions)
+        self.context = context
+
+    async def process(self, invocation_context: Any, call_next: Any) -> None:
+        from foresight_os.runtime.metrics import BudgetExceededError, FailureClass
+
+        name = getattr(invocation_context.function, "name", "")
+        definition = self.definitions.get(name)
+        if definition is None:
+            await call_next()
+            return
+        budget = self.context.get("budget")
+        metrics = self.context.get("metrics")
+        scope = self.context.get("scope")
+        semaphores = getattr(scope, "semaphores", None) if scope is not None else None
+        if semaphores is None:
+            semaphores = self.context.setdefault("_capability_semaphores", {})
+        semaphore = semaphores.setdefault(definition.id, asyncio.Semaphore(max(1, definition.max_parallelism)))
+        started = time.perf_counter()
+        try:
+            if budget is not None and not budget.reserve(tool_calls=1):
+                raise BudgetExceededError(f"maximum tool calls exceeded before dispatch: {definition.id}")
+            async with semaphore:
+                if metrics is not None:
+                    metrics.tool_calls += 1
+                await call_next()
+        except BudgetExceededError as error:
+            if metrics is not None:
+                metrics.record_failure(FailureClass.BUDGET, error)
+            raise
+        except BaseException as error:
+            if metrics is not None:
+                metrics.record_failure(FailureClass.TOOL, error)
+            raise
+        finally:
+            if metrics is not None:
+                elapsed_ms = round((time.perf_counter() - started) * 1000)
+                metrics.tool_latency_ms += elapsed_ms
+                metrics.execution_time_ms += elapsed_ms
 
 
 class _InstrumentedMCPTool:
@@ -269,83 +398,13 @@ class _InstrumentedMCPTool:
         return getattr(self._tool, name)
 
 
-def _make_cell(value: Any):
-    def capture():
-        return value
-
-    return capture.__closure__[0]
-
-
-def _rebind_mcp_callable(function: Any, tool: Any) -> Any:
-    if not isinstance(function, types.FunctionType) or not function.__closure__:
-        return function
-    if "mcp_tool" not in function.__code__.co_freevars:
-        return function
-    cells = list(function.__closure__)
-    cells[function.__code__.co_freevars.index("mcp_tool")] = _make_cell(tool)
-    rebound = types.FunctionType(function.__code__, function.__globals__, function.__name__, function.__defaults__, tuple(cells))
-    rebound.__kwdefaults__ = function.__kwdefaults__
-    rebound.__annotations__ = dict(function.__annotations__)
-    rebound.__dict__.update(function.__dict__)
-    return rebound
-
-
-def _clone_mcp_function(function: Any, tool: Any) -> Any:
-    try:
-        from agent_framework import FunctionTool
-
-        rebound = _rebind_mcp_callable(getattr(function, "func", None), tool)
-        schema = getattr(function, "_input_schema_cached", None) or getattr(function, "input_model", None)
-        return FunctionTool(
-            name=function.name,
-            description=function.description,
-            approval_mode=function.approval_mode,
-            kind=getattr(function, "kind", None),
-            max_invocations=getattr(function, "max_invocations", None),
-            max_invocation_exceptions=getattr(function, "max_invocation_exceptions", None),
-            additional_properties=copy.deepcopy(getattr(function, "additional_properties", None)),
-            func=rebound,
-            input_model=copy.deepcopy(schema),
-            result_parser=getattr(function, "result_parser", None),
-        )
-    except (AttributeError, TypeError, ValueError):
-        return copy.copy(function)
-
-
 def instrument_tool(tool: Any, definition: CapabilityDefinition, context: Mapping[str, Any]) -> Any:
     mcp_call = getattr(tool, "call_tool", None)
     if callable(mcp_call) and not callable(tool):
-        try:
-            isolated = copy.copy(tool)
-            previous = getattr(tool, "__foresight_original_call_tool__", None)
-            function = getattr(previous, "__func__", None)
-            if function is not None:
-                original = function.__get__(isolated, type(isolated))
-            else:
-                original = getattr(isolated, "call_tool")
-            dispatch = _instrumented_dispatch(original, definition, context)
-            if hasattr(isolated, "_functions"):
-                isolated._functions = [_clone_mcp_function(function, isolated) for function in isolated._functions]
-            if hasattr(isolated, "_tool_call_meta_by_name"):
-                isolated._tool_call_meta_by_name = dict(isolated._tool_call_meta_by_name)
-            if hasattr(isolated, "_tool_task_support_by_name"):
-                isolated._tool_task_support_by_name = dict(isolated._tool_task_support_by_name)
-            if hasattr(isolated, "_tool_param_names_by_name"):
-                isolated._tool_param_names_by_name = {
-                    name: set(values) for name, values in isolated._tool_param_names_by_name.items()
-                }
-            if hasattr(isolated, "_progressive_loaded_tool_names"):
-                isolated._progressive_loaded_tool_names = set(isolated._progressive_loaded_tool_names)
-            setattr(isolated, "__foresight_original_call_tool__", original)
-            setattr(isolated, "call_tool", dispatch)
-            setattr(isolated, "__foresight_instrumented__", True)
-            setattr(isolated, "capability_id", definition.id)
-            return isolated
-        except (AttributeError, TypeError):
-            dispatch = _instrumented_dispatch(mcp_call, definition, context)
-            wrapped = _InstrumentedMCPTool(tool, dispatch)
-            wrapped.capability_id = definition.id
-            return wrapped
+        dispatch = _instrumented_dispatch(mcp_call, definition, context)
+        wrapped = _InstrumentedMCPTool(tool, dispatch)
+        wrapped.capability_id = definition.id
+        return wrapped
     if not callable(tool):
         return tool
 
@@ -369,11 +428,11 @@ DEFAULT_CAPABILITIES = {
     "technology_signals": CapabilityDefinition("technology_signals", "external_read", "read", "RUN", 1, data_scope="public"),
     "market_signals": CapabilityDefinition("market_signals", "external_read", "read", "RUN", 1, data_scope="public"),
     "macro_signals": CapabilityDefinition("macro_signals", "external_read", "read", "RUN", 1, data_scope="public"),
-    "spreadsheet_read": CapabilityDefinition("spreadsheet_read", "local_deterministic", "read", "RUN", 1, data_scope="local"),
-    "data_analysis": CapabilityDefinition("data_analysis", "local_deterministic", "read", "RUN", 1, data_scope="local"),
-    "calculation": CapabilityDefinition("calculation", "local_deterministic", "read", "RUN", 1, data_scope="local"),
-    "graph_context": CapabilityDefinition("graph_context", "local_deterministic", "read", "RUN", 1, data_scope="local"),
-    "domain_validation": CapabilityDefinition("domain_validation", "local_deterministic", "read", "RUN", 1, data_scope="local"),
+    "spreadsheet_read": CapabilityDefinition("spreadsheet_read", "local_deterministic", "read", "RUN", 1, data_scope="local", execution_mode=ExecutionMode.BLOCKING),
+    "data_analysis": CapabilityDefinition("data_analysis", "local_deterministic", "read", "RUN", 1, data_scope="local", execution_mode=ExecutionMode.BLOCKING),
+    "calculation": CapabilityDefinition("calculation", "local_deterministic", "read", "RUN", 1, data_scope="local", execution_mode=ExecutionMode.INLINE),
+    "graph_context": CapabilityDefinition("graph_context", "local_deterministic", "read", "RUN", 1, data_scope="local", execution_mode=ExecutionMode.BLOCKING),
+    "domain_validation": CapabilityDefinition("domain_validation", "local_deterministic", "read", "RUN", 1, data_scope="local", execution_mode=ExecutionMode.INLINE),
     "document_read": CapabilityDefinition("document_read", "unavailable", "read", "RUN", 1, data_scope="local"),
     "internal_knowledge": CapabilityDefinition("internal_knowledge", "unavailable", "read", "RUN", 1, data_scope="internal"),
     "artifact_generation": CapabilityDefinition("artifact_generation", "unavailable", "write", "RUN", 1, "HUMAN", data_scope="local"),

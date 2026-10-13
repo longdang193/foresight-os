@@ -138,10 +138,13 @@ def load_hosted_mcp_bindings(
     environment: Mapping[str, str] | None = None,
     *,
     tool_factory: Any | None = None,
+    required_capabilities: set[str] | tuple[str, ...] | None = None,
 ) -> dict[str, CapabilityBinding]:
     values = os.environ if environment is None else environment
     bindings: dict[str, CapabilityBinding] = {}
     for provider_id, provider in HOSTED_MCP_PROVIDERS.items():
+        if required_capabilities is not None and provider.capability_id not in required_capabilities:
+            continue
         credential = str(values.get(provider.credential_env, "")).strip()
         if not credential:
             continue
