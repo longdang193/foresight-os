@@ -112,7 +112,7 @@ def test_external_candidate_is_typed_and_local_calculation_stays_a_calculation_r
     evidence = normalize_evidence_candidate(
         {
             "candidate_id": "candidate-1",
-            "capability_id": "web_search",
+            "capability_id": "test_source",
             "source": "public-source",
             "request": "capacity",
             "excerpt": "Capacity remains uncertain.",

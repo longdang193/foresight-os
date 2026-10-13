@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, RecipeName, RecipeStage, make_recipe
 from foresight_os.controller.task_shape import TaskShape
-from foresight_os.domain.models import WorkBrief
+from foresight_os.domain.models import ResearchNeed, ResearchNeedKind, WorkBrief
 
 
 @dataclass(frozen=True)
@@ -77,29 +77,31 @@ def _recipe_for_patterns(
         ExecutionPattern.GROUP_CHAT: RecipeName.CHALLENGE_RECOMMENDATION,
     }
     capability_map = {
-        "external_research": "web_search",
-        "web": "web_search",
-        "search": "web_search",
-        "source_detail": "page_retrieval",
-        "page": "page_retrieval",
-        "existing_evidence": "graph_context",
-        "graph": "graph_context",
-        "quantitative_work": "calculation",
-        "cost": "calculation",
-        "quality_check": "domain_validation",
-        "validate": "domain_validation",
+        ResearchNeedKind.EXTERNAL_FACT.value: ("web_search",),
+        ResearchNeedKind.SOURCE_DETAIL.value: ("page_retrieval",),
+        ResearchNeedKind.DOCUMENT_REVIEW.value: ("document_read",),
+        ResearchNeedKind.STRUCTURED_DATA.value: ("spreadsheet_read",),
+        ResearchNeedKind.QUANTITATIVE_ANALYSIS.value: ("data_analysis", "calculation"),
+        ResearchNeedKind.EXISTING_EVIDENCE.value: ("graph_context",),
+        ResearchNeedKind.INTERNAL_KNOWLEDGE.value: ("internal_knowledge",),
+        ResearchNeedKind.VALIDATION.value: ("domain_validation",),
+        ResearchNeedKind.ARTIFACT_OUTPUT.value: ("artifact_generation",),
     }
 
     def stage_capabilities(stage: object) -> tuple[tuple[str, ...], tuple[str, ...]]:
         capabilities: list[str] = []
         unresolved: list[str] = []
         for need in getattr(stage, "research_needs", ()):
-            text = str(need).lower()
-            matches = [capability for key, capability in capability_map.items() if key in text]
+            if isinstance(need, str):
+                unresolved.append(f"{ResearchNeedKind.UNRESOLVED_CAPABILITY.value}:{need}")
+                continue
+            kind = str(getattr(need, "kind", ""))
+            query = str(getattr(need, "query", ""))
+            matches = capability_map.get(kind, ())
             if matches:
                 capabilities.extend(matches)
             else:
-                unresolved.append(str(need))
+                unresolved.append(f"{kind or ResearchNeedKind.UNRESOLVED_CAPABILITY.value}:{query}")
         return tuple(dict.fromkeys(capabilities)), tuple(unresolved)
 
     stages = tuple(
@@ -181,6 +183,14 @@ def select_recipe(brief: WorkBrief, task_shape: TaskShape | None = None, overrid
                 task_shape.review_required,
             )
         return _recipe_for_patterns((ExecutionPattern.DIRECT,), "task_shape", "direct task shape", brief.stages)
+    if brief.stages:
+        return _recipe_for_patterns(
+            (ExecutionPattern.SEQUENTIAL,),
+            "work_brief",
+            "ordered Work Brief stages",
+            brief.stages,
+            True,
+        )
     if brief.desired_deliverables:
         return make_recipe(RecipeName.ANALYZE_REVIEW)
     return make_recipe(RecipeName.DIRECT)

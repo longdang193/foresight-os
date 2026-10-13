@@ -30,6 +30,26 @@ class RevisionStatus(StrEnum):
     SUPERSEDED = "SUPERSEDED"
 
 
+class ResearchNeedKind(StrEnum):
+    EXTERNAL_FACT = "EXTERNAL_FACT"
+    SOURCE_DETAIL = "SOURCE_DETAIL"
+    DOCUMENT_REVIEW = "DOCUMENT_REVIEW"
+    STRUCTURED_DATA = "STRUCTURED_DATA"
+    QUANTITATIVE_ANALYSIS = "QUANTITATIVE_ANALYSIS"
+    EXISTING_EVIDENCE = "EXISTING_EVIDENCE"
+    INTERNAL_KNOWLEDGE = "INTERNAL_KNOWLEDGE"
+    VALIDATION = "VALIDATION"
+    ARTIFACT_OUTPUT = "ARTIFACT_OUTPUT"
+    UNRESOLVED_CAPABILITY = "UNRESOLVED_CAPABILITY"
+
+
+@dataclass(frozen=True)
+class ResearchNeed:
+    kind: ResearchNeedKind | str
+    query: str
+    source_hint: str | None = None
+
+
 @dataclass(frozen=True)
 class MeasurementKey:
     region: str
@@ -75,6 +95,7 @@ class EvidenceCandidate:
     query: str = ""
     context: str = ""
     raw_result: Any = None
+    retrieval_proof: Any = None
 
 
 @dataclass(frozen=True)
@@ -146,6 +167,7 @@ class AnalysisState:
     schema_version: int = 1
     revision_status: RevisionStatus = RevisionStatus.ACCEPTED
     calculations: list[CalculationRecord] = field(default_factory=list)
+    pending_token: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -159,7 +181,7 @@ class WorkStage:
     subtasks: list[str] = field(default_factory=list)
     dependencies: list[str] = field(default_factory=list)
     expected_result: str = ""
-    research_needs: list[str] = field(default_factory=list)
+    research_needs: list[ResearchNeed | str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

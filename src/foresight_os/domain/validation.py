@@ -4,7 +4,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from .models import AnalysisState, EvidenceCandidate, WorkBrief
+from .models import AnalysisState, EvidenceCandidate, ResearchNeed, ResearchNeedKind, WorkBrief
 from .relationships import RecordKind, relationship_rule
 
 
@@ -24,9 +24,11 @@ def migrate_analysis_dict(value: dict[str, Any]) -> dict[str, Any]:
         migrated["schema_version"] = CURRENT_SCHEMA_VERSION
         migrated.setdefault("revision_status", "ACCEPTED")
         migrated.setdefault("calculations", [])
+        migrated.setdefault("pending_token", None)
     elif version == CURRENT_SCHEMA_VERSION:
         migrated.setdefault("revision_status", "ACCEPTED")
         migrated.setdefault("calculations", [])
+        migrated.setdefault("pending_token", None)
     return migrated
 
 
@@ -38,9 +40,42 @@ def _validate_schema(value: dict[str, Any], schema_name: str) -> None:
 
 
 def validate_work_brief(brief: WorkBrief | dict[str, Any]) -> dict[str, Any]:
-    value = brief.to_dict() if isinstance(brief, WorkBrief) else brief
+    value = brief.to_dict() if isinstance(brief, WorkBrief) else dict(brief)
+    value = _normalize_work_brief(value)
     _validate_schema(value, "work_brief.schema.json")
     return value
+
+
+def _normalize_work_brief(value: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(value)
+    stages = []
+    for stage in value.get("stages", []):
+        current = dict(stage)
+        needs = []
+        for need in current.get("research_needs", []):
+            if isinstance(need, str):
+                needs.append({
+                    "kind": ResearchNeedKind.UNRESOLVED_CAPABILITY.value,
+                    "query": need,
+                })
+            elif isinstance(need, ResearchNeed):
+                needs.append({
+                    "kind": need.kind.value if isinstance(need.kind, ResearchNeedKind) else str(need.kind),
+                    "query": need.query,
+                    **({"source_hint": need.source_hint} if need.source_hint else {}),
+                })
+            else:
+                normalized_need = dict(need)
+                kind = normalized_need.get("kind")
+                if isinstance(kind, ResearchNeedKind):
+                    normalized_need["kind"] = kind.value
+                elif kind is not None:
+                    normalized_need["kind"] = str(kind)
+                needs.append(normalized_need)
+        current["research_needs"] = needs
+        stages.append(current)
+    normalized["stages"] = stages
+    return normalized
 
 
 def validate_evidence_candidate(candidate: EvidenceCandidate | dict[str, Any]) -> EvidenceCandidate:

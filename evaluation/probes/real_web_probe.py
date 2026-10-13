@@ -56,19 +56,25 @@ async def run(query: str) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--query", default=os.getenv("FORESIGHT_WEB_SEARCH_QUERY", ""))
+    parser.add_argument("--query", default=os.getenv("FORESIGHT_REAL_WEB_QUERY") or os.getenv("FORESIGHT_WEB_SEARCH_QUERY", ""))
+    parser.add_argument("--output-root", type=Path, default=ROOT / "work" / "toolbelt-probes")
     args = parser.parse_args()
     if not args.query:
-        print(json.dumps({
+        result = {
             "mode": "web-search",
             "status": "BLOCKED_EXTERNAL",
-            "blocker": "FORESIGHT_WEB_SEARCH_QUERY is not configured",
-        }, sort_keys=True))
+            "blocker": "FORESIGHT_REAL_WEB_QUERY (or legacy FORESIGHT_WEB_SEARCH_QUERY) is not configured",
+        }
+        args.output_root.mkdir(parents=True, exist_ok=True)
+        (args.output_root / "web-real-probe.json").write_text(json.dumps(result, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        print(json.dumps(result, sort_keys=True))
         return 0
     try:
         result = asyncio.run(run(args.query))
     except WebSearchError as error:
         result = {"mode": "web-search", "status": "BLOCKED_EXTERNAL", "blocker": str(error)}
+    args.output_root.mkdir(parents=True, exist_ok=True)
+    (args.output_root / "web-real-probe.json").write_text(json.dumps(result, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result, sort_keys=True))
     return 0 if result["status"] in {"verified", "BLOCKED_EXTERNAL"} else 1
 

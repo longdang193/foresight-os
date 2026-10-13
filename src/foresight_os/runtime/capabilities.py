@@ -1,7 +1,9 @@
 import inspect
 import asyncio
+import copy
 import functools
 import time
+import types
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Mapping
@@ -142,6 +144,8 @@ class CapabilityResolver:
         definition = self.definitions.get(capability_id)
         if definition is None:
             return CapabilityResolution(CapabilityDefinition(capability_id, "unknown"), CapabilityDecision.UNSUPPORTED, False, "capability is not defined")
+        if definition.capability_class == "unavailable":
+            return CapabilityResolution(definition, CapabilityDecision.UNSUPPORTED, False, "capability is registered but its adapter is not activated")
         if definition.approval_policy == "HUMAN" and not context.get("human_approved", False):
             return CapabilityResolution(definition, CapabilityDecision.UNSUPPORTED, False, "human approval required")
         denied = self._authorization_denial(definition, context)
@@ -149,6 +153,8 @@ class CapabilityResolver:
             return CapabilityResolution(definition, CapabilityDecision.UNSUPPORTED, False, denied)
         candidate, decision, reason = self._candidate(capability_id, context)
         if candidate is None:
+            if definition.capability_class == "unavailable":
+                reason = "capability is registered but its adapter is not activated"
             return CapabilityResolution(definition, decision, False, reason)
         binding = candidate if isinstance(candidate, CapabilityBinding) else CapabilityBinding(candidate, definition.binding_kind)
         cache_key = self._cache_key(capability_id, binding, definition)
@@ -172,6 +178,8 @@ class CapabilityResolver:
         definition = self.definitions.get(capability_id)
         if definition is None:
             return CapabilityResolution(CapabilityDefinition(capability_id, "unknown"), CapabilityDecision.UNSUPPORTED, False, "capability is not defined")
+        if definition.capability_class == "unavailable":
+            return CapabilityResolution(definition, CapabilityDecision.UNSUPPORTED, False, "capability is registered but its adapter is not activated")
         if definition.approval_policy == "HUMAN" and not context.get("human_approved", False):
             return CapabilityResolution(definition, CapabilityDecision.UNSUPPORTED, False, "human approval required")
         denied = self._authorization_denial(definition, context)
@@ -179,6 +187,8 @@ class CapabilityResolver:
             return CapabilityResolution(definition, CapabilityDecision.UNSUPPORTED, False, denied)
         candidate, decision, reason = self._candidate(capability_id, context)
         if candidate is None:
+            if definition.capability_class == "unavailable":
+                reason = "capability is registered but its adapter is not activated"
             return CapabilityResolution(definition, decision, False, reason)
         binding = candidate if isinstance(candidate, CapabilityBinding) else CapabilityBinding(candidate, definition.binding_kind)
         cache_key = self._cache_key(capability_id, binding, definition)
@@ -210,13 +220,10 @@ class CapabilityResolver:
         return None
 
 
-def instrument_tool(tool: Any, definition: CapabilityDefinition, context: Mapping[str, Any]) -> Any:
-    if not callable(tool) or getattr(tool, "__foresight_instrumented__", False):
-        return tool
+def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, context: Mapping[str, Any]):
     semaphores = context.setdefault("_capability_semaphores", {})  # type: ignore[attr-defined]
     semaphore = semaphores.setdefault(definition.id, asyncio.Semaphore(max(1, definition.max_parallelism)))
 
-    @functools.wraps(tool)
     async def invoke(*args: Any, **kwargs: Any) -> Any:
         from foresight_os.runtime.metrics import BudgetExceededError, FailureClass
 
@@ -229,7 +236,7 @@ def instrument_tool(tool: Any, definition: CapabilityDefinition, context: Mappin
             async with semaphore:
                 if metrics is not None:
                     metrics.tool_calls += 1
-                result = tool(*args, **kwargs)
+                result = dispatch(*args, **kwargs)
                 if inspect.isawaitable(result):
                     result = await result
                 return result
@@ -245,16 +252,131 @@ def instrument_tool(tool: Any, definition: CapabilityDefinition, context: Mappin
             if metrics is not None:
                 metrics.tool_latency_ms += round((time.perf_counter() - started) * 1000)
 
+    return invoke
+
+
+class _InstrumentedMCPTool:
+    def __init__(self, tool: Any, call_tool: Any):
+        self._tool = tool
+        self._call_tool = call_tool
+        self.__foresight_instrumented__ = True
+        self.capability_id = ""
+
+    async def call_tool(self, tool_name: str, **kwargs: Any) -> Any:
+        return await self._call_tool(tool_name, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._tool, name)
+
+
+def _make_cell(value: Any):
+    def capture():
+        return value
+
+    return capture.__closure__[0]
+
+
+def _rebind_mcp_callable(function: Any, tool: Any) -> Any:
+    if not isinstance(function, types.FunctionType) or not function.__closure__:
+        return function
+    if "mcp_tool" not in function.__code__.co_freevars:
+        return function
+    cells = list(function.__closure__)
+    cells[function.__code__.co_freevars.index("mcp_tool")] = _make_cell(tool)
+    rebound = types.FunctionType(function.__code__, function.__globals__, function.__name__, function.__defaults__, tuple(cells))
+    rebound.__kwdefaults__ = function.__kwdefaults__
+    rebound.__annotations__ = dict(function.__annotations__)
+    rebound.__dict__.update(function.__dict__)
+    return rebound
+
+
+def _clone_mcp_function(function: Any, tool: Any) -> Any:
+    try:
+        from agent_framework import FunctionTool
+
+        rebound = _rebind_mcp_callable(getattr(function, "func", None), tool)
+        schema = getattr(function, "_input_schema_cached", None) or getattr(function, "input_model", None)
+        return FunctionTool(
+            name=function.name,
+            description=function.description,
+            approval_mode=function.approval_mode,
+            kind=getattr(function, "kind", None),
+            max_invocations=getattr(function, "max_invocations", None),
+            max_invocation_exceptions=getattr(function, "max_invocation_exceptions", None),
+            additional_properties=copy.deepcopy(getattr(function, "additional_properties", None)),
+            func=rebound,
+            input_model=copy.deepcopy(schema),
+            result_parser=getattr(function, "result_parser", None),
+        )
+    except (AttributeError, TypeError, ValueError):
+        return copy.copy(function)
+
+
+def instrument_tool(tool: Any, definition: CapabilityDefinition, context: Mapping[str, Any]) -> Any:
+    mcp_call = getattr(tool, "call_tool", None)
+    if callable(mcp_call) and not callable(tool):
+        try:
+            isolated = copy.copy(tool)
+            previous = getattr(tool, "__foresight_original_call_tool__", None)
+            function = getattr(previous, "__func__", None)
+            if function is not None:
+                original = function.__get__(isolated, type(isolated))
+            else:
+                original = getattr(isolated, "call_tool")
+            dispatch = _instrumented_dispatch(original, definition, context)
+            if hasattr(isolated, "_functions"):
+                isolated._functions = [_clone_mcp_function(function, isolated) for function in isolated._functions]
+            if hasattr(isolated, "_tool_call_meta_by_name"):
+                isolated._tool_call_meta_by_name = dict(isolated._tool_call_meta_by_name)
+            if hasattr(isolated, "_tool_task_support_by_name"):
+                isolated._tool_task_support_by_name = dict(isolated._tool_task_support_by_name)
+            if hasattr(isolated, "_tool_param_names_by_name"):
+                isolated._tool_param_names_by_name = {
+                    name: set(values) for name, values in isolated._tool_param_names_by_name.items()
+                }
+            if hasattr(isolated, "_progressive_loaded_tool_names"):
+                isolated._progressive_loaded_tool_names = set(isolated._progressive_loaded_tool_names)
+            setattr(isolated, "__foresight_original_call_tool__", original)
+            setattr(isolated, "call_tool", dispatch)
+            setattr(isolated, "__foresight_instrumented__", True)
+            setattr(isolated, "capability_id", definition.id)
+            return isolated
+        except (AttributeError, TypeError):
+            dispatch = _instrumented_dispatch(mcp_call, definition, context)
+            wrapped = _InstrumentedMCPTool(tool, dispatch)
+            wrapped.capability_id = definition.id
+            return wrapped
+    if not callable(tool):
+        return tool
+
+    original = getattr(tool, "__foresight_original_callable__", None) or tool
+    dispatch = _instrumented_dispatch(original, definition, context)
+
+    @functools.wraps(tool)
+    async def invoke(*args: Any, **kwargs: Any) -> Any:
+        return await dispatch(*args, **kwargs)
+
     setattr(invoke, "__foresight_instrumented__", True)
+    setattr(invoke, "__foresight_original_callable__", original)
     setattr(invoke, "capability_id", definition.id)
     return invoke
 
 
 DEFAULT_CAPABILITIES = {
-    "graph_context": CapabilityDefinition("graph_context", "local_deterministic", "read", "RUN", 1),
-    "calculation": CapabilityDefinition("calculation", "local_deterministic", "read", "RUN", 1),
-    "domain_validation": CapabilityDefinition("domain_validation", "local_deterministic", "read", "RUN", 1),
-    "web_search": CapabilityDefinition("web_search", "external_read", "read", "RUN", 3),
+    "web_search": CapabilityDefinition("web_search", "external_read", "read", "RUN", 3, data_scope="public"),
+    "page_retrieval": CapabilityDefinition("page_retrieval", "external_read", "read", "RUN", 2, data_scope="public"),
+    "web_crawl": CapabilityDefinition("web_crawl", "external_read", "read", "RUN", 1, data_scope="public"),
+    "technology_signals": CapabilityDefinition("technology_signals", "external_read", "read", "RUN", 1, data_scope="public"),
+    "market_signals": CapabilityDefinition("market_signals", "external_read", "read", "RUN", 1, data_scope="public"),
+    "macro_signals": CapabilityDefinition("macro_signals", "external_read", "read", "RUN", 1, data_scope="public"),
+    "spreadsheet_read": CapabilityDefinition("spreadsheet_read", "local_deterministic", "read", "RUN", 1, data_scope="local"),
+    "data_analysis": CapabilityDefinition("data_analysis", "local_deterministic", "read", "RUN", 1, data_scope="local"),
+    "calculation": CapabilityDefinition("calculation", "local_deterministic", "read", "RUN", 1, data_scope="local"),
+    "graph_context": CapabilityDefinition("graph_context", "local_deterministic", "read", "RUN", 1, data_scope="local"),
+    "domain_validation": CapabilityDefinition("domain_validation", "local_deterministic", "read", "RUN", 1, data_scope="local"),
+    "document_read": CapabilityDefinition("document_read", "unavailable", "read", "RUN", 1, data_scope="local"),
+    "internal_knowledge": CapabilityDefinition("internal_knowledge", "unavailable", "read", "RUN", 1, data_scope="internal"),
+    "artifact_generation": CapabilityDefinition("artifact_generation", "unavailable", "write", "RUN", 1, "HUMAN", data_scope="local"),
     "external_mutation": CapabilityDefinition("external_mutation", "external_mutation", "write", "RUN", 1, "HUMAN"),
 }
 

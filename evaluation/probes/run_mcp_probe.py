@@ -3,18 +3,16 @@ import asyncio
 import json
 import os
 import sys
-from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).parents[2]
-sys.path.insert(0, str(ROOT / "src"))
+if "--installed" not in sys.argv:
+    sys.path.insert(0, str(ROOT / "src"))
 
 from foresight_os.domain.evidence import normalize_evidence_candidate
 from foresight_os.runtime.capabilities import (
-    CapabilityBinding,
     CapabilityDefinition,
-    CapabilityResolver,
     CapabilityScope,
     instrument_tool,
 )
@@ -25,85 +23,73 @@ def _host(url: str) -> str:
     return urlsplit(url).netloc or "configured-endpoint"
 
 
-class _SessionOwner:
-    def __init__(self):
-        self.closed = False
-
-    async def close(self):
-        self.closed = True
-
-
-@asynccontextmanager
-async def _stdio_session():
-    from mcp import ClientSession, StdioServerParameters, stdio_client
-
-    parameters = StdioServerParameters(command=sys.executable, args=[str(Path(__file__).with_name("disposable_mcp_server.py"))])
-    async with stdio_client(parameters) as streams:
-        async with ClientSession(*streams) as session:
-            await session.initialize()
-            yield session, _SessionOwner()
-
-
 async def _disposable() -> dict:
     metrics = RunMetrics("mcp-disposable", "MCP", "mcp")
     scope = CapabilityScope()
+    result: dict[str, object] = {"mode": "disposable", "status": "failed", "cleanup": "not-attempted"}
     try:
-        async with _stdio_session() as (session, owner):
-            scope.register(owner)
-            listing = await session.list_tools()
-            names = {tool.name for tool in listing.tools}
-            if "mutate_fixture" in names:
-                names.remove("mutate_fixture")
-            if "read_evidence" not in names:
-                raise RuntimeError("disposable MCP read tool was not discovered")
+        from agent_framework import MCPStdioTool
 
-            async def read(query: str):
-                return await session.call_tool("read_evidence", {"query": query})
+        agent_tool = MCPStdioTool(
+            "disposable",
+            sys.executable,
+            args=[str(Path(__file__).with_name("disposable_mcp_server.py"))],
+            load_prompts=False,
+            allowed_tools=("read_evidence",),
+        )
+        scope.register(agent_tool)
+        await agent_tool.connect()
+        names = {function.name for function in agent_tool.functions}
+        if "read_evidence" not in names or "mutate_fixture" in names:
+            raise RuntimeError("read-only MCP boundary exposed the wrong tool set")
+        read_function = next(function for function in agent_tool.functions if function.name == "read_evidence")
 
-            resolver = CapabilityResolver({"mcp_read": CapabilityDefinition("mcp_read", "external_read")})
-            resolved = await resolver.resolve_async(
-                ("mcp_read",),
-                {"scope": scope, "mcp_tools": {"mcp_read": CapabilityBinding(read, fingerprint="disposable-mcp-read")}},
-            )
-            if not resolved["mcp_read"].available:
-                raise RuntimeError(resolved["mcp_read"].reason)
-            call = instrument_tool(resolved["mcp_read"].tool, resolved["mcp_read"].definition, {"scope": scope, "metrics": metrics})
-            result = await call("capacity")
-            payload = result.content[0].text if result.content else ""
-            candidate = normalize_evidence_candidate(
-                {
-                    "candidate_id": "disposable-mcp-capacity",
-                    "capability_id": "mcp_read",
-                    "source": "disposable-mcp",
-                    "request": "capacity",
-                    "excerpt": "Capacity remains uncertain.",
-                    "retrieved_at": "2030-01-01T00:00:00Z",
-                    "provenance": {"source_version": "fixture-v1", "date": "2030-01-01"},
-                    "raw_result": payload,
-                }
-            )
-            return {
-                "mode": "disposable",
-                "status": "verified",
+        async def read(query: str):
+            return await read_function.invoke(arguments={"query": query})
+
+        call = instrument_tool(
+            read,
+            CapabilityDefinition("mcp_read", "external_read"),
+            {"scope": scope, "metrics": metrics},
+        )
+        result_content = await call(query="capacity")
+        payload = result_content[0].text if result_content else ""
+        candidate = normalize_evidence_candidate(
+            {
+                "candidate_id": "disposable-mcp-capacity",
+                "capability_id": "mcp_read",
                 "source": "disposable-mcp",
-                "discovered_read_tool": "read_evidence" in names,
-                "mutation_tool_refused": "mutate_fixture" not in names,
-                "candidate_id": candidate.id,
-                "tool_calls": metrics.tool_calls,
-                "cleanup": "scope-owned-session",
-                "raw_payload_retained": False,
+                "request": "capacity",
+                "excerpt": "Capacity remains uncertain.",
+                "retrieved_at": "2030-01-01T00:00:00Z",
+                "provenance": {"source_version": "fixture-v1", "date": "2030-01-01"},
+                "raw_result": payload,
             }
+        )
+        result = {
+            "mode": "disposable",
+            "status": "verified",
+            "source": "disposable-mcp",
+            "discovered_read_tool": "read_evidence" in names,
+            "mutation_tool_refused": "mutate_fixture" not in names,
+            "candidate_id": candidate.id,
+            "tool_calls": metrics.tool_calls,
+            "cleanup": "scope-owned-session",
+            "raw_payload_retained": False,
+        }
     except asyncio.TimeoutError:
-        return {"mode": "disposable", "status": "failed", "failure_class": "timeout", "cleanup": "attempted"}
+        result = {"mode": "disposable", "status": "failed", "failure_class": "timeout", "cleanup": "attempted"}
     except (ConnectionError, BrokenPipeError) as error:
-        return {"mode": "disposable", "status": "failed", "failure_class": "connection_loss", "error_type": type(error).__name__}
+        result = {"mode": "disposable", "status": "failed", "failure_class": "connection_loss", "error_type": type(error).__name__}
     except BaseException as error:
-        return {"mode": "disposable", "status": "failed", "failure_class": "probe", "error_type": type(error).__name__}
+        result = {"mode": "disposable", "status": "failed", "failure_class": "probe", "error_type": type(error).__name__}
     finally:
         try:
             await scope.close()
-        except BaseException:
-            pass
+            result["cleanup"] = "scope-owned-session"
+        except BaseException as error:
+            result = {**result, "status": "failed", "failure_class": "cleanup", "cleanup": "failed", "error_type": type(error).__name__}
+    return result
 
 
 async def _real_mcp() -> dict:
@@ -123,8 +109,13 @@ async def _real_mcp() -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("disposable", "real-mcp"), required=True)
+    parser.add_argument("--installed", action="store_true")
+    parser.add_argument("--output-root", type=Path)
     args = parser.parse_args()
     result = asyncio.run(_disposable() if args.mode == "disposable" else _real_mcp())
+    if args.output_root is not None:
+        args.output_root.mkdir(parents=True, exist_ok=True)
+        (args.output_root / f"mcp-{args.mode}-probe.json").write_text(json.dumps(result, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result, sort_keys=True))
     return 0 if result["status"] in {"verified", "BLOCKED_EXTERNAL"} else 1
 

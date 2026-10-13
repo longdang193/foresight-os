@@ -76,5 +76,5 @@ def test_work_stages_assign_capabilities_and_handoff_routes_explicitly():
     )
 
     assert recipe.stages[0].stage_id == "assess-capacity"
-    assert recipe.stages[1].participants[0]["capability_ids"] == ("calculation",)
+    assert recipe.stages[1].participants[0]["capability_ids"] == ("web_search", "page_retrieval")
     assert recipe.stages[0].participants[0]["handoff_targets"] == ("participant-2",)

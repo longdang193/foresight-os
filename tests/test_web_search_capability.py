@@ -9,10 +9,12 @@ from foresight_os.runtime.capabilities import CapabilityResolver, CapabilityScop
 from foresight_os.runtime.metrics import RunMetrics
 from foresight_os.runtime.web_search import (
     ConfiguredWebSearchProvider,
+    SearxngWebSearchProvider,
     WebSearchCapability,
     WebSearchError,
     WebSearchHit,
     bind_web_search,
+    load_configured_web_search_provider,
 )
 from foresight_os.runtime.workflow import run_recipe_async
 
@@ -106,6 +108,62 @@ def test_configured_provider_runs_through_capability_resolution_and_instrumentat
     finally:
         server.shutdown()
         thread.join(timeout=2)
+
+
+def test_searxng_provider_uses_json_search_endpoint_and_normalizes_fields():
+    seen = {}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen["path"] = self.path
+            payload = json.dumps({
+                "results": [{
+                    "title": "SearXNG result",
+                    "url": "https://example.test/searxng",
+                    "content": "A result returned by the local metasearch service.",
+                    "publishedDate": "2026-10-13",
+                    "engine": "fixture",
+                }],
+            }).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, format, *args):
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        provider = SearxngWebSearchProvider(f"http://127.0.0.1:{server.server_port}", language="en")
+        hits = asyncio.run(provider.search("local search", max_results=3))
+
+        assert hits == [{
+            "title": "SearXNG result",
+            "url": "https://example.test/searxng",
+            "snippet": "A result returned by the local metasearch service.",
+            "published_at": "2026-10-13",
+            "source": "searxng:fixture",
+        }]
+        assert "q=local+search" in seen["path"]
+        assert "format=json" in seen["path"]
+        assert "language=en" in seen["path"]
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
+def test_configured_provider_loader_selects_searxng_explicitly():
+    provider = load_configured_web_search_provider({
+        "FORESIGHT_WEB_SEARCH_PROVIDER": "searxng",
+        "FORESIGHT_WEB_SEARCH_URL": "http://127.0.0.1:8888",
+    })
+
+    assert isinstance(provider, SearxngWebSearchProvider)
+    assert provider.name == "searxng"
 
 
 def test_run_scope_wires_web_search_into_a_real_participant_tool_cycle():

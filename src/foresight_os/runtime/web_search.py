@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Mapping, Protocol, Sequence
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 from foresight_os.domain.validation import validate_evidence_candidate
@@ -84,6 +84,87 @@ class ConfiguredWebSearchProvider:
         return results
 
 
+class SearxngWebSearchProvider:
+    def __init__(
+        self,
+        base_url: str,
+        token: str | None = None,
+        timeout_seconds: float = 15.0,
+        categories: str = "general",
+        language: str | None = None,
+    ) -> None:
+        parsed = urlsplit(base_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise WebSearchConfigurationError("FORESIGHT_WEB_SEARCH_URL must be an HTTP(S) endpoint")
+        normalized_url = base_url.rstrip("/")
+        self.endpoint = normalized_url if parsed.path.rstrip("/").endswith("/search") else f"{normalized_url}/search"
+        self.token = token
+        self.timeout_seconds = timeout_seconds
+        self.categories = categories.strip()
+        self.language = language.strip() if language else None
+        self.name = "searxng"
+        endpoint_parts = urlsplit(self.endpoint)
+        self.fingerprint = f"{self.name}:{endpoint_parts.scheme}://{endpoint_parts.netloc}{endpoint_parts.path}"
+
+    async def search(
+        self,
+        query: str,
+        *,
+        max_results: int = 5,
+        freshness: str | None = None,
+    ) -> Sequence[Mapping[str, Any]]:
+        return await asyncio.to_thread(self._search_sync, query, max_results, freshness)
+
+    def _search_sync(self, query: str, max_results: int, freshness: str | None) -> Sequence[Mapping[str, Any]]:
+        parameters = {"q": query, "format": "json", "pageno": "1"}
+        if self.categories:
+            parameters["categories"] = self.categories
+        if self.language:
+            parameters["language"] = self.language
+        if freshness in {"day", "week", "month", "year"}:
+            parameters["time_range"] = freshness
+        request = Request(
+            f"{self.endpoint}?{urlencode(parameters)}",
+            headers={"Accept": "application/json", **self._authorization_header()},
+            method="GET",
+        )
+        try:
+            with urlopen(request, timeout=self.timeout_seconds) as response:
+                document = json.loads(response.read(2_000_000).decode("utf-8"))
+        except (HTTPError, URLError, TimeoutError, OSError, ValueError) as error:
+            raise WebSearchError(f"SearXNG provider request failed: {type(error).__name__}") from error
+        results = document.get("results") if isinstance(document, dict) else None
+        if not isinstance(results, list):
+            raise WebSearchError("SearXNG provider returned an invalid results envelope")
+        hits: list[Mapping[str, Any]] = []
+        for result in results:
+            if not isinstance(result, Mapping):
+                continue
+            url = str(result.get("url", ""))
+            title = str(result.get("title", ""))
+            snippet = str(result.get("content", result.get("snippet", "")))
+            if not url or not title and not snippet:
+                continue
+            engine = str(result.get("engine", "")).strip()
+            hits.append(
+                {
+                    "title": title,
+                    "url": url,
+                    "snippet": snippet,
+                    "published_at": str(result.get("publishedDate", result.get("published_at", result.get("date", ""))) or ""),
+                    "source": f"{self.name}:{engine}" if engine else self.name,
+                }
+            )
+            if len(hits) >= max_results:
+                break
+        return hits
+
+    def _authorization_header(self) -> dict[str, str]:
+        if not self.token:
+            return {}
+        return {"Authorization": f"Bearer {self.token}"}
+
+
 class WebSearchCapability:
     capability_id = "web_search"
 
@@ -125,6 +206,7 @@ class WebSearchCapability:
                     "retrieved_at": retrieved_at,
                     "query": query,
                     "context": hit.url,
+                    "retrieval_proof": None,
                 }
             )
             candidates.append(
@@ -175,9 +257,22 @@ def bind_web_search(provider: WebSearchProvider):
     )
 
 
-def load_configured_web_search_provider(environ: Mapping[str, str] | None = None) -> ConfiguredWebSearchProvider:
+def load_configured_web_search_provider(
+    environ: Mapping[str, str] | None = None,
+) -> ConfiguredWebSearchProvider | SearxngWebSearchProvider:
     values = os.environ if environ is None else environ
     endpoint = values.get("FORESIGHT_WEB_SEARCH_URL", "").strip()
     if not endpoint:
         raise WebSearchConfigurationError("FORESIGHT_WEB_SEARCH_URL is not configured")
-    return ConfiguredWebSearchProvider(endpoint, values.get("FORESIGHT_WEB_SEARCH_TOKEN"))
+    provider_kind = values.get("FORESIGHT_WEB_SEARCH_PROVIDER", "json-post").strip().lower()
+    token = values.get("FORESIGHT_WEB_SEARCH_TOKEN")
+    if provider_kind in {"searxng", "sear-xng"}:
+        return SearxngWebSearchProvider(
+            endpoint,
+            token,
+            categories=values.get("FORESIGHT_SEARXNG_CATEGORIES", "general"),
+            language=values.get("FORESIGHT_SEARXNG_LANGUAGE"),
+        )
+    if provider_kind not in {"", "json-post", "configured"}:
+        raise WebSearchConfigurationError(f"unsupported FORESIGHT_WEB_SEARCH_PROVIDER: {provider_kind}")
+    return ConfiguredWebSearchProvider(endpoint, token)

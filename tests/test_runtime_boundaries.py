@@ -132,3 +132,83 @@ def test_tool_semaphore_enforces_declared_parallelism():
     asyncio.run(run_both())
 
     assert peak == 1
+
+
+def test_mcp_tool_calls_are_instrumented_through_maf_boundary():
+    calls = []
+
+    class MCPTool:
+        async def call_tool(self, name, **kwargs):
+            calls.append((name, kwargs))
+            return "ok"
+
+    metrics = RunMetrics("mcp-tool", "DIRECT", "direct")
+    wrapped = instrument_tool(MCPTool(), CapabilityDefinition("mcp", "external_read"), {"metrics": metrics})
+    assert asyncio.run(wrapped.call_tool("read", query="capacity")) == "ok"
+    assert calls == [("read", {"query": "capacity"})]
+    assert metrics.tool_calls == 1
+    assert metrics.tool_failures == 0
+
+
+def test_mcp_instrumentation_preserves_agent_framework_sdk_type():
+    from agent_framework import MCPStreamableHTTPTool
+
+    tool = MCPStreamableHTTPTool("probe", "http://127.0.0.1", load_prompts=False)
+
+    async def fake_call_tool(name, **kwargs):
+        return {"name": name, **kwargs}
+
+    tool.call_tool = fake_call_tool
+    wrapped = instrument_tool(tool, CapabilityDefinition("mcp", "external_read"), {})
+    assert wrapped is not tool
+    assert isinstance(wrapped, MCPStreamableHTTPTool)
+    assert asyncio.run(wrapped.call_tool("read", query="capacity"))["name"] == "read"
+
+
+def test_reused_mcp_tool_rebinds_budget_and_metrics_per_run():
+    from agent_framework import MCPStreamableHTTPTool
+
+    tool = MCPStreamableHTTPTool("probe", "http://127.0.0.1", load_prompts=False)
+
+    async def fake_call_tool(name, **kwargs):
+        return {"name": name, **kwargs}
+
+    tool.call_tool = fake_call_tool
+    first_metrics = RunMetrics("first", "DIRECT", "direct")
+    second_metrics = RunMetrics("second", "DIRECT", "direct")
+    first = instrument_tool(tool, CapabilityDefinition("mcp", "external_read"), {"budget": BudgetState(5, 1, 5, max_tool_calls=1), "metrics": first_metrics})
+    second = instrument_tool(tool, CapabilityDefinition("mcp", "external_read"), {"budget": BudgetState(5, 1, 5, max_tool_calls=1), "metrics": second_metrics})
+    asyncio.run(first.call_tool("read"))
+    asyncio.run(second.call_tool("read"))
+    assert first_metrics.tool_calls == 1
+    assert second_metrics.tool_calls == 1
+
+
+def test_reused_mcp_tool_rebinds_discovered_function_to_each_run():
+    from agent_framework import FunctionTool
+
+    class SDKTool:
+        def __init__(self):
+            self._functions = [FunctionTool(name="read", description="read", func=self._make_caller(self), input_model={"type": "object", "properties": {}})]
+
+        @staticmethod
+        def _make_caller(mcp_tool):
+            async def caller(**kwargs):
+                return await mcp_tool.call_tool("read", **kwargs)
+
+            return caller
+
+        async def call_tool(self, name, **kwargs):
+            return {"name": name, **kwargs}
+
+    tool = SDKTool()
+    first_metrics = RunMetrics("first-discovered", "DIRECT", "direct")
+    second_metrics = RunMetrics("second-discovered", "DIRECT", "direct")
+    first = instrument_tool(tool, CapabilityDefinition("mcp", "external_read"), {"metrics": first_metrics})
+    second = instrument_tool(tool, CapabilityDefinition("mcp", "external_read"), {"metrics": second_metrics})
+
+    asyncio.run(first._functions[0].invoke(arguments={}))
+    asyncio.run(second._functions[0].invoke(arguments={}))
+
+    assert first_metrics.tool_calls == 1
+    assert second_metrics.tool_calls == 1

@@ -22,6 +22,12 @@ jobs:
         run: python evaluation/run.py --matrix contract --output-root "$RUNNER_TEMP/foresight-contract"
       - name: Run controller matrix
         run: python evaluation/run.py --matrix controller
+      - name: Run Analyst toolbelt probes
+        run: |
+          python evaluation/probes/run_toolbelt_probe.py --output-root "$RUNNER_TEMP/foresight-toolbelt"
+          python evaluation/probes/run_evidence_workflow_probe.py --output-root "$RUNNER_TEMP/foresight-toolbelt"
+          python evaluation/probes/run_xlsx_probe.py --output-root "$RUNNER_TEMP/foresight-toolbelt"
+          python evaluation/probes/run_mcp_probe.py --mode disposable --output-root "$RUNNER_TEMP/foresight-toolbelt"
       - name: Build and smoke-test wheel
         shell: bash
         run: |

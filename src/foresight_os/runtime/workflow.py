@@ -19,7 +19,11 @@ from foresight_os.runtime.metrics import (
     RunResult,
 )
 from foresight_os.runtime.capabilities import CapabilityResolver, CapabilityScope, ScopeOwnership
+from foresight_os.runtime.crawl4ai import bind_crawl4ai
+from foresight_os.runtime.external_signals import load_hosted_mcp_bindings
 from foresight_os.runtime.web_search import bind_web_search
+from foresight_os.runtime.page_retrieval import PageRetrievalCapability, bind_page_retrieval
+from foresight_os.runtime.local_toolbelt import bind_local_toolbelt
 from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
 
 
@@ -160,9 +164,26 @@ async def run_recipe_async(
     context["scope"] = scope
     context["metrics"] = metrics
     context["budget"] = budget
+    context.setdefault("capability_resolver", CapabilityResolver())
+    local_bindings = context.setdefault("local_capabilities", {})
+    for name, binding in bind_local_toolbelt().items():
+        local_bindings.setdefault(name, binding)
+    if context.get("mcp_bindings") is not None:
+        context.setdefault("mcp_tools", {}).update(context["mcp_bindings"])
+    else:
+        for capability_id, binding in load_hosted_mcp_bindings(context.get("mcp_environment")).items():
+            context.setdefault("mcp_tools", {}).setdefault(capability_id, binding)
     if context.get("web_search_provider") is not None:
-        context.setdefault("capability_resolver", CapabilityResolver())
         context.setdefault("adapters", {}).setdefault("web_search", bind_web_search(context["web_search_provider"]))
+    if context.get("page_retrieval") is not None:
+        context.setdefault("adapters", {}).setdefault("page_retrieval", bind_page_retrieval(context["page_retrieval"]))
+    elif context.get("page_retrieval_fixture_hosts") is not None:
+        context.setdefault("adapters", {}).setdefault(
+            "page_retrieval",
+            bind_page_retrieval(PageRetrievalCapability(fixture_hosts=set(context["page_retrieval_fixture_hosts"]))),
+        )
+    if context.get("crawl4ai") is not None:
+        context.setdefault("adapters", {}).setdefault("web_crawl", bind_crawl4ai(context["crawl4ai"]))
 
     def classify(error: BaseException) -> FailureClass:
         if isinstance(error, BudgetExceededError):

@@ -18,7 +18,8 @@
     "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact" } },
     "relationships": { "type": "array", "items": { "$ref": "#/$defs/relationship" } },
     "revisions": { "type": "array", "items": { "$ref": "#/$defs/revision" } },
-    "invalidation": { "$ref": "#/$defs/invalidation" }
+    "invalidation": { "$ref": "#/$defs/invalidation" },
+    "pending_token": { "type": ["string", "null"] }
   },
   "$defs": {
     "source_locator": {
