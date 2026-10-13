@@ -32,16 +32,20 @@ jobs:
         shell: bash
         run: |
           python -m build --wheel --outdir "$RUNNER_TEMP/wheel"
-          python -m venv --system-site-packages "$RUNNER_TEMP/venv"
+          python -m venv "$RUNNER_TEMP/venv"
           "$RUNNER_TEMP/venv/bin/python" -m pip install --no-deps "$RUNNER_TEMP"/wheel/*.whl
+          cd "$RUNNER_TEMP"
           "$RUNNER_TEMP/venv/bin/python" - <<'PY'
           import json
+          import pathlib
+          import sys
           from importlib.resources import files
           import foresight_os
-          import foresight_os.runtime.workflow
+          installed = pathlib.Path(foresight_os.__file__).resolve()
+          assert pathlib.Path(sys.prefix).resolve() in installed.parents
           for name in ("analysis.schema.json", "work_brief.schema.json"):
               json.loads(files("foresight_os.schemas").joinpath(name).read_text())
-          print(foresight_os.__name__)
+          print(foresight_os.__name__, installed)
           PY
       - name: Check diff whitespace
         run: git diff --check

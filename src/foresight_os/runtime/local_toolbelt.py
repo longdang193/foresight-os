@@ -61,6 +61,7 @@ class WorkbookReadCache:
         self.max_entries = max(1, max_entries)
         self.max_bytes = max(1, max_bytes)
         self._entries: dict[tuple[Any, ...], tuple[WorkbookReadResult, int]] = {}
+        self._analysis_entries: dict[tuple[Any, ...], tuple[AnalysisResult, int]] = {}
         self._bytes = 0
 
     def key(self, source: Path, selection: SheetSelection | None, limits: ToolbeltLimits) -> tuple[Any, ...]:
@@ -86,13 +87,34 @@ class WorkbookReadCache:
         self._entries[key] = (result, estimated)
         self._bytes += estimated
 
+    def analysis_key(self, table: TypedTable, operation: AnalysisOperation, limits: ToolbeltLimits) -> tuple[Any, ...]:
+        return ("analysis", table.id, repr(operation), repr(limits))
+
+    def get_analysis(self, key: tuple[Any, ...]) -> AnalysisResult | None:
+        entry = self._analysis_entries.get(key)
+        return entry[0] if entry is not None else None
+
+    def put_analysis(self, key: tuple[Any, ...], result: AnalysisResult) -> None:
+        estimated = max(1, len(repr(result)))
+        if estimated > self.max_bytes:
+            return
+        previous = self._analysis_entries.pop(key, None)
+        if previous is not None:
+            self._bytes -= previous[1]
+        while self._analysis_entries and (len(self._analysis_entries) >= self.max_entries or self._bytes + estimated > self.max_bytes):
+            _, (_, size) = self._analysis_entries.pop(next(iter(self._analysis_entries)))
+            self._bytes -= size
+        self._analysis_entries[key] = (result, estimated)
+        self._bytes += estimated
+
     def clear(self) -> None:
         self._entries.clear()
+        self._analysis_entries.clear()
         self._bytes = 0
 
     @property
     def size(self) -> int:
-        return len(self._entries)
+        return len(self._entries) + len(self._analysis_entries)
 
 
 def _sha256_file(source: Path, chunk_size: int = 1024 * 1024) -> str:
@@ -580,9 +602,16 @@ def data_analysis(
     limits: ToolbeltLimits | None = None,
     *,
     cancel_check: Callable[[], bool] | None = None,
+    _cache: Any = None,
 ) -> AnalysisResult:
     limits = limits or ToolbeltLimits()
     _check_cancel(cancel_check)
+    analysis_cache_key = None
+    if _cache is not None and hasattr(_cache, "analysis_key"):
+        analysis_cache_key = _cache.analysis_key(table, operation, limits)
+        cached_result = _cache.get_analysis(analysis_cache_key)
+        if cached_result is not None:
+            return cached_result
     rows = _rows(table)
     kind = operation.kind.lower()
     warnings: list[str] = []
@@ -681,7 +710,10 @@ def data_analysis(
     if kind == "join" and operation.join_table is not None:
         provenance = tuple(dict.fromkeys((*provenance, *[locator for row in operation.join_table.row_provenance for locator in row], *operation.join_table.related_provenance)))
     key = hashlib.sha256(repr((operation, result, provenance)).encode()).hexdigest()
-    return AnalysisResult(operation.kind, tuple(result), provenance, key, tuple(warnings))
+    analysis_result = AnalysisResult(operation.kind, tuple(result), provenance, key, tuple(warnings))
+    if _cache is not None and analysis_cache_key is not None:
+        _cache.put_analysis(analysis_cache_key, analysis_result)
+    return analysis_result
 
 
 def _numeric(value: Any, *, allow_legacy_prose: bool = False) -> float:

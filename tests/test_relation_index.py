@@ -20,6 +20,7 @@ def test_relation_index_material_and_impact_closures_follow_relation_semantics()
     )
 
     index = RelationIndex.from_state(state)
+    assert RelationIndex.from_state(state) is index
 
     assert index.material_closure((recommendation.id,)) == ("claim-1", "evidence-1", "recommendation-1")
     assert index.impact_closure((evidence.id,)) == ("claim-1", "evidence-1", "recommendation-1")

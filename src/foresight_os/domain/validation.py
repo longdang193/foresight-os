@@ -1,4 +1,5 @@
 import json
+from functools import lru_cache
 from importlib.resources import files
 from typing import Any
 
@@ -34,9 +35,14 @@ def migrate_analysis_dict(value: dict[str, Any]) -> dict[str, Any]:
     return migrated
 
 
+@lru_cache(maxsize=8)
+def _compiled_schema_validator(schema_name: str, schema_text: str) -> Draft202012Validator:
+    return Draft202012Validator(json.loads(schema_text))
+
+
 def _validate_schema(value: dict[str, Any], schema_name: str) -> None:
-    schema = json.loads(files("foresight_os.schemas").joinpath(schema_name).read_text(encoding="utf-8"))
-    errors = sorted(Draft202012Validator(schema).iter_errors(value), key=lambda error: list(error.path))
+    schema_text = files("foresight_os.schemas").joinpath(schema_name).read_text(encoding="utf-8")
+    errors = sorted(_compiled_schema_validator(schema_name, schema_text).iter_errors(value), key=lambda error: list(error.path))
     if errors:
         raise ValidationError("; ".join(error.message for error in errors))
 

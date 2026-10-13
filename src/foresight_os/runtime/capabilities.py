@@ -256,7 +256,7 @@ def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, cont
 
     def blocking_call(args: tuple[Any, ...], kwargs: dict[str, Any], cancel_event: asyncio.Event | None) -> Any:
         effective_kwargs = dict(kwargs)
-        if definition.id == "spreadsheet_read" and scope is not None:
+        if definition.id in {"spreadsheet_read", "data_analysis"} and scope is not None:
             try:
                 accepts_cache = "_cache" in inspect.signature(dispatch).parameters
             except (TypeError, ValueError):
@@ -313,7 +313,7 @@ def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, cont
                         raise
                 else:
                     effective_kwargs = dict(kwargs)
-                    if definition.id == "spreadsheet_read" and scope is not None:
+                    if definition.id in {"spreadsheet_read", "data_analysis"} and scope is not None:
                         if getattr(scope, "workbook_cache", None) is None:
                             from foresight_os.runtime.local_toolbelt import WorkbookReadCache
                             scope.workbook_cache = WorkbookReadCache()

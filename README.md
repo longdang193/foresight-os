@@ -141,7 +141,7 @@ retrieval time, query provenance, read-only authorization, and independent
 
 ## Optimization release evidence
 
-The optimization probe records the frozen baseline and release receipts under ignored `work/optimization-baseline/` and `work/optimization-release/`.
+The optimization probe records corrected-schema baseline and release receipts under ignored disposable roots. Receipts separate model calls, local/MCP/external tool calls, token counters, accepted-finding-normalized economics, pattern p95 latency components, and portable resource snapshots. The comparator fails closed for missing evidence, workload/schema/denominator mismatches, monotonic leak indicators, and threshold regressions.
 
 - Baseline: `python evaluation/probes/run_optimization_probe.py --mode baseline --output work/optimization-baseline/receipt.json`
 - Release: `python evaluation/probes/run_optimization_probe.py --mode release --output work/optimization-release/receipt.json`

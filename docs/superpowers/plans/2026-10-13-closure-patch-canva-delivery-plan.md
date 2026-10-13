@@ -169,8 +169,8 @@ spec checks on PRs and reserve heavy closure evidence for nightly/release runs.
 | Task 3 | `completed` | current | `unresolved` | Tasks 1–2 | fresh-process receipt lifecycle probe | automatic receipt/reuse probe passed; Task 3 checkpoint |
 | Task 4 | `completed` | current | `unresolved` | Task 2 | presentation compiler/spec validation | focused suites passed; local Canva boundary remains disconnected by design |
 | Task 5 | `completed` | current | `unresolved` | Tasks 3–4 | performance/resource receipt comparison | corrected schema and baseline captured; comparator self-check passed |
-| Task 6 | `active` | current | `unresolved` | Tasks 2–5 | cache and CI/documentation checks | pending |
-| Task 7 | `pending` | current | `unresolved` | Tasks 0–6 | final verification and acceptance evidence | pending |
+| Task 6 | `completed` | current | `unresolved` | Tasks 2–5 | bounded caches, clean-wheel smoke passed; release comparison fail-closed on noisy p95 sample |
+| Task 7 | `active` | current | `unresolved` | Tasks 0–6 | final verification and acceptance evidence | pending |
 
 ## Task Breakdown
 
@@ -527,18 +527,20 @@ spec checks on PRs and reserve heavy closure evidence for nightly/release runs.
 - Stop for: cross-process mutable caches, global cache invalidation without an identity owner, workflow-provider changes, dependency upgrades, or cleanup of existing `work/` artifacts
 
 **Steps:**
-- [ ] Step 1: Cache resolved skill content and verified manifest identity for the process lifetime; preserve hash mismatch failure behavior.
-- [ ] Step 2: Cache compiled JSON schema validators by schema identity and cache `RelationIndex` projections by `(investigation_id, revision, relationship_fingerprint)` or an equivalent immutable-state scope; retain explicit invalidation only where the canonical owner requires it.
-- [ ] Step 3: Reuse parsed workbook and deterministic calculation results across analysis, review, report, and presentation compilation through the existing `WorkbookReadCache`, keyed by source identity, SHA-256, selection, and effective limits; pass bounded extracts to agents.
-- [ ] Step 4: Keep one CI workflow with conditional `deterministic`, `nightly-evidence`, and `release-evidence` jobs where practical, upload machine-readable receipts as SHA-associated artifacts, and document that optional Canva smoke is only run when a connected approved adapter exists.
-- [ ] Step 5: Repair the clean-wheel smoke if still applicable so it uses a genuinely empty virtual environment, installs only the newly built wheel, runs outside the repository tree, and verifies `foresight_os.__file__` points inside that environment.
-- [ ] Step 6: After the cache changes, capture the optimized release receipt and compare it only with Task 5's corrected-schema baseline; do not compare it with Task 0's legacy receipt.
+- [x] Step 1: Cache resolved skill content and verified manifest identity for the process lifetime; preserve hash mismatch failure behavior.
+- [x] Step 2: Cache compiled JSON schema validators by schema identity and cache `RelationIndex` projections by `(investigation_id, revision, relationship_fingerprint)` or an equivalent immutable-state scope; retain explicit invalidation only where the canonical owner requires it.
+- [x] Step 3: Reuse parsed workbook and deterministic calculation results across analysis, review, report, and presentation compilation through the existing `WorkbookReadCache`, keyed by source identity, SHA-256, selection, and effective limits; pass bounded extracts to agents.
+- [x] Step 4: Keep one CI workflow with conditional `deterministic`, `nightly-evidence`, and `release-evidence` jobs where practical, upload machine-readable receipts as SHA-associated artifacts, and document that optional Canva smoke is only run when a connected approved adapter exists.
+- [x] Step 5: Repair the clean-wheel smoke if still applicable so it uses a genuinely empty virtual environment, installs only the newly built wheel, runs outside the repository tree, and verifies `foresight_os.__file__` points inside that environment.
+- [x] Step 6: After the cache changes, capture the optimized release receipt and compare it only with Task 5's corrected-schema baseline; do not compare it with Task 0's legacy receipt. The comparator correctly rejected observed run-to-run p95 regressions rather than hiding them.
 
 **Verification:**
-- [ ] `python -m pytest -q tests/test_skills.py tests/test_analysis_schema.py tests/test_persistence.py`
-- [ ] `python evaluation/probes/run_optimization_probe.py --mode release --fixture tests/fixtures/analyst_multisheet.xlsx --output work/closure-patch-canva-20261013/optimization/release.json`
-- [ ] `python evaluation/probes/compare_optimization_receipts.py --baseline work/closure-patch-canva-20261013/baseline/optimization-corrected.json --release work/closure-patch-canva-20261013/optimization/release.json --output work/closure-patch-canva-20261013/optimization/comparison.json`
-- [ ] `git diff --check`
+- [x] `python -m pytest -q tests/test_skills.py tests/test_analysis_schema.py tests/test_persistence.py`
+- [x] `python -m pytest -q tests/test_local_toolbelt.py tests/test_relation_index.py tests/test_runtime_boundaries.py tests/test_optimization_measurement.py`
+- [x] `python evaluation/probes/run_clean_wheel_smoke.py --output-root work/closure-patch-canva-20261013/optimization/clean-wheel`
+- [x] `python evaluation/probes/run_optimization_probe.py --mode release --fixture tests/fixtures/analyst_multisheet.xlsx --output work/closure-patch-canva-20261013/optimization/release.json`
+- [x] `python evaluation/probes/compare_optimization_receipts.py --baseline work/closure-patch-canva-20261013/baseline/optimization-corrected.json --release work/closure-patch-canva-20261013/optimization/release.json --output work/closure-patch-canva-20261013/optimization/comparison.json`
+- [x] `git diff --check`
 - Expected: cache identities are deterministic and scoped, package resources still resolve, CI documentation matches canonical commands, and no preserved output is modified.
 
 **Exit Criteria:**

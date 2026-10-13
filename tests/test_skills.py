@@ -26,6 +26,15 @@ def test_registry_resolves_all_bundled_skills_and_rejects_unknown_ids():
         registry.resolve(("missing-skill",))
 
 
+def test_registry_reuses_verified_skill_resolution_within_process():
+    registry = SkillRegistry()
+
+    first = registry.resolve(("source-appraisal",))
+    second = registry.resolve(("source-appraisal",))
+
+    assert first is second
+
+
 def test_skill_capability_denial_happens_before_agent_construction():
     class Client:
         def as_agent(self, **kwargs):

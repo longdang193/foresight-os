@@ -1,6 +1,9 @@
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from enum import StrEnum
+import hashlib
+import json
+from typing import ClassVar
 
 
 class RecordKind(StrEnum):
@@ -33,9 +36,25 @@ class RelationIndex:
 
     relationships: tuple[object, ...]
 
+    _CACHE: ClassVar[dict[tuple[str, int, str], "RelationIndex"]] = {}
+
     @classmethod
     def from_state(cls, state: object) -> "RelationIndex":
-        return cls(tuple(sorted(getattr(state, "relationships", ()), key=lambda item: (item.from_id, item.to_id, item.relation_type, item.id))))
+        relationships = tuple(sorted(getattr(state, "relationships", ()), key=lambda item: (item.from_id, item.to_id, item.relation_type, item.id)))
+        payload = [
+            (item.id, item.from_id, item.to_id, item.relation_type)
+            for item in relationships
+        ]
+        fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+        key = (str(getattr(state, "investigation_id", "")), int(getattr(state, "revision", 0)), fingerprint)
+        cached = cls._CACHE.get(key)
+        if cached is not None:
+            return cached
+        index = cls(relationships)
+        if len(cls._CACHE) >= 128:
+            cls._CACHE.pop(next(iter(cls._CACHE)))
+        cls._CACHE[key] = index
+        return index
 
     def _edges(self, direction: str) -> dict[str, tuple[str, ...]]:
         edges: dict[str, list[str]] = defaultdict(list)

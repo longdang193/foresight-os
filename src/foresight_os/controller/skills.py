@@ -51,6 +51,7 @@ class SkillRegistry:
             )
             for item in raw["skills"]
         }
+        self._resolved_cache: dict[tuple[str, ...], tuple[ResolvedSkill, ...]] = {}
 
     def manifest(self, skill_id: str) -> SkillManifest:
         try:
@@ -59,15 +60,23 @@ class SkillRegistry:
             raise ValueError(f"unknown skill: {skill_id}") from exc
 
     def resolve(self, skill_ids: tuple[str, ...] | list[str] = ()) -> tuple[ResolvedSkill, ...]:
+        cache_key = tuple(str(skill_id) for skill_id in skill_ids)
+        cached = self._resolved_cache.get(cache_key)
+        if cached is not None:
+            return cached
         resolved = []
-        for skill_id in skill_ids:
+        for skill_id in cache_key:
             manifest = self.manifest(str(skill_id))
             content = importlib.resources.files(self._package).joinpath(manifest.content_path).read_text(encoding="utf-8")
             digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
             if digest != manifest.content_sha256:
                 raise RuntimeError(f"skill content hash mismatch: {manifest.skill_id}")
             resolved.append(ResolvedSkill(manifest, content))
-        return tuple(resolved)
+        result = tuple(resolved)
+        if len(self._resolved_cache) >= 64:
+            self._resolved_cache.pop(next(iter(self._resolved_cache)))
+        self._resolved_cache[cache_key] = result
+        return result
 
     def required_capabilities(self, skills: tuple[ResolvedSkill, ...] | list[ResolvedSkill]) -> tuple[str, ...]:
         return tuple(dict.fromkeys(capability for skill in skills for capability in skill.manifest.capability_ids))
