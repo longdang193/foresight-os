@@ -5,7 +5,7 @@
       "id": "source-appraisal",
       "version": "1.1.0",
       "content_path": "source-appraisal/SKILL.md",
-      "content_sha256": "58fec358ae2b61d63dd3d4d5c3c997f434e4ab77f03bece6ec7e979f92b95f2d",
+      "content_sha256": "9968bfeec0b465cf14bf949161e43eb98b8876d230d6d64017d245141f67331d",
       "capability_ids": [],
       "output_contract": "source-quality assessment with limitations",
       "provenance": "bundled-local"
@@ -14,7 +14,7 @@
       "id": "key-assumptions-check",
       "version": "1.1.0",
       "content_path": "key-assumptions-check/SKILL.md",
-      "content_sha256": "5cb0ff8985a868007fef20f2c0ef0024aa6c57339be6c54dcb7be94f07ee8b76",
+      "content_sha256": "66744cbacf9b61cfc74841c085dadce99ad41aef657d034890fd6d7e37e3432d",
       "capability_ids": [],
       "output_contract": "assumptions and disconfirmation conditions",
       "provenance": "bundled-local"
@@ -23,7 +23,7 @@
       "id": "quantitative-sanity-check",
       "version": "1.1.0",
       "content_path": "quantitative-sanity-check/SKILL.md",
-      "content_sha256": "76f7e84c06fe342a0425edc3b2a4f2483e55913ccc1660b5a649304005cad57a",
+      "content_sha256": "0711d992f5a8bb6b6f6eadfa01a02e44cf593e9e645ca4531bbb818e63fcdbb4",
       "capability_ids": [
         "data_analysis",
         "calculation"
@@ -35,7 +35,7 @@
       "id": "red-team-claim",
       "version": "1.1.0",
       "content_path": "red-team-claim/SKILL.md",
-      "content_sha256": "ce0a86759a46b28e32455a0b1714be9f72decf46dd632cf77ecce4b8d914bf24",
+      "content_sha256": "5fceb46ebaf75b9be1ec5301896453c459c393b75fa90e29b3569470e971380c",
       "capability_ids": [],
       "output_contract": "objections, counterevidence, unresolved issues",
       "provenance": "bundled-local"
@@ -44,7 +44,7 @@
       "id": "abstain-or-escalate",
       "version": "1.1.0",
       "content_path": "abstain-or-escalate/SKILL.md",
-      "content_sha256": "1321c2010b2ada8b8c88dce2465619465a7ecbd5c01e5a5c93b48917cb95d248",
+      "content_sha256": "0c97607da2ccee44f5a10183977c2ac0fa393b3622f38d4212381cb03b122e31",
       "capability_ids": [],
       "output_contract": "abstention or escalation decision",
       "provenance": "bundled-local"
@@ -53,7 +53,7 @@
       "id": "scenario-planning",
       "version": "1.1.0",
       "content_path": "scenario-planning/SKILL.md",
-      "content_sha256": "f41eb67c336b45c7bbe999ab81af4dcad39d6def0d35593bf0845ac0c6e859e2",
+      "content_sha256": "1cc0f970168c92dffb321e2d38b80f29bc7807c87b0c06cd5020305a8dd7e136",
       "capability_ids": [],
       "output_contract": "bounded scenarios and signposts",
       "provenance": "bundled-local"
@@ -65,7 +65,7 @@
       "capability_ids": [],
       "output_contract": "slide brief with supported copy, provenance, citations, and qualifications",
       "provenance": "bundled-local",
-      "content_sha256": "bc232d4d3b64fafeb94b09f4ba5d171b7fdbaac5c053e242cc31e6e7c20dca6e"
+      "content_sha256": "09a679caf048e3352a9f1ee02cb6e349d7fa582ff468ee66431fca20ae925655"
     },
     {
       "id": "evidence-visualization",
@@ -77,7 +77,7 @@
       ],
       "output_contract": "traceable chart or table brief with verified values and uncertainty",
       "provenance": "bundled-local",
-      "content_sha256": "8fd75407c1db631f6454905b02c7845284ad82fe10b0d0395bb8a46668933ab2"
+      "content_sha256": "548d1937c282ecad2d677bf2b3c75509a5ff494adb3d5504e4a150b3c7cd0741"
     },
     {
       "id": "slide-design-review",
@@ -86,7 +86,7 @@
       "capability_ids": [],
       "output_contract": "per-slide fidelity and design issues with corrections and verification status",
       "provenance": "bundled-local",
-      "content_sha256": "294ccbf94aa45bbee8c6bd40a2e47d431af53a5ac5a79e0e752bf9f3a7a934af"
+      "content_sha256": "e40e86219041ecc094c196c3926f9d4f318d16ba1cb17b96456d504d3b960256"
     }
   ]
 }

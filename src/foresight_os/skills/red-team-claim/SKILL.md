@@ -8,6 +8,16 @@ description: Attempt to disprove a strategic claim or recommendation. Use for co
 ## Inputs
 Use target IDs, the strongest supported claim, evidence, calculations, assumptions, counterevidence, decision horizon, and selected review policy.
 
+## When to use
+Use for consequential claims or recommendations, conflicting evidence, weak
+causal explanations, or adversarial review before a policy accepts an outcome.
+
+## Do not use / route instead
+Do not invent an objection to satisfy a quota or reopen settled arithmetic
+without a material reason. Route numerical defects to
+`quantitative-sanity-check`, source support to `source-appraisal`, and missing
+authority or unresolved acceptance requirements to `abstain-or-escalate`.
+
 ## Workflow
 1. Restate the strongest defensible claim, preserving qualifications. Identify what would make it wrong rather than attacking a weaker substitute.
 2. Form a plausible alternative explanation. Test measurement error, selection bias, source dependence, reverse causality, changed conditions, and implementation failure where relevant.
@@ -21,3 +31,13 @@ When invoked by the reviewer runtime, return only `{"objections": [...]}` with t
 
 ## Completion check
 Separate findings from hypotheses and unavailable checks. Let the review policy and human decision process determine acceptance; never waive unresolved consequential issues because agents reached consensus.
+
+## Pair with
+- `source-appraisal` for sourced conflicts and independent evidence origins.
+- `quantitative-sanity-check` for calculation objections.
+- `key-assumptions-check` for assumption failure modes.
+
+## Anti-patterns
+- Attacking a weaker claim instead of the strongest defensible claim.
+- Treating no search result as proof that a counterexample does not exist.
+- Treating `ACCEPTED` objection disposition as recommendation approval.

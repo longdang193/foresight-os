@@ -121,14 +121,14 @@ tests never claim model reasoning quality.
 - Branch: `codex/actionable-foresight-skills`
 - Base commit: `657c17b1fed4d4e54aeee0067e03abc8b645acd4` (`origin/main`)
 - Expected workspace: dedicated PR #9 checkout with tracked files clean before edits; preserve unrelated untracked outputs in the current workspace and do not stage them
-- Next action: reconcile PR #9 head `5247f259a00aead5f7111c05a829f03ca638dd7e` against `origin/main`, then execute Task 1
-- Blockers: PR #9 CI is red on the current-version skill assertion; `source-appraisal` has an over-broad `page_retrieval` capability declaration
+- Next action: add deterministic package-contract tests and nine external evaluation fixtures for Task 3
+- Blockers: the separate Group Chat p95 follow-up remains outside this plan; provider-backed evaluation remains approval/configuration dependent
 
 | Task | State | Workspace | Executor | Depends On | Required Proof | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | Task 0 | `completed` | current | `lead controller` | none | PR/base reconciliation and changed-file inventory | `work/skill-layer-hardening-20261014/reconciliation/` |
 | Task 1 | `completed` | current | `lead controller` | Task 0 | P0 version and capability tests | `python -m pytest -q tests/test_review_records.py tests/test_skill_package.py tests/test_participant_scope.py tests/test_research_needs.py` |
-| Task 2 | `pending` | current | `unresolved` | Task 1 | nine-skill content and routing contract checks | `work/skill-layer-hardening-20261014/task-2/` |
+| Task 2 | `completed` | current | `lead controller` | Task 1 | nine-skill content and routing contract checks | `python -m pytest -q tests/test_skill_package.py tests/test_review_records.py tests/test_participant_scope.py tests/test_research_needs.py`; manifest hash reconciliation |
 | Task 3 | `pending` | current | `unresolved` | Task 2 | package contract tests and nine evaluation fixtures | `work/skill-layer-hardening-20261014/task-3/` |
 | Task 4 | `pending` | current | `unresolved` | Task 3 | exercise-pack evaluation and final local proof | `work/skill-layer-hardening-20261014/final/` |
 
@@ -282,15 +282,15 @@ tests never claim model reasoning quality.
 - Stop for: new skill IDs, new capabilities, prompt downloads, external-write permissions, numeric confidence scores, new domain objects, or fixed-slide compiler changes.
 
 **Steps:**
-- [ ] Step 1: Add compact routing/non-routing boundaries and output templates to the six analytical methods.
-- [ ] Step 2: Add the governing-thought and source-hierarchy rules to `presentation-storytelling`.
-- [ ] Step 3: Add the no-unnecessary-visual rule and preserve the combined chart-selection method in `evidence-visualization`.
-- [ ] Step 4: Add the renderer-only `DesignBrief` and deck-level consistency check to `slide-design-review`.
-- [ ] Step 5: Recompute manifest content hashes while retaining the draft target versions already established relative to `main`—`1.1.0` for the six existing skills and `1.0.0` for the three new presentation skills. Do not bump again for edits made before this draft merges; keep `manifest.json` authoritative.
+- [x] Step 1: Add compact routing/non-routing boundaries and output templates to the six analytical methods.
+- [x] Step 2: Add the governing-thought and source-hierarchy rules to `presentation-storytelling`.
+- [x] Step 3: Add the no-unnecessary-visual rule and preserve the combined chart-selection method in `evidence-visualization`.
+- [x] Step 4: Add the renderer-only `DesignBrief` and deck-level consistency check to `slide-design-review`.
+- [x] Step 5: Recompute manifest content hashes while retaining the draft target versions already established relative to `main`—`1.1.0` for the six existing skills and `1.0.0` for the three new presentation skills. Do not bump again for edits made before this draft merges; keep `manifest.json` authoritative.
 
 **Verification:**
-- [ ] `python -m pytest -q tests/test_skill_package.py`
-- [ ] Inspect all nine documents for required sections, word counts, fixed six-slide references, and absence of external-write capability.
+- [x] `python -m pytest -q tests/test_skill_package.py tests/test_review_records.py tests/test_participant_scope.py tests/test_research_needs.py` (14 passed with the worktree `src` on `PYTHONPATH`)
+- [x] Inspect all nine documents for required sections, word counts, fixed six-slide references, and absence of external-write capability.
 - Expected: every manifest hash matches packaged content; the runtime prompt remains compact; no second presentation or design model is introduced.
 
 **Exit Criteria:**

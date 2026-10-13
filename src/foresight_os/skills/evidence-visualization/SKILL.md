@@ -8,6 +8,16 @@ description: Select and verify evidence-based charts or tables for foresight rep
 ## Inputs
 Use the slide's key message, canonical findings/calculation IDs, source table/range, row grain, filters, units, period, and scenarios. Reuse verified data; request missing extraction through authorized tools.
 
+## When to use
+Use when a visual can make a verified comparison, trend, uncertainty range,
+scenario difference, or option trade-off easier to inspect.
+
+## Do not use / route instead
+Do not create a visual merely to fill space or to imply precision. Route source
+support to `source-appraisal`, numerical validity to
+`quantitative-sanity-check`, narrative sequencing to
+`presentation-storytelling`, and rendered-page defects to `slide-design-review`.
+
 ## Workflow
 1. Specify the comparison. Trace every plotted value to evidence and, when transformed, a reproducible calculation. Verify totals, denominators, missing values, aggregation, and comparability with quantitative-sanity-check.
 2. Choose the simplest useful display:
@@ -31,3 +41,13 @@ Return chart/table type, title/caption, data values and units, finding/evidence/
 
 ## Completion check
 Every displayed value has provenance and the graphic supports its key point. If data or tools are unavailable, return a labeled visual proposal or qualitative alternative; do not claim rendering or verification. Tool permissions remain those granted by the controller.
+
+## Pair with
+- `quantitative-sanity-check` for values, units, denominators, and calculations.
+- `source-appraisal` for source scope and citation support.
+- `presentation-storytelling` for the slide's governing thought.
+
+## Anti-patterns
+- Using color, 3D effects, or dual axes to exaggerate a difference.
+- Treating scenario bounds as confidence intervals.
+- Inventing values, weights, or a scale when the evidence is qualitative.

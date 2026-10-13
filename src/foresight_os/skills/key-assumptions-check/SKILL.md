@@ -8,6 +8,18 @@ description: Expose and test conditions underlying a claim, scenario, or recomme
 ## Inputs
 Use the target ID, decision, horizon, supporting evidence, calculations, dependencies, and constraints. Keep supplied facts separate from assumptions.
 
+## When to use
+Use when a conclusion depends on conditions about demand, cost, timing,
+capacity, adoption, regulation, competition, or implementation that could
+change the decision.
+
+## Do not use / route instead
+Do not relabel missing evidence as an assumption or build an exhaustive
+register for immaterial work. Route source validity to `source-appraisal`,
+numerical sensitivity to `quantitative-sanity-check`, scenario construction to
+`scenario-planning`, and an unresolved consequential gap to
+`abstain-or-escalate`.
+
 ## Workflow
 1. Ask what must remain true for the conclusion to hold. Inspect demand, cost, timing, capacity, adoption, regulation, and competitor responses where relevant.
 2. Record each material assumption's origin, evidence IDs, applicable period, and basis: observed, inferred, or an explicit planning choice. Do not turn absent evidence into a factual assertion.
@@ -22,3 +34,13 @@ When the caller requests `ChallengeObjection`, return only that envelope using `
 
 ## Completion check
 Every decision-critical assumption has an explicit consequence if false. Proceed provisionally when uncertainty is tolerable; abstain or escalate only the affected consequential conclusion. Do not manufacture numerical probabilities.
+
+## Pair with
+- `source-appraisal` for the evidence basis of an assumption.
+- `quantitative-sanity-check` for bounded sensitivity calculations.
+- `scenario-planning` for scenario-specific signposts and responses.
+
+## Anti-patterns
+- Calling an unsupported fact an assumption to avoid an evidence gap.
+- Listing assumptions without a consequence, disconfirmation condition, or action.
+- Assigning numeric confidence without an evidential basis.
