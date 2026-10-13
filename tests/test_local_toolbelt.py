@@ -98,7 +98,13 @@ def test_formula_cache_and_manual_recalculation_state_are_truthful(workbook_path
     with zipfile.ZipFile(cached_path, "r") as archive:
         entries = {name: archive.read(name) for name in archive.namelist()}
     sheet = entries["xl/worksheets/sheet1.xml"].decode("utf-8")
-    sheet, replacements = re.subn(r'(<c[^>]*\br="E3"[^>]*>.*?<f>Assumptions!B2\*C3</f>.*?<v>).*?(</v>)', r'\g<1>10\g<2>', sheet, count=1, flags=re.DOTALL)
+    sheet, replacements = re.subn(
+        r'(<c[^>]*\br="E3"[^>]*>.*?<f>Assumptions!B2\*C3</f>.*?<v)(?:\s*/>|>.*?</v>)',
+        r'\g<1>>10</v>',
+        sheet,
+        count=1,
+        flags=re.DOTALL,
+    )
     assert replacements == 1
     entries["xl/worksheets/sheet1.xml"] = sheet.encode("utf-8")
     workbook_xml, replacements = re.subn(r'<calcPr([^>]*)/>', r'<calcPr\1 calcMode="manual"/>', entries["xl/workbook.xml"].decode("utf-8"), count=1)
