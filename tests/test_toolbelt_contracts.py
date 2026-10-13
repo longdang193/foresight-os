@@ -2,6 +2,7 @@ from foresight_os.runtime.capabilities import (
     CapabilityDecision,
     CapabilityResolver,
     DEFAULT_CAPABILITIES,
+    register_artifact_generation_adapter,
 )
 
 
@@ -31,3 +32,14 @@ def test_unavailable_capabilities_are_truthful_and_lazy():
     assert all(not item.available for item in resolution.values())
     assert all(item.decision == CapabilityDecision.UNSUPPORTED for item in resolution.values())
     assert all("adapter is not activated" in item.reason for item in resolution.values())
+
+
+def test_artifact_generation_activates_only_with_adapter_and_human_approval():
+    context = {"human_approved": True}
+    adapter = object()
+    register_artifact_generation_adapter(context, adapter, fingerprint="canva-v1")
+
+    resolution = CapabilityResolver().resolve(("artifact_generation",), context)["artifact_generation"]
+
+    assert resolution.available
+    assert resolution.tool is adapter

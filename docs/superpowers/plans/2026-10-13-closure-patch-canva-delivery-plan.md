@@ -2,7 +2,7 @@
 layer: change
 artifact_type: plan
 contract_version: "1"
-status: proposed
+status: active
 template_id: implementation-plan
 name: foresight-os-closure-patch-canva-delivery
 targets:
@@ -158,7 +158,7 @@ spec checks on PRs and reserve heavy closure evidence for nightly/release runs.
 - Branch: `codex/closure-patch-canva-delivery`
 - Base commit: `2fe7b4280d989f254647ba2acc142a271e2813f8` (`origin/main`)
 - Expected workspace: tracked files clean after branch recreation from `origin/main`; preserve existing untracked `build/`, `data/`, `src/foresight_os.egg-info/`, and every existing `work/` output without staging, deletion, or cleanup
-- Next action: implement Task 4 vendor-neutral presentation compiler and Canva boundary on the verified closure branch, preserving Task 0–3 evidence
+- Next action: correct performance/resource measurement semantics in Task 5, preserving Task 0–4 evidence
 - Blockers: none known; Canva connector availability is an external-boundary condition, not a reason to block local compiler work
 
 | Task | State | Workspace | Executor | Depends On | Required Proof | Evidence |
@@ -167,8 +167,8 @@ spec checks on PRs and reserve heavy closure evidence for nightly/release runs.
 | Task 1 | `completed` | current | `unresolved` | Task 0 | stage execution/fingerprint tests | focused suites passed |
 | Task 2 | `completed` | current | `unresolved` | Task 0 | relation/review/finding tests | required suite passed; Task 2 checkpoint |
 | Task 3 | `completed` | current | `unresolved` | Tasks 1–2 | fresh-process receipt lifecycle probe | automatic receipt/reuse probe passed; Task 3 checkpoint |
-| Task 4 | `active` | current | `unresolved` | Task 2 | presentation compiler/spec validation | pending |
-| Task 5 | `pending` | current | `unresolved` | Tasks 3–4 | performance/resource receipt comparison | pending |
+| Task 4 | `completed` | current | `unresolved` | Task 2 | presentation compiler/spec validation | focused suites passed; local Canva boundary remains disconnected by design |
+| Task 5 | `active` | current | `unresolved` | Tasks 3–4 | performance/resource receipt comparison | pending |
 | Task 6 | `pending` | current | `unresolved` | Tasks 2–5 | cache and CI/documentation checks | pending |
 | Task 7 | `pending` | current | `unresolved` | Tasks 0–6 | final verification and acceptance evidence | pending |
 
@@ -419,14 +419,15 @@ spec checks on PRs and reserve heavy closure evidence for nightly/release runs.
 - Stop for: Canva authentication, external design mutation, export, publication, arbitrary deck generation, or a new presentation state/database model
 
 **Steps:**
-- [ ] Step 1: Define immutable `SlideSpec` and `PresentationSpec` with investigation ID, analysis revision, audience, decision question, horizon, title, six ordered slides, and source finding IDs; include finding/evidence/calculation IDs, uncertainty, disconfirmation conditions, and speaker notes per slide.
-- [ ] Step 2: Compile the fixed template: decision/scope, evidence/signals, scenarios, strategic options, recommendation, and reassessment. Select, shorten, and arrange canonical findings only; reject slide content whose claim/evidence IDs are not present in `AnalysisState`.
-- [ ] Step 3: Validate deterministic completeness, source revision, accepted/rejected status, stale artifacts, provenance subsets, and spec hash. Normal compilation requires the current accepted state; `compile_presentation(state, provisional=True)` is the only provisional path and must mark the spec `DRAFT / UNVALIDATED`. Represent local output as `Artifact(kind="presentation_spec")` with `produces` relationships from source findings.
-- [ ] Step 4: Define an optional adapter/receipt shape containing only durable Canva identifiers and verification state: `provider`, `design_id`, `source_revision`, `presentation_spec_hash`, `confirmed_state`, and `last_verified_at`. Preview/export URLs remain transient adapter outputs. Keep `artifact_generation` unavailable until a connected adapter is supplied, reject provisional specs for external writes unless a human explicitly approves the draft, and preserve human approval at the first external mutation.
-- [ ] Step 5: Add tests for accepted and provisional findings, stale revisions, unsupported new claims, counterevidence/uncertainty retention, deterministic spec hashing, no-connector behavior, and the integration chain evidence change → stale finding → stale `presentation_spec` artifact → normal Canva publish/update rejection → regenerated spec.
+- [x] Step 1: Define immutable `SlideSpec` and `PresentationSpec` with investigation ID, analysis revision, audience, decision question, horizon, title, six ordered slides, and source finding IDs; include finding/evidence/calculation IDs, uncertainty, disconfirmation conditions, and speaker notes per slide.
+- [x] Step 2: Compile the fixed template: decision/scope, evidence/signals, scenarios, strategic options, recommendation, and reassessment. Select, shorten, and arrange canonical findings only; reject slide content whose claim/evidence IDs are not present in `AnalysisState`.
+- [x] Step 3: Validate deterministic completeness, source revision, accepted/rejected status, stale artifacts, provenance subsets, and spec hash. Normal compilation requires the current accepted state; `compile_presentation(state, provisional=True)` is the only provisional path and must mark the spec `DRAFT / UNVALIDATED`. Represent local output as `Artifact(kind="presentation_spec")` with `produces` relationships from source findings.
+- [x] Step 4: Define an optional adapter/receipt shape containing only durable Canva identifiers and verification state: `provider`, `design_id`, `source_revision`, `presentation_spec_hash`, `confirmed_state`, and `last_verified_at`. Preview/export URLs remain transient adapter outputs. Keep `artifact_generation` unavailable until a connected adapter is supplied, reject provisional specs for external writes unless a human explicitly approves the draft, and preserve human approval at the first external mutation.
+- [x] Step 5: Add tests for accepted and provisional findings, stale revisions, unsupported new claims, counterevidence/uncertainty retention, deterministic spec hashing, no-connector behavior, and the integration chain evidence change → stale finding → stale `presentation_spec` artifact → normal Canva publish/update rejection → regenerated spec.
 
 **Verification:**
-- [ ] `python -m pytest -q tests/test_presentation_spec.py tests/test_finding_view.py tests/test_client_continuation.py`
+- [x] `python -m pytest -q tests/test_presentation_spec.py tests/test_finding_view.py tests/test_client_continuation.py`
+- [x] `python -m pytest -q tests/test_toolbelt_contracts.py`
 - Expected: local presentation compilation is deterministic and provenance-safe; a disconnected Canva boundary reports unavailable rather than pretending to publish.
 
 **Exit Criteria:**

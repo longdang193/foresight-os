@@ -170,14 +170,14 @@ class CapabilityResolver:
         definition = self.definitions.get(capability_id)
         if definition is None:
             return CapabilityResolution(CapabilityDefinition(capability_id, "unknown"), CapabilityDecision.UNSUPPORTED, False, "capability is not defined")
-        if definition.capability_class == "unavailable":
+        candidate, decision, reason = self._candidate(capability_id, context)
+        if definition.capability_class == "unavailable" and candidate is None:
             return CapabilityResolution(definition, CapabilityDecision.UNSUPPORTED, False, "capability is registered but its adapter is not activated")
         if definition.approval_policy == "HUMAN" and not context.get("human_approved", False):
             return CapabilityResolution(definition, CapabilityDecision.UNSUPPORTED, False, "human approval required")
         denied = self._authorization_denial(definition, context)
         if denied is not None:
             return CapabilityResolution(definition, CapabilityDecision.UNSUPPORTED, False, denied)
-        candidate, decision, reason = self._candidate(capability_id, context)
         if candidate is None:
             if definition.capability_class == "unavailable":
                 reason = "capability is registered but its adapter is not activated"
@@ -204,14 +204,14 @@ class CapabilityResolver:
         definition = self.definitions.get(capability_id)
         if definition is None:
             return CapabilityResolution(CapabilityDefinition(capability_id, "unknown"), CapabilityDecision.UNSUPPORTED, False, "capability is not defined")
-        if definition.capability_class == "unavailable":
+        candidate, decision, reason = self._candidate(capability_id, context)
+        if definition.capability_class == "unavailable" and candidate is None:
             return CapabilityResolution(definition, CapabilityDecision.UNSUPPORTED, False, "capability is registered but its adapter is not activated")
         if definition.approval_policy == "HUMAN" and not context.get("human_approved", False):
             return CapabilityResolution(definition, CapabilityDecision.UNSUPPORTED, False, "human approval required")
         denied = self._authorization_denial(definition, context)
         if denied is not None:
             return CapabilityResolution(definition, CapabilityDecision.UNSUPPORTED, False, denied)
-        candidate, decision, reason = self._candidate(capability_id, context)
         if candidate is None:
             if definition.capability_class == "unavailable":
                 reason = "capability is registered but its adapter is not activated"
@@ -439,6 +439,21 @@ DEFAULT_CAPABILITIES = {
     "artifact_generation": CapabilityDefinition("artifact_generation", "unavailable", "write", "RUN", 1, "HUMAN", data_scope="local"),
     "external_mutation": CapabilityDefinition("external_mutation", "external_mutation", "write", "RUN", 1, "HUMAN"),
 }
+
+
+def register_artifact_generation_adapter(
+    run_context: dict[str, Any],
+    adapter: Any,
+    *,
+    fingerprint: str = "",
+) -> dict[str, Any]:
+    """Register a caller-owned artifact adapter without activating one by default."""
+    run_context.setdefault("adapters", {})["artifact_generation"] = CapabilityBinding(
+        adapter,
+        kind=CapabilityBindingKind.TOOL,
+        fingerprint=fingerprint,
+    )
+    return run_context
 
 
 @dataclass(frozen=True)

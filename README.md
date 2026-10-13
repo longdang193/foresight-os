@@ -59,7 +59,23 @@ durable analysis state. Source credibility remains a separate human decision.
 The semantic registry contains `web_search`, `page_retrieval`, `web_crawl`,
 `spreadsheet_read`, `data_analysis`, `calculation`, `graph_context`, and
 `domain_validation`, and `powerbi_project_read`, plus explicitly unavailable `document_read`,
-`internal_knowledge`, and `artifact_generation` follow-ups.
+  `internal_knowledge`, and `artifact_generation` follow-ups.
+
+## Presentation and Canva boundary
+
+The local presentation compiler derives a deterministic six-slide
+`PresentationSpec` from accepted `AnalysisState` findings. The spec carries its
+analysis revision, provenance IDs, qualifications, and content hash; it does
+not create a second analytical or artifact state model. `presentation_spec`
+artifacts are linked to their source findings through the existing
+`produces` relationships and become stale through the normal invalidation
+path.
+
+Canva remains an optional external boundary. No connector is activated by
+default, provisional specs cannot be published, and external mutation requires
+explicit human approval. A connected adapter returns only durable provider,
+design, revision, spec-hash, confirmation, and verification-time fields;
+preview or export URLs are transient and are not stored as analytical truth.
 
 Verification runs accept a disposable `--output-root`; preserved probe outputs
 under `work/` are not used as evaluation storage or rewritten by default.
