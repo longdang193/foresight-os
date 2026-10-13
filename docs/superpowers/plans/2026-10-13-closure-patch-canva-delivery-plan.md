@@ -158,8 +158,8 @@ spec checks on PRs and reserve heavy closure evidence for nightly/release runs.
 - Branch: `codex/closure-patch-canva-delivery`
 - Base commit: `2fe7b4280d989f254647ba2acc142a271e2813f8` (`origin/main`)
 - Expected workspace: tracked files clean after branch recreation from `origin/main`; preserve existing untracked `build/`, `data/`, `src/foresight_os.egg-info/`, and every existing `work/` output without staging, deletion, or cleanup
-- Next action: investigate the pattern-specific optimization p95 failure without weakening the comparator, preserving all accepted local and Canva evidence
-- Blockers: none known; Canva connector availability is an external-boundary condition, not a reason to block local compiler work
+- Next action: carry the explicitly deferred pattern-specific optimization p95 investigation into the follow-up delivery without weakening the comparator, preserving all accepted local and Canva evidence
+- Blockers: optimization comparator follow-up is explicitly deferred by the user on 2026-10-13; Canva delivery is verified
 
 | Task | State | Workspace | Executor | Depends On | Required Proof | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -170,7 +170,7 @@ spec checks on PRs and reserve heavy closure evidence for nightly/release runs.
 | Task 4 | `completed` | current | `unresolved` | Task 2 | presentation compiler/spec validation | focused suites passed; tracked Canva delivery receipt verified at `docs/superpowers/evidence/2026-10-13-canva-delivery-receipt.json` |
 | Task 5 | `completed` | current | `unresolved` | Tasks 3–4 | performance/resource receipt comparison | corrected schema and baseline captured; comparator self-check passed |
 | Task 6 | `completed` | current | `unresolved` | Tasks 2–5 | bounded caches, clean-wheel smoke passed; release comparison fail-closed on noisy p95 sample |
-| Task 7 | `active` | current | `unresolved` | Tasks 0–6 | final verification and acceptance evidence | incomplete: fresh optimization comparator rejected a pattern p95 regression; Canva external delivery verified through approved Canva write |
+| Task 7 | `active` | current | `unresolved` | Tasks 0–6 | final verification and acceptance evidence | optimization comparator follow-up explicitly deferred; Canva external delivery verified through approved Canva write; plan remains active until the deferred evidence is resolved |
 
 ## Task Breakdown
 
@@ -585,7 +585,7 @@ spec checks on PRs and reserve heavy closure evidence for nightly/release runs.
 - [x] Step 2: Run `python -m pytest -q` with generated output routed to the new disposable root where applicable.
 - [ ] Step 3: Run the controller/contract matrices, selective-reuse probe, presentation validation, optimization comparison, and clean-wheel smoke using only new disposable output paths. Contract/controller/selective/clean-wheel evidence passed; the fresh optimization comparison failed closed on a pattern p95 regression.
 - [x] Step 4: With the connected Canva surface and explicit user approval, create one editable six-slide presentation from the validated `PresentationSpec`, read back its design metadata, and persist the tracked receipt at `docs/superpowers/evidence/2026-10-13-canva-delivery-receipt.json`.
-- [ ] Step 5: Reconcile every task state, deviation, evidence path, and completion criterion, then report two independent verdicts: `Core three-increment closure: FAILED` pending the pattern-specific p95 investigation; `Canva external delivery: VERIFIED` from the persisted receipt. Only `skill-verification-before-completion` may authorize a terminal `completed` status.
+- [x] Step 5: Reconcile every task state, deviation, evidence path, and completion criterion, then report two independent verdicts: `Core three-increment closure: FAILED — optimization comparator follow-up explicitly deferred by user on 2026-10-13`; `Canva external delivery: VERIFIED` from the persisted receipt. The plan remains active and may not be marked `completed` until the deferred evidence is resolved.
 
 **Verification:**
 - [x] `python -m pytest -q`
@@ -598,6 +598,8 @@ spec checks on PRs and reserve heavy closure evidence for nightly/release runs.
 - [x] `git diff --check`
 - [x] `git status --short --branch`
 - Expected: all required local gates pass, no preserved untracked output changes, evidence is fresh and machine-readable, and external Canva status is either verified through an approved connector or explicitly blocked.
+
+**Approved deferral:** On 2026-10-13 the user authorized merging while deferring investigation and rerun of the `CHALLENGE_RECOMMENDATION` pattern-specific p95 regression. The comparator thresholds remain unchanged, the failure remains recorded, and the follow-up is required before the core closure can be called `VERIFIED` or the plan can become `completed`.
 
 **Exit Criteria:**
 - The plan has fresh proof for every required outcome, all deviations and unavailable boundaries are recorded, and completion status remains `proposed` or becomes `completed` only after the verification skill returns `verified`.
