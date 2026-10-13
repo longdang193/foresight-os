@@ -50,6 +50,7 @@ class ToolbeltLimits:
     max_expanded_bytes: int = 100_000_000
     max_rows: int = 50_000
     max_cells: int = 250_000
+    max_merged_ranges: int = 10_000
     max_result_rows: int = 10_000
 
 
@@ -307,6 +308,9 @@ def _preflight_xlsx_archive(source: Path, selection: SheetSelection | None, limi
         workbook_root = ET.fromstring(archive.read("xl/workbook.xml"))
         relationships = ET.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
         targets = {item.attrib["Id"]: item.attrib["Target"] for item in relationships.findall("pkg:Relationship", namespaces)}
+        total_row_count = 0
+        total_cell_count = 0
+        total_merged_range_count = 0
         for sheet in workbook_root.findall("main:sheets/main:sheet", namespaces):
             title = sheet.attrib["name"]
             target = targets.get(sheet.attrib.get(f"{{{namespaces['rel']}}}id"))
@@ -321,24 +325,24 @@ def _preflight_xlsx_archive(source: Path, selection: SheetSelection | None, limi
                     raise ToolbeltError("workbook selection exceeds row limit")
                 if (range_bounds[3] - range_bounds[1] + 1) * (range_bounds[2] - range_bounds[0] + 1) > limits.max_cells:
                     raise ToolbeltError("workbook selection exceeds cell limit")
-            row_count = 0
-            cell_count = 0
             with archive.open(sheet_path) as handle:
                 for _, element in ET.iterparse(handle, events=("end",)):
                     _check_cancel(cancel_check)
                     if element.tag == f"{{{namespaces['main']}}}row":
-                        row_number = int(element.attrib.get("r", row_count + 1))
-                        row_count += 1
-                        if row_count > limits.max_rows:
+                        total_row_count += 1
+                        if total_row_count > limits.max_rows:
                             raise ToolbeltError("workbook allocation exceeds row limit")
                     elif element.tag == f"{{{namespaces['main']}}}c":
                         coordinate = element.attrib.get("r", "")
                         match = re.fullmatch(r"([A-Z]+)(\d+)", coordinate.upper())
                         if match:
-                            column, row = _range_bounds(f"{match.group(1)}{match.group(2)}")[:2]
-                            cell_count += 1
-                            if cell_count > limits.max_cells:
+                            total_cell_count += 1
+                            if total_cell_count > limits.max_cells:
                                 raise ToolbeltError("workbook allocation exceeds cell limit")
+                    elif element.tag == f"{{{namespaces['main']}}}mergeCell":
+                        total_merged_range_count += 1
+                        if total_merged_range_count > limits.max_merged_ranges:
+                            raise ToolbeltError("workbook merged range limit exceeded")
                     element.clear()
 
 
@@ -475,6 +479,20 @@ def _rows(table: TypedTable) -> list[dict[str, Any]]:
     return [dict(zip(columns, row, strict=False)) for row in table.rows]
 
 
+def _ensure_homogeneous_units(rows: Sequence[dict[str, Any]], table: TypedTable, value_column: str) -> None:
+    unit_column = next((column for column in table.columns if column.strip().lower() == "unit"), None)
+    if unit_column is None or not rows:
+        return
+    contributing_rows = [row for row in rows if row.get(value_column) is not None]
+    if not contributing_rows:
+        return
+    units = {row.get(unit_column) for row in contributing_rows}
+    if None in units or "" in units:
+        raise ToolbeltError("unit unavailable for numeric analysis")
+    if len(units) > 1:
+        raise ToolbeltError("unit mismatch across numeric analysis rows")
+
+
 def data_analysis(
     table: TypedTable,
     operation: AnalysisOperation,
@@ -534,6 +552,7 @@ def data_analysis(
     elif kind in {"aggregate", "sum", "mean"}:
         if not operation.value_column:
             raise ToolbeltError("aggregate requires value_column")
+        _ensure_homogeneous_units(rows, table, operation.value_column)
         values = [row.get(operation.value_column) for row in rows if row.get(operation.value_column) is not None]
         if any(isinstance(value, ExcelError) for value in values):
             raise ToolbeltError("cannot aggregate Excel errors")
@@ -544,6 +563,7 @@ def data_analysis(
     elif kind in {"scenario", "sensitivity"}:
         if not operation.value_column:
             raise ToolbeltError("scenario analysis requires value_column")
+        _ensure_homogeneous_units(rows, table, operation.value_column)
         base = sum(float(row[operation.value_column]) for row in rows if row.get(operation.value_column) is not None)
         if kind == "scenario":
             result = [{"scenario": name, "value": base * float(multiplier)} for name, multiplier in operation.scenarios]

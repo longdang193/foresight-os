@@ -7,6 +7,7 @@ from threading import Thread
 import pytest
 
 from foresight_os.analysis.evidence_workflow import accept_pending_evidence, run_evidence_workflow
+from foresight_os.domain.models import AnalysisState, Revision
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.runtime.page_retrieval import PageRetrievalCapability
 from foresight_os.runtime.web_search import WebSearchHit
@@ -95,6 +96,18 @@ def test_evidence_workflow_requires_explicit_acceptance_and_supports_restart(tmp
     finally:
         server.shutdown()
         thread.join(timeout=2)
+
+
+def test_superseded_pending_token_cannot_be_replayed(tmp_path: Path):
+    store = AnalysisStore(tmp_path / "superseded")
+    state = AnalysisState("case", 1, revisions=[Revision("revision-1", 1, "initial", [])])
+    first = store.save_pending(state)
+    second = store.save_pending(state)
+
+    store.commit_revision(second, expected_revision=1, accepted=True)
+
+    with pytest.raises(ValueError, match="stale pending identity"):
+        store.commit_revision(first, expected_revision=1, accepted=True)
 
 
 def test_xlsx_finding_workflow_persists_provenance_calculation_and_restart(tmp_path: Path):

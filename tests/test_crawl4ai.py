@@ -46,6 +46,62 @@ def test_crawl4ai_rejects_private_urls():
     assert error.value.failure_class == "blocked_network_target"
 
 
+def test_crawl4ai_aborts_private_websocket_requests(monkeypatch):
+    captured = {}
+
+    class Route:
+        def __init__(self, url):
+            self.request = SimpleNamespace(url=url)
+            self.aborted = None
+            self.continued = False
+
+        async def abort(self, reason):
+            self.aborted = reason
+
+        async def continue_(self):
+            self.continued = True
+
+    class Context:
+        async def add_init_script(self, *_):
+            return None
+
+        async def route(self, _pattern, handler):
+            captured["route_handler"] = handler
+
+    class Strategy:
+        def __init__(self, **_):
+            self.hook = None
+
+        def set_hook(self, name, hook):
+            assert name == "on_page_context_created"
+            self.hook = hook
+
+    class Crawler(_FakeCrawler):
+        def __init__(self, **kwargs):
+            self.strategy = kwargs["crawler_strategy"]
+
+        async def __aenter__(self):
+            await self.strategy.hook(None, Context())
+            return self
+
+        async def arun(self, url, **_):
+            routes = []
+            for scheme in ("ws", "wss"):
+                route = Route(f"{scheme}://127.0.0.1:8080/private-socket")
+                await captured["route_handler"](route)
+                routes.append(route)
+            captured["routes"] = routes
+            return await super().arun(url)
+
+    monkeypatch.setitem(sys.modules, "crawl4ai", SimpleNamespace(AsyncWebCrawler=Crawler))
+    monkeypatch.setitem(sys.modules, "crawl4ai.async_crawler_strategy", SimpleNamespace(AsyncPlaywrightCrawlerStrategy=Strategy))
+
+    asyncio.run(Crawl4AICapability(fixture_hosts={"example.test"})("https://example.test/report"))
+
+    assert [route.aborted for route in captured["routes"]] == ["blockedbyclient", "blockedbyclient"]
+    assert all(not route.continued for route in captured["routes"])
+
+
 def test_crawl4ai_is_injected_into_maf_agent_tools(monkeypatch):
     monkeypatch.setitem(sys.modules, "crawl4ai", SimpleNamespace(AsyncWebCrawler=_FakeCrawler))
     captured = {}

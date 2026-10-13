@@ -98,7 +98,13 @@ def test_formula_cache_and_manual_recalculation_state_are_truthful(workbook_path
     with zipfile.ZipFile(cached_path, "r") as archive:
         entries = {name: archive.read(name) for name in archive.namelist()}
     sheet = entries["xl/worksheets/sheet1.xml"].decode("utf-8")
-    sheet, replacements = re.subn(r'(<c[^>]*\br="E3"[^>]*>.*?<f>Assumptions!B2\*C3</f>.*?<v>).*?(</v>)', r'\g<1>10\g<2>', sheet, count=1, flags=re.DOTALL)
+    sheet, replacements = re.subn(
+        r'(<c[^>]*\br="E3"[^>]*>.*?<f>Assumptions!B2\*C3</f>.*?<v)(?:\s*/>|>.*?</v>)',
+        r'\g<1>>10</v>',
+        sheet,
+        count=1,
+        flags=re.DOTALL,
+    )
     assert replacements == 1
     entries["xl/worksheets/sheet1.xml"] = sheet.encode("utf-8")
     workbook_xml, replacements = re.subn(r'<calcPr([^>]*)/>', r'<calcPr\1 calcMode="manual"/>', entries["xl/workbook.xml"].decode("utf-8"), count=1)
@@ -120,6 +126,41 @@ def test_analysis_supports_filters_and_duplicate_join_key_guard(workbook_path):
     assert filtered.rows[0]["column"] == "Region"
     with pytest.raises(ToolbeltError, match="duplicate join keys"):
         data_analysis(demand, AnalysisOperation("join", join_table=demand, join_keys=("Region", "Region")))
+
+
+@pytest.mark.parametrize("kind", ["sum", "scenario", "sensitivity"])
+def test_analysis_blocks_numeric_analysis_when_rows_mix_units(tmp_path, kind):
+    source = tmp_path / "mixed_units.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.append(["Metric", "Unit", "Value"])
+    sheet.append(["share", "percent", 25])
+    sheet.append(["sales", "Vehicles", 100])
+    workbook.save(source)
+
+    table = spreadsheet_read(source).tables[0]
+    operation = AnalysisOperation(
+        kind,
+        value_column="Value",
+        scenarios=(("base", 1.0),),
+        sensitivity=(("scale", (1.0,)),),
+    )
+    with pytest.raises(ToolbeltError, match="unit mismatch"):
+        data_analysis(table, operation)
+
+
+def test_analysis_ignores_units_on_rows_without_numeric_values(tmp_path):
+    source = tmp_path / "nullable_units.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.append(["Metric", "Unit", "Value"])
+    sheet.append(["sales", "Vehicles", 100])
+    sheet.append(["share", "percent", None])
+    workbook.save(source)
+
+    table = spreadsheet_read(source).tables[0]
+    result = data_analysis(table, AnalysisOperation("sum", value_column="Value"))
+    assert result.rows[0]["sum"] == 100.0
 
 
 def test_spreadsheet_and_analysis_honor_cancellation_checkpoints(workbook_path):
@@ -165,6 +206,34 @@ def test_xlsx_actual_cells_are_counted_before_eager_load(workbook_path):
 def test_xlsx_expanded_archive_limit_is_checked_before_loading(workbook_path):
     with pytest.raises(ToolbeltError, match="expanded content"):
         spreadsheet_read(workbook_path, limits=ToolbeltLimits(max_expanded_bytes=1))
+
+
+def test_xlsx_allocation_limits_are_cumulative_across_sheets(tmp_path):
+    source = tmp_path / "multi-sheet-allocation.xlsx"
+    workbook = openpyxl.Workbook()
+    first = workbook.active
+    first.title = "First"
+    first.append(["A", "B"])
+    second = workbook.create_sheet("Second")
+    second.append(["C", "D"])
+    workbook.save(source)
+
+    with pytest.raises(ToolbeltError, match="allocation exceeds cell limit"):
+        spreadsheet_read(source, limits=ToolbeltLimits(max_cells=3))
+    with pytest.raises(ToolbeltError, match="allocation exceeds row limit"):
+        spreadsheet_read(source, limits=ToolbeltLimits(max_rows=1))
+
+
+def test_xlsx_merged_range_count_is_limited_before_loading(tmp_path):
+    source = tmp_path / "merged-range-limit.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.merge_cells("A1:B1")
+    sheet.merge_cells("A2:B2")
+    workbook.save(source)
+
+    with pytest.raises(ToolbeltError, match="merged range limit"):
+        spreadsheet_read(source, limits=ToolbeltLimits(max_merged_ranges=1))
 
 
 def test_calculation_provenance_qualifies_workbook_sheet_and_coordinate(workbook_path):
