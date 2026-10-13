@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, RecipeName, RecipeStage, make_recipe
 from foresight_os.persistence.analysis_store import AnalysisStore, StageReceipt
-from foresight_os.runtime.workflow import _stage_cache_key
+from foresight_os.runtime.workflow import _canonical_result_hash, _stage_cache_key
 
 
 def _recipe() -> ExecutionRecipe:
@@ -31,8 +31,8 @@ def main() -> int:
     first_output = {"stage": "first"}
     second_output = {"stage": "second"}
     cache = {
-        _stage_cache_key(recipe.stages[0], "start", ()): {"status": "committed", "provenance_complete": True, "result_references": ["claim-first"], "result_hashes": ["hash-first"], "output": first_output},
-        _stage_cache_key(recipe.stages[1], first_output, ()): {"status": "committed", "provenance_complete": True, "result_references": ["claim-second"], "result_hashes": ["hash-second"], "output": second_output},
+        _stage_cache_key(recipe.stages[0], "start", ()): {"status": "committed", "provenance_complete": True, "result_references": ["claim-first"], "result_hashes": [_canonical_result_hash(first_output)], "output": {"tampered": True}},
+        _stage_cache_key(recipe.stages[1], first_output, ()): {"status": "committed", "provenance_complete": True, "result_references": ["claim-second"], "result_hashes": [_canonical_result_hash(second_output)], "output": {"tampered": True}},
     }
     cache_path = args.output_root / "cache.json"
     cache_path.write_text(json.dumps(cache, sort_keys=True), encoding="utf-8")
@@ -43,7 +43,8 @@ sys.path.insert(0, sys.argv[1])
 from evaluation.probes.run_selective_reuse_probe import _recipe
 from foresight_os.runtime.workflow import run_recipe_async
 cache = json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))
-result = asyncio.run(run_recipe_async(_recipe(), 'start', run_context={'stage_cache': cache}))
+canonical_records = {'claim-first': {'stage': 'first'}, 'claim-second': {'stage': 'second'}}
+result = asyncio.run(run_recipe_async(_recipe(), 'start', run_context={'stage_cache': cache, 'canonical_records': canonical_records}))
 print(json.dumps({'cache_hits': result.metrics.cache_hits, 'reassessed_stages': result.metrics.reassessed_stages, 'model_calls': result.metrics.model_calls, 'output': result.outputs[-1]}))
 """
     env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}

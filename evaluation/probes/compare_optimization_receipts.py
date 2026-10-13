@@ -21,8 +21,8 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
         missing.append("accepted_finding_count")
     if not receipt.get("stage_metrics"):
         missing.append("stage_metrics")
-    if receipt.get("resource", {}).get("rss_bytes") is None:
-        missing.append("resource.rss_bytes")
+    if receipt.get("resource", {}).get("rss_bytes") is None or int(receipt.get("resource", {}).get("rss_bytes", 0) or 0) <= 0:
+        missing.append("resource.rss_bytes>0")
     if int(receipt.get("accepted_finding_count", 0) or 0) <= 0:
         missing.append("accepted_finding_count>0")
     if any(item.get("failure_class") for item in receipt.get("stage_metrics", ())):
@@ -57,15 +57,17 @@ def compare(baseline: dict, release: dict) -> dict:
     release_tool_calls = _tool_calls(release) / release_finding_count if release_finding_count else 0.0
     p95_regression = (release["xlsx"]["p95_ms"] / baseline["xlsx"]["p95_ms"] - 1) * 100
     allocation_regression = (release["xlsx"]["peak_allocation_bytes"] / baseline["xlsx"]["peak_allocation_bytes"] - 1) * 100
+    rss_regression = (release["resource"]["rss_bytes"] / baseline["resource"]["rss_bytes"] - 1) * 100
     result = {
         "baseline": {"p95_ms": baseline["xlsx"]["p95_ms"], "peak_allocation_bytes": baseline["xlsx"]["peak_allocation_bytes"], "tool_calls_per_finding": baseline_tool_calls},
         "release": {"p95_ms": release["xlsx"]["p95_ms"], "peak_allocation_bytes": release["xlsx"]["peak_allocation_bytes"], "tool_calls_per_finding": release_tool_calls},
         "regression": {
             "p95_pct": round(p95_regression, 3),
             "peak_allocation_pct": round(allocation_regression, 3),
+            "rss_pct": round(rss_regression, 3),
             "tool_calls_per_finding": round(release_tool_calls - baseline_tool_calls, 3),
         },
-        "accepted": p95_regression <= 20 and allocation_regression <= 15 and release_tool_calls <= baseline_tool_calls and baseline.get("native_mcp", {}).get("status") == "VERIFIED" and release.get("native_mcp", {}).get("status") == "VERIFIED",
+        "accepted": p95_regression <= 20 and allocation_regression <= 15 and rss_regression <= 15 and release_tool_calls <= baseline_tool_calls and baseline.get("native_mcp", {}).get("status") == "VERIFIED" and release.get("native_mcp", {}).get("status") == "VERIFIED",
         "accepted_finding_count": {"baseline": baseline_finding_count, "release": release_finding_count},
         "workload": baseline["workload"],
         "native_mcp": {"baseline": baseline.get("native_mcp", {}).get("status"), "release": release.get("native_mcp", {}).get("status")},

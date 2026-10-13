@@ -139,19 +139,27 @@ def _stage_cache_key(stage: Any, current: object, skill_ids: tuple[str, ...]) ->
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
-def _committed_cache_output(entry: Any) -> tuple[bool, object]:
+def _committed_cache_output(entry: Any, canonical_records: dict[str, object] | None = None) -> tuple[bool, object]:
     if isinstance(entry, dict):
         references = entry.get("result_references", entry.get("canonical_result_ids", ()))
         hashes = entry.get("result_hashes", ())
         valid = entry.get("status") == "committed" and entry.get("provenance_complete") is True and bool(references) and bool(hashes) and "output" in entry
-        return valid, entry.get("output")
+        if not valid or not _canonical_provenance_matches(references, hashes, canonical_records):
+            return False, None
+        values = [canonical_records[reference] for reference in references]
+        return True, values[0] if len(values) == 1 else values
     valid = (
         getattr(entry, "status", None) == "committed"
         and getattr(entry, "provenance_complete", False) is True
         and bool(getattr(entry, "result_references", ()))
         and bool(getattr(entry, "result_hashes", ()))
     )
-    return valid, getattr(entry, "output", None)
+    references = tuple(getattr(entry, "result_references", ()))
+    hashes = tuple(getattr(entry, "result_hashes", ()))
+    if not valid or not _canonical_provenance_matches(references, hashes, canonical_records):
+        return False, None
+    values = [canonical_records[reference] for reference in references]
+    return True, values[0] if len(values) == 1 else values
 
 
 def _canonical_result_hash(value: object) -> str:
@@ -310,7 +318,7 @@ async def run_recipe_async(
             ):
                 cache_entry = {"status": "committed", "provenance_complete": True, "result_references": receipt.result_references, "result_hashes": receipt.result_hashes, "output": canonical_output}
         if cache_entry is not None:
-            cache_valid, cached_output = _committed_cache_output(cache_entry)
+            cache_valid, cached_output = _committed_cache_output(cache_entry, context.get("canonical_records"))
             if cache_valid:
                 metrics.cache_hits += 1
                 metrics.reused_stages += 1

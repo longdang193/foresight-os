@@ -11,7 +11,7 @@ from foresight_os.analysis.technology_radar import _action
 from foresight_os.domain.challenge import ReviewValidity, review_validity
 from foresight_os.domain.models import AnalysisState, AnalyticalRecord, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Revision, SourceLocator
 from foresight_os.persistence.analysis_store import AnalysisStore
-from foresight_os.runtime.workflow import _canonical_provenance_matches, _canonical_result_hash
+from foresight_os.runtime.workflow import _canonical_provenance_matches, _canonical_result_hash, _committed_cache_output
 
 
 def _state(record: AnalyticalRecord, *, evidence: list[Evidence] | None = None, calculations: list[CalculationRecord] | None = None) -> AnalysisState:
@@ -34,6 +34,15 @@ def test_receipt_reuse_requires_existing_untampered_canonical_records():
     assert _canonical_provenance_matches(("claim-1",), (expected,), {"claim-1": record})
     assert not _canonical_provenance_matches(("missing",), (expected,), {"claim-1": record})
     assert not _canonical_provenance_matches(("claim-1",), (expected,), {"claim-1": {"id": "claim-1", "value": 43}})
+    valid, output = _committed_cache_output(
+        {"status": "committed", "provenance_complete": True, "result_references": ["claim-1"], "result_hashes": [expected], "output": {"tampered": True}},
+        {"claim-1": record},
+    )
+    assert valid and output == record
+    assert not _committed_cache_output(
+        {"status": "committed", "provenance_complete": True, "result_references": ["missing"], "result_hashes": ["bogus"], "output": {"tampered": True}},
+        None,
+    )[0]
 
 
 def test_review_policy_is_resolved_and_blocks_calculation_error():
@@ -103,3 +112,6 @@ def test_optimization_comparison_rejects_zero_output_or_unhealthy_release():
     baseline = _receipt()
     assert not compare(baseline, _receipt(findings=0))["accepted"]
     assert not compare(baseline, _receipt(healthy=False))["accepted"]
+    rss_regression = _receipt()
+    rss_regression["resource"]["rss_bytes"] = 10**12
+    assert not compare(baseline, rss_regression)["accepted"]

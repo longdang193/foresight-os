@@ -2,7 +2,7 @@ import asyncio
 
 from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, RecipeName, RecipeStage, make_recipe
 from foresight_os.persistence.analysis_store import StageReceipt
-from foresight_os.runtime.workflow import _stage_cache_key, run_recipe_async
+from foresight_os.runtime.workflow import _canonical_result_hash, _stage_cache_key, run_recipe_async
 
 
 def test_stage_receipt_reuse_revalidates_semantic_scope_and_provenance():
@@ -40,12 +40,14 @@ def test_committed_stage_cache_hits_complete_ordered_stages_without_new_calls():
         stages=(first, second),
     )
     first_output = {"stage": "first"}
+    second_output = {"stage": "second"}
+    canonical_records = {"claim-first": first_output, "claim-second": second_output}
     stage_cache = {
-        _stage_cache_key(first, "start", ()): {"status": "committed", "provenance_complete": True, "result_references": ["claim-first"], "result_hashes": ["hash-first"], "output": first_output},
-        _stage_cache_key(second, first_output, ()): {"status": "committed", "provenance_complete": True, "result_references": ["claim-second"], "result_hashes": ["hash-second"], "output": {"stage": "second"}},
+        _stage_cache_key(first, "start", ()): {"status": "committed", "provenance_complete": True, "result_references": ["claim-first"], "result_hashes": [_canonical_result_hash(first_output)], "output": {"tampered": True}},
+        _stage_cache_key(second, first_output, ()): {"status": "committed", "provenance_complete": True, "result_references": ["claim-second"], "result_hashes": [_canonical_result_hash(second_output)], "output": {"tampered": True}},
     }
 
-    result = asyncio.run(run_recipe_async(recipe, "start", run_context={"stage_cache": stage_cache}))
+    result = asyncio.run(run_recipe_async(recipe, "start", run_context={"stage_cache": stage_cache, "canonical_records": canonical_records}))
 
     assert result.outputs[-1] == {"stage": "second"}
     assert result.metrics.cache_hits == 2

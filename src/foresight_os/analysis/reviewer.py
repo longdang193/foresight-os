@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 from foresight_os.controller.policy import ReviewPolicyResolver
+from foresight_os.controller.skills import SkillRegistry
 from foresight_os.domain.challenge import ChallengeObjection, ObjectionDisposition, ReviewOutcome
 from foresight_os.domain.models import AnalyticalRecord, CalculationRecord, Evidence
 
@@ -53,6 +54,16 @@ def review_reasoning(
     policy_id = str(getattr(policy, "policy_id", ""))
     policy_version = str(getattr(policy, "version", ""))
     skill_ids = tuple(getattr(policy, "required_skill_ids", ()))
+    skill_versions: tuple[str, ...] = ()
+    skill_hashes: tuple[str, ...] = ()
+    if skill_ids:
+        try:
+            resolved_skills = SkillRegistry().resolve(skill_ids)
+        except (ValueError, RuntimeError) as error:
+            issues.append(f"required review skills unavailable: {error}")
+        else:
+            skill_versions = tuple(skill.version for skill in resolved_skills)
+            skill_hashes = tuple(skill.content_sha256 for skill in resolved_skills)
     unresolved_classification = getattr(policy, "unresolved_classification_issue", None)
     if unresolved_classification:
         issues.append(unresolved_classification)
@@ -69,7 +80,7 @@ def review_reasoning(
     accepted = not issues
     if not accepted:
         outcome = ReviewOutcome.REJECTED
-    return ReviewResult(accepted, issues, objections=tuple(objections), outcome=outcome, policy_id=policy_id, policy_version=policy_version, skill_ids=skill_ids)
+    return ReviewResult(accepted, issues, objections=tuple(objections), outcome=outcome, policy_id=policy_id, policy_version=policy_version, skill_ids=skill_ids, skill_versions=skill_versions, skill_hashes=skill_hashes)
 
 
 def review_analysis_state(state: object) -> ReviewResult:
