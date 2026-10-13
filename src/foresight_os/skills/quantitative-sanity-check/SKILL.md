@@ -1,19 +1,24 @@
+---
+name: quantitative-sanity-check
+description: Verify numerical claims, spreadsheet calculations, scenario results, and chart values. Use before accepting quantitative findings or putting derived numbers into reports and slides.
+---
+
 # Quantitative Sanity Check
 
 ## Inputs
-- Calculations, formulas, input identifiers, units, and source evidence.
+Use target IDs, source tables/ranges, input IDs, formula/transformation, units, period, filters, and calculation records. Request authorized spreadsheet access when only an unexplained total is supplied.
 
-## Use when
-- A recommendation depends on a numerical result or derived metric.
-
-## Steps
-1. Reconcile formula, units, signs, and input identities.
-2. Recompute or independently bound the result where possible.
-3. Check missing, stale, or error-valued inputs.
-4. Report material sensitivity and limitations without inventing precision.
+## Workflow
+1. Establish row grain and comparison scope. Check keys, duplicates, joins, hidden/filtered rows, missing values, errors, units, currency, and date coverage. Preserve missing values; never silently substitute zero.
+2. Inspect formulas and cached values separately. A cached Excel result does not prove recalculation or freshness. Mark unavailable/stale formula results and use the declared recalculation boundary; never claim openpyxl recalculated a workbook.
+3. Recompute material totals and ratios with granted analysis/calculation tools. Verify denominators, weighted versus simple averages, percentage versus percentage-point changes, signs, and currency conversions.
+4. Reconcile totals to components and check a representative row independently. Retain input evidence IDs, transformation, result, units, and source ranges in the existing calculation contract.
+5. Test decision-sensitive inputs and a plausible adverse case. Identify when the recommendation changes; label assumed ranges. Round only for display.
 
 ## Output
-- Calculation checks, discrepancies, material inputs, and limitations.
+Return checked calculation IDs, recomputed results, discrepancies, scope, formula-trust status, sensitivity thresholds, and unresolved inputs. State the numerical tolerance and its rationale.
 
-## Abstention
-- Abstain from acceptance when required inputs or formula status is unavailable.
+When the caller requests `ChallengeObjection`, return only that envelope. A `CALCULATION_ERROR` needs existing evidence/calculation IDs; use `INSUFFICIENT_EVIDENCE` when inputs are unavailable. Explain the discrepancy and decision impact in `statement`.
+
+## Completion check
+Trace every material number to reproducible inputs. Example: 40% to 50% is +10 percentage points or +25% relative, not +10% relative. Withhold affected quantitative conclusions when formula trust or comparability remains unresolved.
