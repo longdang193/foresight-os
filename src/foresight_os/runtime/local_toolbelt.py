@@ -475,6 +475,17 @@ def _rows(table: TypedTable) -> list[dict[str, Any]]:
     return [dict(zip(columns, row, strict=False)) for row in table.rows]
 
 
+def _ensure_homogeneous_units(rows: Sequence[dict[str, Any]], table: TypedTable) -> None:
+    unit_column = next((column for column in table.columns if column.strip().lower() == "unit"), None)
+    if unit_column is None or not rows:
+        return
+    units = {row.get(unit_column) for row in rows}
+    if None in units or "" in units:
+        raise ToolbeltError("unit unavailable for numeric analysis")
+    if len(units) > 1:
+        raise ToolbeltError("unit mismatch across numeric analysis rows")
+
+
 def data_analysis(
     table: TypedTable,
     operation: AnalysisOperation,
@@ -534,6 +545,7 @@ def data_analysis(
     elif kind in {"aggregate", "sum", "mean"}:
         if not operation.value_column:
             raise ToolbeltError("aggregate requires value_column")
+        _ensure_homogeneous_units(rows, table)
         values = [row.get(operation.value_column) for row in rows if row.get(operation.value_column) is not None]
         if any(isinstance(value, ExcelError) for value in values):
             raise ToolbeltError("cannot aggregate Excel errors")
@@ -544,6 +556,7 @@ def data_analysis(
     elif kind in {"scenario", "sensitivity"}:
         if not operation.value_column:
             raise ToolbeltError("scenario analysis requires value_column")
+        _ensure_homogeneous_units(rows, table)
         base = sum(float(row[operation.value_column]) for row in rows if row.get(operation.value_column) is not None)
         if kind == "scenario":
             result = [{"scenario": name, "value": base * float(multiplier)} for name, multiplier in operation.scenarios]

@@ -122,6 +122,27 @@ def test_analysis_supports_filters_and_duplicate_join_key_guard(workbook_path):
         data_analysis(demand, AnalysisOperation("join", join_table=demand, join_keys=("Region", "Region")))
 
 
+@pytest.mark.parametrize("kind", ["sum", "scenario", "sensitivity"])
+def test_analysis_blocks_numeric_analysis_when_rows_mix_units(tmp_path, kind):
+    source = tmp_path / "mixed_units.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.append(["Metric", "Unit", "Value"])
+    sheet.append(["share", "percent", 25])
+    sheet.append(["sales", "Vehicles", 100])
+    workbook.save(source)
+
+    table = spreadsheet_read(source).tables[0]
+    operation = AnalysisOperation(
+        kind,
+        value_column="Value",
+        scenarios=(("base", 1.0),),
+        sensitivity=(("scale", (1.0,)),),
+    )
+    with pytest.raises(ToolbeltError, match="unit mismatch"):
+        data_analysis(table, operation)
+
+
 def test_spreadsheet_and_analysis_honor_cancellation_checkpoints(workbook_path):
     cancelled = lambda: True
     with pytest.raises(ToolbeltError, match="cancelled"):
