@@ -25,10 +25,12 @@ def migrate_analysis_dict(value: dict[str, Any]) -> dict[str, Any]:
         migrated.setdefault("revision_status", "ACCEPTED")
         migrated.setdefault("calculations", [])
         migrated.setdefault("pending_token", None)
+        migrated.setdefault("review_records", [])
     elif version == CURRENT_SCHEMA_VERSION:
         migrated.setdefault("revision_status", "ACCEPTED")
         migrated.setdefault("calculations", [])
         migrated.setdefault("pending_token", None)
+        migrated.setdefault("review_records", [])
     return migrated
 
 
@@ -73,6 +75,9 @@ def _normalize_work_brief(value: dict[str, Any]) -> dict[str, Any]:
                     normalized_need["kind"] = str(kind)
                 needs.append(normalized_need)
         current["research_needs"] = needs
+        current.setdefault("skill_ids", [])
+        current.setdefault("execution_pattern_override", None)
+        current.setdefault("limits", {})
         stages.append(current)
     normalized["stages"] = stages
     return normalized
@@ -92,7 +97,7 @@ def validate_evidence_candidate(candidate: EvidenceCandidate | dict[str, Any]) -
 
 
 def validate_analysis(state: AnalysisState | dict[str, Any]) -> dict[str, Any]:
-    value = state.to_dict() if isinstance(state, AnalysisState) else state
+    value = _json_shape(state.to_dict() if isinstance(state, AnalysisState) else state)
     _validate_schema(value, "analysis.schema.json")
 
     collections = (
@@ -142,9 +147,25 @@ def validate_analysis(state: AnalysisState | dict[str, Any]) -> dict[str, Any]:
         if not set(record["relationship_ids"]).issubset(relationship_ids):
             raise ValidationError("analytical records must reference existing relationships")
 
+    for record in (*value["claims"], *value["implications"], *value["recommendations"]):
+        direct_support_ids = {
+            relationship["from_id"]
+            for relationship in value["relationships"]
+            if relationship["id"] in record["relationship_ids"]
+            and relationship["to_id"] == record["id"]
+            and relationship["relation_type"].lower() == "supports"
+            and relationship["from_id"] in evidence_ids
+        }
+        if not direct_support_ids.issubset(set(record["evidence_ids"])):
+            raise ValidationError("direct evidence support must agree with analytical evidence_ids")
+
     for artifact in value["artifacts"]:
         if not set(artifact["relationship_ids"]).issubset(relationship_ids):
             raise ValidationError("artifacts must reference existing relationships")
+
+    for review in value.get("review_records", []):
+        if not set(review["target_ids"]).issubset(record_ids):
+            raise ValidationError("reviews must reference existing target records")
 
     revision_numbers = [revision["number"] for revision in value["revisions"]]
     if revision_numbers != list(range(1, len(revision_numbers) + 1)):
@@ -153,4 +174,14 @@ def validate_analysis(state: AnalysisState | dict[str, Any]) -> dict[str, Any]:
         raise ValidationError("current revision must match revision history")
     if not all(set(revision["record_ids"]).issubset(record_ids) for revision in value["revisions"]):
         raise ValidationError("revisions must reference existing records")
+    return value
+
+
+def _json_shape(value: Any) -> Any:
+    if isinstance(value, tuple):
+        return [_json_shape(item) for item in value]
+    if isinstance(value, list):
+        return [_json_shape(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _json_shape(item) for key, item in value.items()}
     return value

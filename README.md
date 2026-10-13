@@ -26,6 +26,14 @@ The current prototype provides:
 - provenance-bearing `EvidenceCandidate` normalization before durable evidence;
 - dependency invalidation, fresh-process continuation, and stale-artifact
   protection;
+- relation-aware, bounded NetworkX graph context rebuilt from durable
+  relationships;
+- six bundled analytical method skills with manifest hashes and stage-local
+  injection; no runtime skill downloads;
+- immutable review records bound to material-input fingerprints and derived
+  finding views; accepted recommendations require a current accepted review;
+- committed stage-cache reuse that preserves dependency order and skips new
+  model/tool calls for complete hits;
 - one local client adapter over the canonical commands.
 
 Provider/model execution is proven through the configured custom `9router`
@@ -120,5 +128,6 @@ The optimization probe records the frozen baseline and release receipts under ig
 - Baseline: `python evaluation/probes/run_optimization_probe.py --mode baseline --output work/optimization-baseline/receipt.json`
 - Release: `python evaluation/probes/run_optimization_probe.py --mode release --output work/optimization-release/receipt.json`
 - Acceptance is frozen at two warmups and ten measured runs per MAF pattern, with p95/event-loop regressions capped at 20%, peak allocation at 15%, no tool-call increase per accepted finding, and a 100-run no-growth soak.
+- Compare receipts with `python evaluation/probes/compare_optimization_receipts.py --baseline work/optimization-plan/baseline/receipt.json --release work/optimization-plan/release/receipt.json`.
 - `CapabilityScope` owns run-scoped semaphores, bounded blocking execution, cancellation settlement, workbook reuse, and cleanup. Native MCP tools use public Agent Framework middleware; local XLSX reads remain read-only and preserve source-path provenance.
 - Browser crawling keeps certificate validation enabled, validates each destination and same-host DNS change, and uses native WebSocket/service-worker controls.

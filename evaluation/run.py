@@ -157,7 +157,7 @@ def run_controller_matrix(task_shapes_path: Path) -> dict:
             review_required=name == "ordered_synthesis",
         )
         recipe = select_recipe(create_work_brief(name), shape)
-        selected = [stage.pattern.value for stage in recipe.stages]
+        selected = list(dict.fromkeys(stage.pattern.value for stage in recipe.stages))
         results.append({"task_shape": name, "expected_patterns": item["expected_patterns"], "selected_patterns": selected, "match": selected == item["expected_patterns"]})
     accuracy = sum(item["match"] for item in results) / len(results)
     return {"matrix": "controller", "results": results, "accuracy": accuracy, "passed": all(item["match"] for item in results)}

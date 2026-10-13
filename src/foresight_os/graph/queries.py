@@ -1,62 +1,105 @@
 from collections import deque
-from typing import Any
+from typing import Any, Callable, Iterable
 
 from foresight_os.domain.relationships import ImpactDirection
+
+
+_PROVENANCE_RELATIONS = {"supports", "derived_from", "depends_on", "informs"}
 
 
 def _graph(value: Any) -> Any:
     return value.graph if hasattr(value, "investigation_id") and hasattr(value, "analysis_revision") else value
 
 
-def _ordered(values: set[str], limit: int) -> list[str]:
-    return sorted(values)[:limit]
+def _indexes(value: Any) -> dict[str, dict[str, list[str]]]:
+    return getattr(value, "indexes", None) or {}
+
+
+def _bounded_reach(
+    start: str,
+    neighbors: Callable[[str], Iterable[str]],
+    limit: int,
+    depth: int | None = None,
+) -> tuple[list[str], bool]:
+    if limit <= 0:
+        return [], False
+    queue = deque([(start, 0)])
+    visited = {start}
+    reached: set[str] = set()
+    while queue:
+        current, current_depth = queue.popleft()
+        if depth is not None and current_depth >= depth:
+            continue
+        for neighbor in sorted(set(neighbors(current))):
+            if neighbor in visited:
+                continue
+            visited.add(neighbor)
+            reached.add(neighbor)
+            if len(reached) > limit:
+                return sorted(reached)[:limit], True
+            queue.append((neighbor, current_depth + 1))
+    return sorted(reached), False
 
 
 def _impact_neighbors(graph: Any, record_id: str) -> list[str]:
+    indexes = _indexes(graph)
+    if indexes:
+        return sorted(
+            set(indexes.get("impact_forward", indexes.get("forward", {})).get(record_id, ()))
+            | set(indexes.get("impact_reverse", indexes.get("reverse", {})).get(record_id, ()))
+        )
     neighbors = []
     for _, target, data in graph.out_edges(record_id, data=True):
-        if data["impact"] == ImpactDirection.FORWARD.value:
+        if data.get("impact") == ImpactDirection.FORWARD.value:
             neighbors.append(target)
     for source, _, data in graph.in_edges(record_id, data=True):
-        if data["impact"] == ImpactDirection.REVERSE.value:
+        if data.get("impact") == ImpactDirection.REVERSE.value:
             neighbors.append(source)
-    return sorted(neighbors)
+    return sorted(set(neighbors))
 
 
 def get_impacted_records_complete(graph: Any, changed_id: str) -> list[str]:
     graph = _graph(graph)
-    queue = deque([changed_id])
-    reached: set[str] = set()
-    visited = {changed_id}
-    while queue:
-        current = queue.popleft()
-        for neighbor in _impact_neighbors(graph, current):
-            if neighbor not in visited:
-                visited.add(neighbor)
-                reached.add(neighbor)
-                queue.append(neighbor)
-    return sorted(reached)
+    reached, _ = _bounded_reach(
+        changed_id,
+        lambda node: _impact_neighbors(graph, node),
+        limit=max(len(graph), 1),
+    )
+    return reached
 
 
 def get_impacted_records(graph: Any, changed_id: str, limit: int = 100) -> list[str]:
     graph = _graph(graph)
-    queue = deque([changed_id])
-    reached: set[str] = set()
-    visited = {changed_id}
-    while queue and len(reached) < limit:
-        current = queue.popleft()
-        for neighbor in _impact_neighbors(graph, current):
-            if neighbor not in visited:
-                visited.add(neighbor)
-                reached.add(neighbor)
-                if len(reached) >= limit:
-                    break
-                queue.append(neighbor)
-    return sorted(reached)
+    reached, _ = _bounded_reach(
+        changed_id,
+        lambda node: _impact_neighbors(graph, node),
+        limit=limit,
+    )
+    return reached
+
+
+def _provenance_neighbors(graph: Any, record_id: str) -> list[str]:
+    indexes = _indexes(graph)
+    if indexes:
+        return sorted(set(indexes.get("provenance", {}).get(record_id, ())))
+    neighbors = []
+    for source, _, data in graph.in_edges(record_id, data=True):
+        if data.get("provenance_direction", "forward") == "forward" and data.get("relation_type") in _PROVENANCE_RELATIONS:
+            neighbors.append(source)
+    for _, target, data in graph.out_edges(record_id, data=True):
+        if data.get("provenance_direction") == "reverse" and data.get("relation_type") in _PROVENANCE_RELATIONS:
+            neighbors.append(target)
+    return sorted(set(neighbors))
 
 
 def trace_provenance(graph: Any, record_id: str, limit: int = 50) -> list[str]:
-    return sorted(nx_ancestors(graph, record_id))[:limit]
+    graph = _graph(graph)
+    reached, _ = _bounded_reach(
+        record_id,
+        lambda node: _provenance_neighbors(graph, node),
+        limit=limit,
+    )
+    return reached
 
 
 def nx_ancestors(graph: Any, record_id: str) -> set[str]:
@@ -65,8 +108,8 @@ def nx_ancestors(graph: Any, record_id: str) -> set[str]:
     queue = deque([record_id])
     while queue:
         current = queue.popleft()
-        for source in sorted(graph.predecessors(current)):
-            if source not in ancestors:
+        for source in _provenance_neighbors(graph, current):
+            if source not in ancestors and source != record_id:
                 ancestors.add(source)
                 queue.append(source)
     return ancestors
@@ -74,63 +117,42 @@ def nx_ancestors(graph: Any, record_id: str) -> set[str]:
 
 def get_evidence(graph: Any, record_id: str, limit: int = 50) -> list[str]:
     graph = _graph(graph)
-    return sorted(node for node in nx_ancestors(graph, record_id) if graph.nodes[node].get("kind") == "evidence")[:limit]
+    provenance = trace_provenance(graph, record_id, limit=max(limit, 0))
+    return [node for node in provenance if graph.nodes[node].get("kind") == "evidence"][:limit]
 
 
 def get_counterevidence(graph: Any, record_id: str, limit: int = 50) -> list[str]:
     graph = _graph(graph)
-    values = {
-        source
-        for source, target, data in graph.edges(data=True)
-        if target == record_id and data.get("relation_type") == "contradicts"
-    }
-    return sorted(values)[:limit]
+    indexes = _indexes(graph)
+    if indexes:
+        values = indexes.get("counterevidence", {}).get(record_id, ())
+    else:
+        values = (
+            source
+            for source, _, data in graph.in_edges(record_id, data=True)
+            if data.get("evidence_role") == "counterevidence" or data.get("relation_type") == "contradicts"
+        )
+    return sorted(set(values))[:limit]
 
 
 def get_context(graph: Any, record_id: str, limit: int = 50, depth: int | None = None) -> dict[str, Any]:
     view = graph
     graph = _graph(graph)
-    def bounded_ancestors(max_items: int) -> tuple[list[str], bool]:
-        queue = deque([record_id])
-        reached: set[str] = set()
-        while queue and len(reached) <= max_items:
-            current = queue.popleft()
-            for source in sorted(graph.predecessors(current)):
-                if source not in reached and source != record_id:
-                    reached.add(source)
-                    queue.append(source)
-                    if len(reached) > max_items:
-                        break
-        values = sorted(reached)
-        return values[:max_items], len(values) > max_items
-
-    provenance, provenance_truncated = bounded_ancestors(limit)
-    evidence = [node for node in provenance if graph.nodes[node].get("kind") == "evidence"]
-    counterevidence_values = sorted(
-        source
-        for source, _, data in graph.in_edges(record_id, data=True)
-        if data.get("relation_type") == "contradicts"
+    provenance, provenance_truncated = _bounded_reach(
+        record_id,
+        lambda node: _provenance_neighbors(graph, node),
+        limit=limit,
     )
+    evidence = [node for node in provenance if graph.nodes[node].get("kind") == "evidence"]
+    counterevidence_values = get_counterevidence(graph, record_id, limit=max(limit + 1, 0))
     counterevidence_truncated = len(counterevidence_values) > limit
     counterevidence = counterevidence_values[:limit]
-    if depth is None:
-        selected = get_impacted_records(graph, record_id, limit)
-        impact_truncated = len(get_impacted_records(graph, record_id, limit + 1)) > limit
-    else:
-        queue = deque([(record_id, 0)])
-        bounded: set[str] = set()
-        while queue and len(bounded) <= limit:
-            current, current_depth = queue.popleft()
-            if current_depth >= depth:
-                continue
-            for neighbor in _impact_neighbors(graph, current):
-                if neighbor not in bounded and neighbor != record_id:
-                    bounded.add(neighbor)
-                    queue.append((neighbor, current_depth + 1))
-                    if len(bounded) > limit:
-                        break
-        selected = sorted(bounded)[:limit]
-        impact_truncated = len(bounded) > limit
+    selected, impact_truncated = _bounded_reach(
+        record_id,
+        lambda node: _impact_neighbors(graph, node),
+        limit=limit,
+        depth=depth,
+    )
     evidence = evidence[:limit]
     evidence_truncated = len([node for node in provenance if graph.nodes[node].get("kind") == "evidence"]) > limit
     return {

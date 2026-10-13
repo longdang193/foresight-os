@@ -1,6 +1,9 @@
 import asyncio
+import hashlib
 import inspect
+import json
 import time
+from dataclasses import replace
 from uuid import uuid4
 from typing import Any
 
@@ -25,6 +28,7 @@ from foresight_os.runtime.web_search import bind_web_search
 from foresight_os.runtime.page_retrieval import PageRetrievalCapability, bind_page_retrieval
 from foresight_os.runtime.local_toolbelt import bind_local_toolbelt
 from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
+from foresight_os.controller.skills import SkillRegistry
 
 
 async def _close_agents(agents: list[object]) -> list[BaseException]:
@@ -57,6 +61,7 @@ async def _run_native_stage(
     if not hasattr(client, "as_agent"):
         raise RuntimeError("a native MAF client with as_agent() is required for this pattern")
     context = dict(run_context or {})
+    context.setdefault("skill_registry", SkillRegistry())
     context["handoff"] = pattern == ExecutionPattern.HANDOFF
     for index, role in enumerate(roles or [{"purpose": "participant"}], 1):
         participant = ParticipantConfig.from_mapping(role, f"participant-{index}")
@@ -123,6 +128,25 @@ def _make_stage(stage_name: str):
     return stage
 
 
+def _stage_cache_key(stage: Any, current: object, skill_ids: tuple[str, ...]) -> str:
+    payload = {
+        "stage_id": getattr(stage, "stage_id", "stage"),
+        "pattern": str(getattr(stage, "pattern", "direct")),
+        "skills": tuple(skill_ids),
+        "participants": [ParticipantConfig.from_mapping(item).__dict__ for item in getattr(stage, "participants", ())],
+        "input": current,
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _committed_cache_output(entry: Any) -> tuple[bool, object]:
+    if isinstance(entry, dict):
+        valid = entry.get("status") == "committed" and entry.get("provenance_complete") is True and "output" in entry
+        return valid, entry.get("output")
+    valid = getattr(entry, "status", None) == "committed" and getattr(entry, "provenance_complete", False) is True
+    return valid, getattr(entry, "output", None)
+
+
 def run_sequential_steps(stage_names: list[str]) -> dict[str, Any]:
     executors = [
         FunctionExecutor(
@@ -158,6 +182,7 @@ async def run_recipe_async(
     budget = BudgetState(recipe.max_agent_steps, recipe.max_correction_rounds, recipe.max_total_agent_calls)
     factory = AgentFactory(client) if client is not None else None
     context = dict(run_context or {})
+    context.setdefault("skill_registry", SkillRegistry())
     supplied_scope = context.get("scope")
     scope = supplied_scope or CapabilityScope(ownership=ScopeOwnership.RUN)
     owns_scope = supplied_scope is None or getattr(scope, "ownership", ScopeOwnership.BORROWED) == ScopeOwnership.RUN
@@ -167,6 +192,8 @@ async def run_recipe_async(
     context.setdefault("capability_resolver", CapabilityResolver())
     required_capabilities: set[str] = set()
     for stage in recipe.stages or ():
+        selected_skills = context["skill_registry"].resolve(tuple(getattr(stage, "skill_ids", ())))
+        required_capabilities.update(context["skill_registry"].required_capabilities(selected_skills))
         for participant in getattr(stage, "participants", ()):
             required_capabilities.update(ParticipantConfig.from_mapping(participant).capability_ids)
     if not recipe.stages:
@@ -227,7 +254,29 @@ async def run_recipe_async(
 
     async def dispatch_stage(stage: Any, current: object) -> tuple[list[object], object]:
         pattern = ExecutionPattern(stage.pattern)
-        participants = list(stage.participants)
+        stage_skill_ids = tuple(getattr(stage, "skill_ids", ()))
+        selected_skills = context["skill_registry"].resolve(stage_skill_ids)
+        stage_context = dict(context)
+        stage_context["selected_skills"] = selected_skills
+        participants = [
+            replace(
+                ParticipantConfig.from_mapping(participant, f"participant-{index}"),
+                skill_ids=tuple(dict.fromkeys((
+                    *stage_skill_ids,
+                    *ParticipantConfig.from_mapping(participant, f"participant-{index}").skill_ids,
+                ))),
+            )
+            for index, participant in enumerate(stage.participants, 1)
+        ]
+        cache_key = _stage_cache_key(stage, current, stage_skill_ids)
+        cache_entry = context.get("stage_cache", {}).get(cache_key)
+        if cache_entry is not None:
+            cache_valid, cached_output = _committed_cache_output(cache_entry)
+            if cache_valid:
+                metrics.cache_hits += 1
+                metrics.reused_stages += 1
+                return [cached_output], cached_output
+        metrics.reassessed_stages += 1
         limits = dict(getattr(stage, "limits", {}) or {})
         max_timeout = limits.get("max_timeout_seconds", limits.get("timeout_seconds"))
         for field_name in ("max_agent_steps", "max_total_agent_calls", "max_branches", "max_handoffs", "max_rounds", "max_tool_calls"):
@@ -252,7 +301,7 @@ async def run_recipe_async(
                 raise BudgetExceededError("maximum concurrent branches exceeded before dispatch")
         async def invoke() -> tuple[list[object], object]:
             if client is not None and pattern != ExecutionPattern.DIRECT:
-                native_outputs = await _run_native_stage(pattern, str(current), client, participants, metrics, context)
+                native_outputs = await _run_native_stage(pattern, str(current), client, participants, metrics, stage_context)
                 if pattern == ExecutionPattern.CONCURRENT:
                     aggregate = ConcurrentAggregate(tuple(native_outputs))
                     metrics.branches = len(participants)
@@ -260,13 +309,13 @@ async def run_recipe_async(
                     return native_outputs, aggregate
                 return native_outputs, native_outputs[-1]
             if pattern == ExecutionPattern.DIRECT:
-                stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), context).execute(str(current))]
+                stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(str(current))]
             elif pattern == ExecutionPattern.CONCURRENT:
                 branch_count = len(participants) or 2
                 metrics.branches = branch_count
                 metrics.parallelism = branch_count
                 branch_results = await asyncio.gather(
-                    *[AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participant, f"participant-{index}"), context).execute(str(current)) for index, participant in enumerate(participants or ({"purpose": "participant"},) * branch_count, 1)],
+                    *[AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participant, f"participant-{index}"), stage_context).execute(str(current)) for index, participant in enumerate(participants or ({"purpose": "participant"},) * branch_count, 1)],
                     return_exceptions=True,
                 )
                 results = tuple(item for item in branch_results if not isinstance(item, BaseException))
@@ -274,18 +323,18 @@ async def run_recipe_async(
                 aggregate = ConcurrentAggregate(results, failures)
                 return list(results), aggregate
             elif pattern == ExecutionPattern.GROUP_CHAT:
-                stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), context).execute(str(current))]
+                stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(str(current))]
                 metrics.chat_rounds += 1
                 if len(participants) > 1:
                     reviewer = participants[1] if len(participants) > 1 else {"purpose": "review"}
-                    stage_outputs.append(await ReviewerExecutor(client, factory, ParticipantConfig.from_mapping(reviewer, "reviewer"), context).execute(f"Challenge this proposal:\n{stage_outputs[-1]}"))
+                    stage_outputs.append(await ReviewerExecutor(client, factory, ParticipantConfig.from_mapping(reviewer, "reviewer"), stage_context).execute(f"Challenge this proposal:\n{stage_outputs[-1]}"))
                     metrics.chat_rounds += 1
             else:
-                stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), context).execute(str(current))]
+                stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(str(current))]
                 if len(participants) > 1 or pattern == ExecutionPattern.HANDOFF:
                     reviewer_prompt = f"Review this proposal:\n{stage_outputs[-1]}"
                     reviewer = participants[1] if len(participants) > 1 else {"purpose": "review"}
-                    stage_outputs.append(await ReviewerExecutor(client, factory, ParticipantConfig.from_mapping(reviewer, "reviewer"), context).execute(reviewer_prompt))
+                    stage_outputs.append(await ReviewerExecutor(client, factory, ParticipantConfig.from_mapping(reviewer, "reviewer"), stage_context).execute(reviewer_prompt))
             if client is not None:
                 metrics.model_calls += len(stage_outputs)
             return stage_outputs, stage_outputs[-1]

@@ -4,7 +4,7 @@
   "title": "Foresight OS Analysis State",
   "type": "object",
   "additionalProperties": false,
-  "required": ["investigation_id", "revision", "schema_version", "revision_status", "evidence", "calculations", "claims", "implications", "recommendations", "artifacts", "relationships", "revisions", "invalidation"],
+  "required": ["investigation_id", "revision", "schema_version", "revision_status", "evidence", "calculations", "claims", "implications", "recommendations", "artifacts", "relationships", "revisions", "invalidation", "review_records"],
   "properties": {
     "investigation_id": { "type": "string", "minLength": 1 },
     "revision": { "type": "integer", "minimum": 1 },
@@ -19,6 +19,7 @@
     "relationships": { "type": "array", "items": { "$ref": "#/$defs/relationship" } },
     "revisions": { "type": "array", "items": { "$ref": "#/$defs/revision" } },
     "invalidation": { "$ref": "#/$defs/invalidation" },
+    "review_records": { "type": "array", "items": { "$ref": "#/$defs/review_record" } },
     "pending_token": { "type": ["string", "null"] }
   },
   "$defs": {
@@ -87,7 +88,28 @@
         "assessment": { "enum": ["UNASSESSED", "SUPPORTED", "UNCERTAIN", "CONTESTED", "REFUTED"] },
         "lifecycle": { "enum": ["CURRENT", "SUPERSEDED"] },
         "evidence_ids": { "type": "array", "items": { "type": "string" } },
-        "relationship_ids": { "type": "array", "items": { "type": "string" } }
+        "relationship_ids": { "type": "array", "items": { "type": "string" } },
+        "assumptions": { "type": "array", "items": { "type": "string" } },
+        "uncertainty": { "type": "array", "items": { "type": "string" } },
+        "confidence_rationale": { "type": "string" },
+        "disconfirmation_conditions": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "review_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["review_id", "target_ids", "reviewed_state_revision", "input_fingerprint", "skill_ids", "skill_versions", "objections", "outcome", "limitations", "unresolved_issues"],
+      "properties": {
+        "review_id": { "type": "string", "minLength": 1 },
+        "target_ids": { "type": "array", "items": { "type": "string" } },
+        "reviewed_state_revision": { "type": "integer", "minimum": 1 },
+        "input_fingerprint": { "type": "string", "minLength": 1 },
+        "skill_ids": { "type": "array", "items": { "type": "string" } },
+        "skill_versions": { "type": "array", "items": { "type": "string" } },
+        "objections": { "type": "array", "items": { "type": "object" } },
+        "outcome": { "enum": ["ACCEPTED", "PROVISIONAL", "REJECTED"] },
+        "limitations": { "type": "array", "items": { "type": "string" } },
+        "unresolved_issues": { "type": "array", "items": { "type": "string" } }
       }
     },
     "artifact": {

@@ -28,6 +28,7 @@ from foresight_os.domain.models import (
     WorkStage,
     WorkBrief,
 )
+from foresight_os.domain.challenge import ChallengeObjection, ObjectionDisposition, ReviewOutcome, ReviewRecord
 from foresight_os.domain.validation import migrate_analysis_dict, validate_analysis, validate_work_brief
 
 
@@ -77,7 +78,18 @@ class AnalysisStore:
                 except ValueError:
                     pass
                 needs.append(ResearchNeed(kind, need["query"], need.get("source_hint")))
-            stages.append(WorkStage(stage["stage_id"], stage["objective"], stage.get("participants", []), stage.get("subtasks", []), stage.get("dependencies", []), stage.get("expected_result", ""), needs))
+            stages.append(WorkStage(
+                stage["stage_id"],
+                stage["objective"],
+                stage.get("participants", []),
+                stage.get("subtasks", []),
+                stage.get("dependencies", []),
+                stage.get("expected_result", ""),
+                needs,
+                stage.get("skill_ids", []),
+                stage.get("execution_pattern_override"),
+                stage.get("limits", {}),
+            ))
         return WorkBrief(**{**value, "stages": stages})
 
     def save_analysis(self, state: AnalysisState) -> None:
@@ -175,6 +187,10 @@ class AnalysisStore:
                 Lifecycle(item["lifecycle"]),
                 item["evidence_ids"],
                 item["relationship_ids"],
+                tuple(item.get("assumptions", ())),
+                tuple(item.get("uncertainty", ())),
+                item.get("confidence_rationale", ""),
+                tuple(item.get("disconfirmation_conditions", ())),
             )
 
         calculations = [
@@ -188,6 +204,30 @@ class AnalysisStore:
                 item["source_locators"],
             )
             for item in value.get("calculations", [])
+        ]
+        review_records = [
+            ReviewRecord(
+                review_id=item["review_id"],
+                target_ids=tuple(item.get("target_ids", ())),
+                reviewed_state_revision=item["reviewed_state_revision"],
+                input_fingerprint=item["input_fingerprint"],
+                skill_ids=tuple(item.get("skill_ids", ())),
+                skill_versions=tuple(item.get("skill_versions", ())),
+                objections=tuple(
+                    ChallengeObjection(
+                        kind=objection["kind"],
+                        target_id=objection["target_id"],
+                        statement=objection["statement"],
+                        evidence_ids=tuple(objection.get("evidence_ids", ())),
+                        disposition=ObjectionDisposition(objection.get("disposition", "UNRESOLVED")),
+                    )
+                    for objection in item.get("objections", ())
+                ),
+                outcome=ReviewOutcome(item.get("outcome", "PROVISIONAL")),
+                limitations=tuple(item.get("limitations", ())),
+                unresolved_issues=tuple(item.get("unresolved_issues", ())),
+            )
+            for item in value.get("review_records", ())
         ]
         return AnalysisState(
             investigation_id=value["investigation_id"],
@@ -213,6 +253,7 @@ class AnalysisStore:
             revision_status=RevisionStatus(value["revision_status"]),
             calculations=calculations,
             pending_token=value.get("pending_token"),
+            review_records=review_records,
         )
 
     def _write_validated(self, value: dict, path: Path | None = None) -> None:
@@ -235,12 +276,13 @@ class AnalysisStore:
     def _merge_states(current: AnalysisState, pending: AnalysisState) -> AnalysisState:
         def merge(items):
             result = list(items[0])
-            seen = {item.id for item in result}
+            seen = {getattr(item, "id", getattr(item, "review_id", None)) for item in result}
             for collection in items[1:]:
                 for item in collection:
-                    if item.id not in seen:
+                    item_id = getattr(item, "id", getattr(item, "review_id", None))
+                    if item_id not in seen:
                         result.append(item)
-                        seen.add(item.id)
+                        seen.add(item_id)
             return result
 
         return replace(
@@ -252,6 +294,7 @@ class AnalysisStore:
             artifacts=merge((current.artifacts, pending.artifacts)),
             relationships=merge((current.relationships, pending.relationships)),
             calculations=merge((current.calculations, pending.calculations)),
+            review_records=merge((current.review_records, pending.review_records)),
             invalidation=current.invalidation,
         )
 
