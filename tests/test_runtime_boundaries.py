@@ -148,3 +148,18 @@ def test_mcp_tool_calls_are_instrumented_through_maf_boundary():
     assert calls == [("read", {"query": "capacity"})]
     assert metrics.tool_calls == 1
     assert metrics.tool_failures == 0
+
+
+def test_mcp_instrumentation_preserves_agent_framework_sdk_type():
+    from agent_framework import MCPStreamableHTTPTool
+
+    tool = MCPStreamableHTTPTool("probe", "http://127.0.0.1", load_prompts=False)
+
+    async def fake_call_tool(name, **kwargs):
+        return {"name": name, **kwargs}
+
+    tool.call_tool = fake_call_tool
+    wrapped = instrument_tool(tool, CapabilityDefinition("mcp", "external_read"), {})
+    assert wrapped is tool
+    assert isinstance(wrapped, MCPStreamableHTTPTool)
+    assert asyncio.run(wrapped.call_tool("read", query="capacity"))["name"] == "read"

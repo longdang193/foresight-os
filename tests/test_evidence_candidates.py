@@ -7,7 +7,7 @@ from foresight_os.domain.validation import ValidationError, validate_evidence_ca
 def test_candidate_requires_provenance_and_normalizes_without_raw_payload():
     candidate = {
         "candidate_id": "candidate-1",
-        "capability_id": "web_search",
+        "capability_id": "test_source",
         "source": "public-source",
         "request": "capacity cost",
         "excerpt": "Expansion cost is uncertain.",

@@ -142,6 +142,23 @@ def test_csv_read_is_supported_with_typed_values_and_provenance(tmp_path):
     assert data_analysis(table, AnalysisOperation("sum", value_column="Value")).rows[0]["sum"] == 30.0
 
 
+def test_csv_range_selection_preserves_original_coordinates(tmp_path):
+    source = tmp_path / "signals.csv"
+    source.write_text("Region,Value,Flag\nNorth,10,Y\nSouth,20,N\n", encoding="utf-8")
+    result = spreadsheet_read(source, SheetSelection(ranges=(("signals", "B2:C3"),)))
+    coordinates = [item.provenance.coordinate for item in result.measurements]
+    assert coordinates == ["B2", "C2", "B3", "C3"]
+
+
 def test_xlsx_expanded_archive_limit_is_checked_before_loading(workbook_path):
     with pytest.raises(ToolbeltError, match="expanded content"):
         spreadsheet_read(workbook_path, limits=ToolbeltLimits(max_expanded_bytes=1))
+
+
+def test_calculation_provenance_qualifies_workbook_sheet_and_coordinate(workbook_path):
+    result = spreadsheet_read(workbook_path, SheetSelection(sheet_names=("Demand", "Assumptions"), include_hidden=True, include_hidden_rows=True))
+    demand_value = next(item for item in result.measurements if item.provenance.sheet == "Demand" and item.provenance.coordinate == "C3")
+    assumption_value = next(item for item in result.measurements if item.provenance.sheet == "Assumptions" and item.provenance.coordinate == "B2")
+    record = calculation([demand_value, assumption_value], __import__("foresight_os.runtime.local_toolbelt", fromlist=["FormulaSpec"]).FormulaSpec("Demand!C3 + Assumptions!B2"), __import__("foresight_os.runtime.local_toolbelt", fromlist=["UnitSpec"]).UnitSpec("units"))
+    assert any(":Demand!C3" in locator for locator in record.source_locators)
+    assert any(":Assumptions!B2" in locator for locator in record.source_locators)

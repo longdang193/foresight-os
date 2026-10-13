@@ -51,6 +51,21 @@ def _operation(provider_id: str) -> tuple[str, dict[str, object]]:
     return tool_name, args
 
 
+def _mcp_result_is_success(result: object) -> bool:
+    if result is None or bool(getattr(result, "is_error", False)):
+        return False
+    if isinstance(result, dict):
+        if result.get("is_error") or result.get("error") or result.get("Error Message"):
+            return False
+        return bool(result)
+    if isinstance(result, (list, tuple)):
+        if not result:
+            return False
+        return all(_mcp_result_is_success(item) for item in result)
+    text = str(getattr(result, "text", result)).strip().lower()
+    return bool(text) and not any(marker in text for marker in ("error message", "invalid api key", "unauthorized", "forbidden"))
+
+
 async def _probe(provider_id: str) -> dict[str, object]:
     provider = HOSTED_MCP_PROVIDERS[provider_id]
     credential, credential_source = _credential(provider_id)
@@ -113,10 +128,8 @@ async def _probe(provider_id: str) -> dict[str, object]:
         if agent is None:
             raise RuntimeError("MAF agent was not created")
         result = await agent.run(f"request {tool_name}")
-        if getattr(result, "is_error", False) or (isinstance(result, dict) and (result.get("is_error") or result.get("error"))):
+        if discovered < 1 or not _mcp_result_is_success(result):
             raise RuntimeError("MCP server returned an error result")
-        if result is None or (isinstance(result, (str, list, tuple, dict)) and not result):
-            raise RuntimeError("MCP server returned an empty result")
         receipt = {
             **base,
             "status": "VERIFIED",

@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from foresight_os.domain.models import AnalysisState, Invalidation, Revision, WorkBrief
+from foresight_os.domain.models import AnalysisState, Invalidation, ResearchNeed, ResearchNeedKind, Revision, WorkBrief, WorkStage
 from foresight_os.domain.validation import ValidationError
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.persistence.ids import deterministic_id
@@ -21,6 +21,23 @@ def test_brief_round_trips_through_brief_md(tmp_path: Path):
 
     store.save_brief(brief)
 
+    assert store.load_brief() == brief
+
+
+def test_typed_brief_stages_round_trip_and_preserve_routing_inputs(tmp_path: Path):
+    store = AnalysisStore(tmp_path / "typed-brief")
+    brief = WorkBrief(
+        "typed-brief",
+        "What should we do?",
+        ["scope"],
+        ["answer"],
+        [],
+        [],
+        "inspect",
+        "retrieve",
+        stages=[WorkStage("stage-1", "analyze", research_needs=[ResearchNeed(ResearchNeedKind.STRUCTURED_DATA, "workbook")])],
+    )
+    store.save_brief(brief)
     assert store.load_brief() == brief
 
 

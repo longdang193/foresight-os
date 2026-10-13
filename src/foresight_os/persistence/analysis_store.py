@@ -21,7 +21,10 @@ from foresight_os.domain.models import (
     Revision,
     RevisionStatus,
     MeasurementKey,
+    ResearchNeed,
+    ResearchNeedKind,
     SourceLocator,
+    WorkStage,
     WorkBrief,
 )
 from foresight_os.domain.validation import migrate_analysis_dict, validate_analysis, validate_work_brief
@@ -58,7 +61,19 @@ class AnalysisStore:
         if not text.startswith("---\n") or "\n---\n" not in text[4:]:
             raise ValueError("brief.md must contain YAML front matter")
         frontmatter = text[4:].split("\n---\n", 1)[0]
-        return WorkBrief(**validate_work_brief(yaml.safe_load(frontmatter)))
+        value = validate_work_brief(yaml.safe_load(frontmatter))
+        stages = []
+        for stage in value.get("stages", []):
+            needs = []
+            for need in stage.get("research_needs", []):
+                kind = need["kind"]
+                try:
+                    kind = ResearchNeedKind(kind)
+                except ValueError:
+                    pass
+                needs.append(ResearchNeed(kind, need["query"], need.get("source_hint")))
+            stages.append(WorkStage(stage["stage_id"], stage["objective"], stage.get("participants", []), stage.get("subtasks", []), stage.get("dependencies", []), stage.get("expected_result", ""), needs))
+        return WorkBrief(**{**value, "stages": stages})
 
     def save_analysis(self, state: AnalysisState) -> None:
         value = validate_analysis(state)
@@ -96,7 +111,7 @@ class AnalysisStore:
     def save_pending(self, state: AnalysisState) -> AnalysisState:
         pending = replace(state, revision_status=RevisionStatus.PENDING_REVIEW)
         with FileLock(str(self.lock_path)):
-            current = self.load_analysis() if self.analysis_path.exists() else None
+            current = self._load_path(self.analysis_path) if self.analysis_path.exists() else None
             if current is not None and current.revision_status != RevisionStatus.PENDING_REVIEW:
                 number = current.revision + 1
                 revision = Revision(

@@ -75,6 +75,17 @@ def test_evidence_workflow_requires_explicit_acceptance_and_supports_restart(tmp
         assert preserved_store.analysis_path.exists()
         assert preserved_store.load_analysis().revision_status.value == "ACCEPTED"
         assert preserved_store.load_analysis().evidence[0].id == accepted.analysis.evidence[0].id
+
+        pending_twice = AnalysisStore(tmp_path / "pending-twice")
+        first_pending = asyncio.run(run_evidence_workflow(pending_twice, "capacity expansion cost", _Provider(url), retrieval=PageRetrievalCapability(fixture_hosts={"127.0.0.1"}), human_decision="ACCEPT"))
+        second_pending = asyncio.run(run_evidence_workflow(pending_twice, "capacity expansion cost", _Provider(url), retrieval=PageRetrievalCapability(fixture_hosts={"127.0.0.1"}), human_decision="PENDING"))
+        third_pending = asyncio.run(run_evidence_workflow(pending_twice, "capacity expansion cost", _Provider(url), retrieval=PageRetrievalCapability(fixture_hosts={"127.0.0.1"}), human_decision="PENDING"))
+        assert first_pending.status == "accepted"
+        assert second_pending.status == third_pending.status == "pending"
+        rejected = accept_pending_evidence(pending_twice, human_decision="REJECT")
+        assert rejected.status == "rejected"
+        assert pending_twice.load_analysis().revision_status.value == "ACCEPTED"
+        assert pending_twice.load_analysis().evidence[0].id == first_pending.analysis.evidence[0].id
     finally:
         server.shutdown()
         thread.join(timeout=2)

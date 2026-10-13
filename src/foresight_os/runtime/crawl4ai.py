@@ -61,11 +61,35 @@ class Crawl4AICapability:
 
             AsyncWebCrawler = crawl4ai.AsyncWebCrawler
             config_type = getattr(crawl4ai, "CrawlerRunConfig", None)
+            strategy_type = None
+            if config_type is not None:
+                from crawl4ai.async_crawler_strategy import AsyncCrawlerStrategy
+
+                strategy_type = AsyncCrawlerStrategy
         except ImportError as error:
             raise Crawl4AIError("dependency_missing", "crawl4ai is not installed") from error
         retrieved_at = datetime.now(timezone.utc).isoformat()
         try:
-            async with AsyncWebCrawler() as crawler:
+            crawler_kwargs = {}
+            if strategy_type is not None:
+                strategy = strategy_type()
+
+                async def guard_page_context(page, **_):
+                    async def guard_request(route):
+                        request_url = route.request.url
+                        if request_url.startswith(("http://", "https://")):
+                            try:
+                                validate_destination(request_url, self.fixture_hosts)
+                            except Exception:
+                                await route.abort("blockedbyclient")
+                                return
+                        await route.continue_()
+
+                    await page.route("**/*", guard_request)
+
+                strategy.set_hook("on_page_context_created", guard_page_context)
+                crawler_kwargs["crawler_strategy"] = strategy
+            async with AsyncWebCrawler(**crawler_kwargs) as crawler:
                 if config_type is not None:
                     config = config_type(
                         only_text=True,
@@ -100,7 +124,10 @@ class Crawl4AICapability:
         excerpt = " ".join(markdown.split())[: self.max_content_chars]
         proof = CrawlRetrievalProof(url, final_url, retrieved_at, content_hash, hashlib.sha256(excerpt.encode("utf-8")).hexdigest(), _PROOF_ISSUER)
         links = getattr(result, "links", {}) or {}
-        for values in links.values() if isinstance(links, dict) else ():
+        link_values = links.values() if isinstance(links, dict) else (links,)
+        for values in link_values:
+            if isinstance(values, str):
+                values = (values,)
             for link in values:
                 if isinstance(link, str) and link.startswith(("http://", "https://")):
                     try:

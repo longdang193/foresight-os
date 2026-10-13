@@ -6,9 +6,9 @@ from .validation import ValidationError, validate_evidence_candidate
 
 def normalize_evidence_candidate(candidate: EvidenceCandidate | dict) -> Evidence:
     value = validate_evidence_candidate(candidate)
-    if value.acquisition_kind in {"web_search", "page_retrieval", "web_crawl"}:
-        if value.acquisition_kind != value.capability_id:
-            raise ValidationError("evidence acquisition kind must match its capability")
+    if value.capability_id in {"web_search", "page_retrieval", "web_crawl"}:
+        if value.acquisition_kind not in {value.capability_id}:
+            raise ValidationError("external evidence candidates require adapter-issued retrieval proof and matching acquisition metadata")
         proof = value.retrieval_proof
         if proof is None or not getattr(proof, "is_valid", lambda: False)():
             raise ValidationError("external evidence candidates require adapter-issued retrieval proof")

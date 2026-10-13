@@ -239,15 +239,33 @@ def _read_delimited(source: Path, selection: SheetSelection | None, limits: Tool
     if selection and selection.sheet_names and sheet not in selection.sheet_names:
         return WorkbookReadResult(str(source), digest, (), (), ())
     delimiter = "\t" if source.suffix.lower() == ".tsv" else ","
+    selected_range = next((cell_range for selected_sheet, cell_range in (selection.ranges if selection else ()) if selected_sheet == sheet), None)
+    range_bounds = _range_bounds(selected_range) if selected_range else None
+    row_start = range_bounds[1] if range_bounds else 1
+    col_start = range_bounds[0] if range_bounds else 1
+    raw_rows: list[tuple[Any, ...]] = []
+    cell_count = 0
     with source.open(newline="", encoding="utf-8-sig") as handle:
-        raw_rows = [tuple(_delimited_value(value) for value in row) for row in csv.reader(handle, delimiter=delimiter)]
-    if len(raw_rows) > limits.max_rows:
-        raise ToolbeltError("workbook selection exceeds row limit")
+        for row_number, row in enumerate(csv.reader(handle, delimiter=delimiter), 1):
+            _check_cancel(cancel_check)
+            if range_bounds and row_number > range_bounds[3]:
+                break
+            if range_bounds and row_number < range_bounds[1]:
+                continue
+            if not range_bounds and row_number > limits.max_rows:
+                raise ToolbeltError("workbook selection exceeds row limit")
+            values = tuple(_delimited_value(value) for value in row)
+            if range_bounds:
+                values = values[range_bounds[0] - 1:range_bounds[2]]
+            cell_count += len(values)
+            if cell_count > limits.max_cells:
+                raise ToolbeltError("workbook selection exceeds cell limit")
+            raw_rows.append(values)
     if selection and selection.ranges:
         ranges = [cell_range for selected_sheet, cell_range in selection.ranges if selected_sheet == sheet]
         if ranges:
-            min_col, min_row, max_col, max_row = _range_bounds(ranges[0])
-            raw_rows = [row[min_col - 1:max_col] for row in raw_rows[min_row - 1:max_row]]
+            if selected_range is None:
+                raise ToolbeltError("invalid CSV selection")
     if selection and selection.tables and not any(selected_sheet == sheet and table_name == source.stem for selected_sheet, table_name in selection.tables):
         return WorkbookReadResult(str(source), digest, (), (), ())
     cell_count = sum(len(row) for row in raw_rows)
@@ -261,7 +279,7 @@ def _read_delimited(source: Path, selection: SheetSelection | None, limits: Tool
         _check_cancel(cancel_check)
         row_provenance = []
         for column_number, value in enumerate(row, 1):
-            coordinate = f"{openpyxl.utils.get_column_letter(column_number)}{row_number}"
+            coordinate = f"{openpyxl.utils.get_column_letter(col_start + column_number - 1)}{row_start + row_number - 1}"
             locator = CellProvenance(digest, sheet, coordinate, f"{sheet}!{coordinate}")
             measurements.append(TypedMeasurement(f"{digest[:12]}:{sheet}:{coordinate}", value, _excel_type(value), None, None, FormulaStatus.VALUE, locator))
             row_provenance.append(locator)
@@ -270,7 +288,7 @@ def _read_delimited(source: Path, selection: SheetSelection | None, limits: Tool
     if len(raw_rows) > 1 and sum(value not in (None, "") for value in raw_rows[0]) <= 1 and sum(value not in (None, "") for value in raw_rows[1]) > 1:
         header_rows = 2
     headers = tuple(tuple("" if value is None else str(value) for value in raw_rows[index]) for index in range(header_rows))
-    source_range = f"A1:{openpyxl.utils.get_column_letter(summary.max_column)}{summary.max_row}" if raw_rows else ""
+    source_range = f"{openpyxl.utils.get_column_letter(col_start)}{row_start}:{openpyxl.utils.get_column_letter(col_start + summary.max_column - 1)}{row_start + summary.max_row - 1}" if raw_rows else ""
     table = TypedTable(f"{digest[:12]}:{sheet}:{source_range}", source.stem, sheet, headers, tuple(raw_rows[header_rows:]), tuple(provenance_rows[header_rows:]), False, source_range)
     return WorkbookReadResult(str(source), digest, (summary,), (table,), tuple(measurements))
 
@@ -298,9 +316,25 @@ def spreadsheet_read(
         raise ToolbeltError("invalid workbook archive") from error
     if expanded_bytes > limits.max_expanded_bytes:
         raise ToolbeltError("workbook expanded content exceeds byte limit")
+    dimension_workbook = openpyxl.load_workbook(source, data_only=False, read_only=True, keep_links=False)
+    try:
+        for ws in dimension_workbook.worksheets:
+            if ws.sheet_state != "visible" and not (selection and selection.include_hidden):
+                continue
+            selected_ranges = [cell_range for sheet, cell_range in (selection.ranges if selection else ()) if sheet == ws.title]
+            if not selected_ranges:
+                selected_ranges = [f"A1:{openpyxl.utils.get_column_letter(ws.max_column)}{ws.max_row}"] if ws.max_row and ws.max_column else []
+            for source_range in selected_ranges:
+                min_col, min_row, max_col, max_row = _range_bounds(source_range)
+                if max_row - min_row + 1 > limits.max_rows:
+                    raise ToolbeltError("workbook selection exceeds row limit")
+                if (max_row - min_row + 1) * (max_col - min_col + 1) > limits.max_cells:
+                    raise ToolbeltError("workbook selection exceeds cell limit")
+    finally:
+        dimension_workbook.close()
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
     workbook = openpyxl.load_workbook(source, data_only=False, read_only=False)
-    cached = openpyxl.load_workbook(source, data_only=True, read_only=False)
+    cached = openpyxl.load_workbook(source, data_only=True, read_only=True)
     sheets: list[SheetSummary] = []
     tables: list[TypedTable] = []
     measurements: list[TypedMeasurement] = []
@@ -390,6 +424,8 @@ def spreadsheet_read(
                 continue
             related.extend(CellProvenance(digest, sheet, coordinate, f"{sheet}!{coordinate}") for sheet, coordinate in measurement.cross_sheet_cells)
         finalized_tables.append(replace(table, related_provenance=tuple(dict.fromkeys(related))))
+    cached.close()
+    workbook.close()
     return WorkbookReadResult(str(source), digest, tuple(sheets), tuple(finalized_tables), tuple(measurements))
 
 
@@ -518,7 +554,7 @@ def calculation(inputs: Sequence[Evidence | CalculationRecord | TypedMeasurement
     except ZeroDivisionError as error:
         raise ToolbeltError("divide by zero") from error
     record_id = "calculation-" + hashlib.sha256(f"{formula.expression}:{values}:{units.units}".encode()).hexdigest()[:16]
-    locators = [item.provenance.coordinate for item in inputs if isinstance(item, TypedMeasurement)]
+    locators = [f"{item.provenance.workbook_sha256}:{item.provenance.sheet}!{item.provenance.coordinate}" for item in inputs if isinstance(item, TypedMeasurement)]
     input_ids = [item.id for item in inputs]
     return CalculationRecord(record_id, MeasurementKey("toolbelt", formula.expression, "current", units.units), formula.expression, input_ids, output, units.units, locators)
 

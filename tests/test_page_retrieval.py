@@ -86,3 +86,15 @@ def test_search_only_external_candidate_cannot_become_durable_evidence():
             "provenance": {"url": "https://example.test"},
             "acquisition_kind": "web_search",
         })
+
+
+def test_external_capability_cannot_bypass_proof_with_default_metadata():
+    with pytest.raises(ValidationError, match="retrieval proof"):
+        normalize_evidence_candidate({
+            "candidate_id": "page-without-proof",
+            "capability_id": "page_retrieval",
+            "source": "https://example.test/source",
+            "request": "capacity",
+            "excerpt": "source text",
+            "provenance": {"url": "https://example.test/source", "content_hash": "hash"},
+        })

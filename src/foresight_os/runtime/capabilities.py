@@ -273,9 +273,16 @@ def instrument_tool(tool: Any, definition: CapabilityDefinition, context: Mappin
 
     mcp_call = getattr(tool, "call_tool", None)
     if callable(mcp_call) and not callable(tool):
-        wrapped = _InstrumentedMCPTool(tool, _instrumented_dispatch(mcp_call, definition, context))
-        wrapped.capability_id = definition.id
-        return wrapped
+        dispatch = _instrumented_dispatch(mcp_call, definition, context)
+        try:
+            setattr(tool, "call_tool", dispatch)
+            setattr(tool, "__foresight_instrumented__", True)
+            setattr(tool, "capability_id", definition.id)
+            return tool
+        except (AttributeError, TypeError):
+            wrapped = _InstrumentedMCPTool(tool, dispatch)
+            wrapped.capability_id = definition.id
+            return wrapped
     if not callable(tool):
         return tool
 
