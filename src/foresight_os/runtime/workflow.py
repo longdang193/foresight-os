@@ -304,6 +304,8 @@ async def run_recipe_async(
         cache_entry = context.get("stage_cache", {}).get(cache_key)
         receipt = context.get("stage_receipts", {}).get(getattr(stage, "stage_id", ""))
         canonical_output = context.get("canonical_outputs", {}).get(getattr(stage, "stage_id", ""))
+        if receipt is not None:
+            cache_entry = None
         if receipt is not None and canonical_output is not None and hasattr(receipt, "reusable_for"):
             if receipt.reusable_for(
                 input_fingerprint=cache_key,
