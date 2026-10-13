@@ -1,5 +1,6 @@
 import asyncio
 
+from evaluation.probes.run_external_signal_probe import _provider_result_is_success
 from foresight_os.runtime.capabilities import CapabilityResolver, CapabilityScope
 from foresight_os.runtime.external_signals import (
     HOSTED_MCP_PROVIDERS,
@@ -84,3 +85,8 @@ def test_fred_requires_explicit_read_only_allowlist():
 
     binding = bind_hosted_mcp("fred", "token", tool_factory=FakeMCPTool, allowed_tools=("series_observations",))
     assert binding.value.kwargs["allowed_tools"] == ("series_observations",)
+
+
+def test_external_probe_rejects_provider_error_envelopes():
+    assert not _provider_result_is_success("alpha_vantage", {"Information": "The Global Quote endpoint is rate limited. Retry tomorrow."})
+    assert _provider_result_is_success("alpha_vantage", {"Global Quote": {"01. symbol": "IBM", "05. price": "1.0"}})

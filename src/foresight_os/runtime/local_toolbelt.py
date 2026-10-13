@@ -4,8 +4,10 @@ import ast
 import csv
 import hashlib
 import operator
+import posixpath
 import re
 import zipfile
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from enum import StrEnum
@@ -295,6 +297,57 @@ def _read_delimited(source: Path, selection: SheetSelection | None, limits: Tool
     return WorkbookReadResult(str(source), digest, (summary,), (table,), tuple(measurements))
 
 
+def _preflight_xlsx_archive(source: Path, selection: SheetSelection | None, limits: ToolbeltLimits, cancel_check: Callable[[], bool] | None) -> None:
+    namespaces = {
+        "main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+        "rel": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+        "pkg": "http://schemas.openxmlformats.org/package/2006/relationships",
+    }
+    with zipfile.ZipFile(source) as archive:
+        workbook_root = ET.fromstring(archive.read("xl/workbook.xml"))
+        relationships = ET.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
+        targets = {item.attrib["Id"]: item.attrib["Target"] for item in relationships.findall("pkg:Relationship", namespaces)}
+        for sheet in workbook_root.findall("main:sheets/main:sheet", namespaces):
+            title = sheet.attrib["name"]
+            if selection and selection.sheet_names and title not in selection.sheet_names:
+                continue
+            if sheet.attrib.get("state", "visible") != "visible" and not (selection and selection.include_hidden):
+                continue
+            target = targets.get(sheet.attrib.get(f"{{{namespaces['rel']}}}id"))
+            if not target:
+                continue
+            normalized_target = target.lstrip("/")
+            sheet_path = posixpath.normpath(normalized_target if normalized_target.startswith("xl/") else posixpath.join("xl", normalized_target))
+            selected_ranges = [cell_range for selected_sheet, cell_range in (selection.ranges if selection else ()) if selected_sheet == title]
+            bounds = [_range_bounds(cell_range) for cell_range in selected_ranges]
+            for range_bounds in bounds:
+                if range_bounds[3] - range_bounds[1] + 1 > limits.max_rows:
+                    raise ToolbeltError("workbook selection exceeds row limit")
+                if (range_bounds[3] - range_bounds[1] + 1) * (range_bounds[2] - range_bounds[0] + 1) > limits.max_cells:
+                    raise ToolbeltError("workbook selection exceeds cell limit")
+            row_count = 0
+            cell_count = 0
+            with archive.open(sheet_path) as handle:
+                for _, element in ET.iterparse(handle, events=("end",)):
+                    _check_cancel(cancel_check)
+                    if element.tag == f"{{{namespaces['main']}}}row":
+                        row_number = int(element.attrib.get("r", row_count + 1))
+                        if not bounds or any(range_bounds[1] <= row_number <= range_bounds[3] for range_bounds in bounds):
+                            row_count += 1
+                            if row_count > limits.max_rows:
+                                raise ToolbeltError("workbook selection exceeds row limit")
+                    elif element.tag == f"{{{namespaces['main']}}}c":
+                        coordinate = element.attrib.get("r", "")
+                        match = re.fullmatch(r"([A-Z]+)(\d+)", coordinate.upper())
+                        if match:
+                            column, row = _range_bounds(f"{match.group(1)}{match.group(2)}")[:2]
+                            if not bounds or any(range_bounds[0] <= column <= range_bounds[2] and range_bounds[1] <= row <= range_bounds[3] for range_bounds in bounds):
+                                cell_count += 1
+                                if cell_count > limits.max_cells:
+                                    raise ToolbeltError("workbook selection exceeds cell limit")
+                    element.clear()
+
+
 def spreadsheet_read(
     source: Path,
     selection: SheetSelection | None = None,
@@ -318,124 +371,105 @@ def spreadsheet_read(
         raise ToolbeltError("invalid workbook archive") from error
     if expanded_bytes > limits.max_expanded_bytes:
         raise ToolbeltError("workbook expanded content exceeds byte limit")
-    dimension_workbook = openpyxl.load_workbook(source, data_only=False, read_only=True, keep_links=False)
+    _preflight_xlsx_archive(source, selection, limits, cancel_check)
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    workbook = openpyxl.load_workbook(source, data_only=False, read_only=False)
+    cached = openpyxl.load_workbook(source, data_only=True, read_only=True)
     try:
-        for ws in dimension_workbook.worksheets:
+        sheets: list[SheetSummary] = []
+        tables: list[TypedTable] = []
+        measurements: list[TypedMeasurement] = []
+        cell_count = 0
+        for ws in workbook.worksheets:
+            _check_cancel(cancel_check)
             if ws.sheet_state != "visible" and not (selection and selection.include_hidden):
                 continue
-            selected_ranges = [cell_range for sheet, cell_range in (selection.ranges if selection else ()) if sheet == ws.title]
+            hidden_rows = tuple(row for row, dimension in ws.row_dimensions.items() if dimension.hidden)
+            summary = SheetSummary(ws.title, ws.sheet_state, ws.max_row, ws.max_column, hidden_rows, tuple(str(item) for item in ws.merged_cells.ranges), tuple(ws.tables))
+            sheets.append(summary)
+            if not _in_selection(ws.title, selection):
+                continue
+            selected_tables = [table_name for sheet, table_name in (selection.tables if selection else ()) if sheet == ws.title]
+            if selected_tables:
+                selected_ranges = [ws.tables[name].ref for name in selected_tables if name in ws.tables]
+            else:
+                selected_ranges = [cell_range for sheet, cell_range in (selection.ranges if selection else ()) if sheet == ws.title]
             if not selected_ranges:
                 selected_ranges = [f"A1:{openpyxl.utils.get_column_letter(ws.max_column)}{ws.max_row}"] if ws.max_row and ws.max_column else []
             for source_range in selected_ranges:
                 min_col, min_row, max_col, max_row = _range_bounds(source_range)
-                actual_rows = 0
-                actual_cells = 0
-                for row in ws.iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col):
+                if max_row - min_row + 1 > limits.max_rows:
+                    raise ToolbeltError("workbook selection exceeds row limit")
+                rows: list[tuple[Any, ...]] = []
+                row_provenance: list[tuple[CellProvenance, ...]] = []
+                source_rows = ws.iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col)
+                cached_rows = cached[ws.title].iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col)
+                for source_row, cached_row in zip(source_rows, cached_rows, strict=True):
                     _check_cancel(cancel_check)
-                    actual_rows += 1
-                    actual_cells += len(row)
-                    if actual_rows > limits.max_rows:
-                        raise ToolbeltError("workbook selection exceeds row limit")
-                    if actual_cells > limits.max_cells:
-                        raise ToolbeltError("workbook selection exceeds cell limit")
-    finally:
-        dimension_workbook.close()
-    digest = hashlib.sha256(source.read_bytes()).hexdigest()
-    workbook = openpyxl.load_workbook(source, data_only=False, read_only=False)
-    cached = openpyxl.load_workbook(source, data_only=True, read_only=True)
-    sheets: list[SheetSummary] = []
-    tables: list[TypedTable] = []
-    measurements: list[TypedMeasurement] = []
-    cell_count = 0
-    for ws in workbook.worksheets:
-        _check_cancel(cancel_check)
-        if ws.sheet_state != "visible" and not (selection and selection.include_hidden):
-            continue
-        hidden_rows = tuple(row for row, dimension in ws.row_dimensions.items() if dimension.hidden)
-        summary = SheetSummary(ws.title, ws.sheet_state, ws.max_row, ws.max_column, hidden_rows, tuple(str(item) for item in ws.merged_cells.ranges), tuple(ws.tables))
-        sheets.append(summary)
-        if not _in_selection(ws.title, selection):
-            continue
-        selected_tables = [table_name for sheet, table_name in (selection.tables if selection else ()) if sheet == ws.title]
-        if selected_tables:
-            selected_ranges = [ws.tables[name].ref for name in selected_tables if name in ws.tables]
-        else:
-            selected_ranges = [cell_range for sheet, cell_range in (selection.ranges if selection else ()) if sheet == ws.title]
-        if not selected_ranges:
-            selected_ranges = [f"A1:{openpyxl.utils.get_column_letter(ws.max_column)}{ws.max_row}"] if ws.max_row and ws.max_column else []
-        for source_range in selected_ranges:
-            min_col, min_row, max_col, max_row = _range_bounds(source_range)
-            if max_row - min_row + 1 > limits.max_rows:
-                raise ToolbeltError("workbook selection exceeds row limit")
-            rows: list[tuple[Any, ...]] = []
-            row_provenance: list[tuple[CellProvenance, ...]] = []
-            source_rows = ws.iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col)
-            cached_rows = cached[ws.title].iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col)
-            for source_row, cached_row in zip(source_rows, cached_rows, strict=True):
-                _check_cancel(cancel_check)
-                row = source_row[0].row
-                if row in hidden_rows and not (selection and selection.include_hidden_rows):
-                    continue
-                values: list[Any] = []
-                provenance: list[CellProvenance] = []
-                for cell, cached_cell in zip(source_row, cached_row, strict=True):
-                    _check_cancel(cancel_check)
-                    formula = cell.value if isinstance(cell.value, str) and cell.value.startswith("=") else None
-                    cached_value = _coerce(cached_cell.value) if formula else None
-                    raw_value = cached_value if formula and cached_value is not None else cell.value
-                    value = _coerce(raw_value)
-                    if formula:
-                        if isinstance(cached_value, ExcelError):
-                            status = FormulaStatus.ERROR
-                        elif cached_value is None:
-                            status = FormulaStatus.FORMULA_WITHOUT_CACHE
-                        else:
-                            calculation = getattr(workbook, "calculation", None)
-                            stale = bool(
-                                calculation
-                                and (
-                                    getattr(calculation, "calcMode", None) == "manual"
-                                    or getattr(calculation, "fullCalcOnLoad", False)
-                                    or getattr(calculation, "forceFullCalc", False)
+                    row = source_row[0].row
+                    if row in hidden_rows and not (selection and selection.include_hidden_rows):
+                        continue
+                    values: list[Any] = []
+                    provenance: list[CellProvenance] = []
+                    for cell, cached_cell in zip(source_row, cached_row, strict=True):
+                        _check_cancel(cancel_check)
+                        formula = cell.value if isinstance(cell.value, str) and cell.value.startswith("=") else None
+                        cached_value = _coerce(cached_cell.value) if formula else None
+                        raw_value = cached_value if formula and cached_value is not None else cell.value
+                        value = _coerce(raw_value)
+                        if formula:
+                            if isinstance(cached_value, ExcelError):
+                                status = FormulaStatus.ERROR
+                            elif cached_value is None:
+                                status = FormulaStatus.FORMULA_WITHOUT_CACHE
+                            else:
+                                calculation = getattr(workbook, "calculation", None)
+                                stale = bool(
+                                    calculation
+                                    and (
+                                        getattr(calculation, "calcMode", None) == "manual"
+                                        or getattr(calculation, "fullCalcOnLoad", False)
+                                        or getattr(calculation, "forceFullCalc", False)
+                                    )
                                 )
-                            )
-                            status = FormulaStatus.FORMULA_STALE_OR_UNKNOWN if stale else FormulaStatus.FORMULA_WITH_CACHE
-                    else:
-                        status = FormulaStatus.ERROR if isinstance(value, ExcelError) else FormulaStatus.VALUE
-                    locator = CellProvenance(digest, ws.title, cell.coordinate, source_range)
-                    measurement_id = f"{digest[:12]}:{ws.title}:{cell.coordinate}"
-                    referenced_cells = _formula_references(formula)
-                    references = tuple(sorted({sheet for sheet, _ in referenced_cells}))
-                    measurements.append(TypedMeasurement(measurement_id, value, _excel_type(raw_value), formula, cached_value, status, locator, references, referenced_cells))
-                    values.append(value)
-                    provenance.append(locator)
-                    cell_count += 1
-                    if cell_count > limits.max_cells:
-                        raise ToolbeltError("workbook selection exceeds cell limit")
-                rows.append(tuple(values))
-                row_provenance.append(tuple(provenance))
-            header_rows = min(1, len(rows))
-            if len(rows) > 1 and sum(value not in (None, "") for value in rows[0]) <= 1 and sum(value not in (None, "") for value in rows[1]) > 1:
-                header_rows = 2
-            headers = tuple(tuple("" if value is None else str(value) for value in rows[index]) for index in range(header_rows))
-            table_id = f"{digest[:12]}:{ws.title}:{source_range}"
-            related = tuple(
-                measurement.provenance
-                for measurement in measurements
-                if measurement.formula and measurement.provenance.sheet == ws.title and measurement.provenance.range == source_range
-            )
-            tables.append(TypedTable(table_id, selected_tables[0] if selected_tables else source_range, ws.title, headers, tuple(rows[header_rows:]), tuple(row_provenance[header_rows:]), ws.sheet_state != "visible", source_range, related))
-    finalized_tables = []
-    for table in tables:
-        related = list(table.related_provenance)
-        for measurement in measurements:
-            if measurement.provenance.range != table.source_range or measurement.provenance.sheet != table.sheet:
-                continue
-            related.extend(CellProvenance(digest, sheet, coordinate, f"{sheet}!{coordinate}") for sheet, coordinate in measurement.cross_sheet_cells)
-        finalized_tables.append(replace(table, related_provenance=tuple(dict.fromkeys(related))))
-    cached.close()
-    workbook.close()
-    return WorkbookReadResult(str(source), digest, tuple(sheets), tuple(finalized_tables), tuple(measurements))
+                                status = FormulaStatus.FORMULA_STALE_OR_UNKNOWN if stale else FormulaStatus.FORMULA_WITH_CACHE
+                        else:
+                            status = FormulaStatus.ERROR if isinstance(value, ExcelError) else FormulaStatus.VALUE
+                        locator = CellProvenance(digest, ws.title, cell.coordinate, source_range)
+                        measurement_id = f"{digest[:12]}:{ws.title}:{cell.coordinate}"
+                        referenced_cells = _formula_references(formula)
+                        references = tuple(sorted({sheet for sheet, _ in referenced_cells}))
+                        measurements.append(TypedMeasurement(measurement_id, value, _excel_type(raw_value), formula, cached_value, status, locator, references, referenced_cells))
+                        values.append(value)
+                        provenance.append(locator)
+                        cell_count += 1
+                        if cell_count > limits.max_cells:
+                            raise ToolbeltError("workbook selection exceeds cell limit")
+                    rows.append(tuple(values))
+                    row_provenance.append(tuple(provenance))
+                header_rows = min(1, len(rows))
+                if len(rows) > 1 and sum(value not in (None, "") for value in rows[0]) <= 1 and sum(value not in (None, "") for value in rows[1]) > 1:
+                    header_rows = 2
+                headers = tuple(tuple("" if value is None else str(value) for value in rows[index]) for index in range(header_rows))
+                table_id = f"{digest[:12]}:{ws.title}:{source_range}"
+                related = tuple(
+                    measurement.provenance
+                    for measurement in measurements
+                    if measurement.formula and measurement.provenance.sheet == ws.title and measurement.provenance.range == source_range
+                )
+                tables.append(TypedTable(table_id, selected_tables[0] if selected_tables else source_range, ws.title, headers, tuple(rows[header_rows:]), tuple(row_provenance[header_rows:]), ws.sheet_state != "visible", source_range, related))
+        finalized_tables = []
+        for table in tables:
+            related = list(table.related_provenance)
+            for measurement in measurements:
+                if measurement.provenance.range != table.source_range or measurement.provenance.sheet != table.sheet:
+                    continue
+                related.extend(CellProvenance(digest, sheet, coordinate, f"{sheet}!{coordinate}") for sheet, coordinate in measurement.cross_sheet_cells)
+            finalized_tables.append(replace(table, related_provenance=tuple(dict.fromkeys(related))))
+        return WorkbookReadResult(str(source), digest, tuple(sheets), tuple(finalized_tables), tuple(measurements))
+    finally:
+        cached.close()
+        workbook.close()
 
 
 def _rows(table: TypedTable) -> list[dict[str, Any]]:

@@ -1,5 +1,6 @@
 import inspect
 import asyncio
+import copy
 import functools
 import time
 from dataclasses import dataclass, field
@@ -271,14 +272,21 @@ def instrument_tool(tool: Any, definition: CapabilityDefinition, context: Mappin
     mcp_call = getattr(tool, "call_tool", None)
     if callable(mcp_call) and not callable(tool):
         try:
-            original = getattr(tool, "__foresight_original_call_tool__", None) or mcp_call
+            isolated = copy.copy(tool)
+            previous = getattr(tool, "__foresight_original_call_tool__", None)
+            function = getattr(previous, "__func__", None)
+            if function is not None:
+                original = function.__get__(isolated, type(isolated))
+            else:
+                original = getattr(isolated, "call_tool")
             dispatch = _instrumented_dispatch(original, definition, context)
-            setattr(tool, "__foresight_original_call_tool__", original)
-            setattr(tool, "call_tool", dispatch)
-            setattr(tool, "__foresight_instrumented__", True)
-            setattr(tool, "capability_id", definition.id)
-            return tool
+            setattr(isolated, "__foresight_original_call_tool__", original)
+            setattr(isolated, "call_tool", dispatch)
+            setattr(isolated, "__foresight_instrumented__", True)
+            setattr(isolated, "capability_id", definition.id)
+            return isolated
         except (AttributeError, TypeError):
+            dispatch = _instrumented_dispatch(mcp_call, definition, context)
             wrapped = _InstrumentedMCPTool(tool, dispatch)
             wrapped.capability_id = definition.id
             return wrapped

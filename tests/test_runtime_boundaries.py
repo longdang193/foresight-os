@@ -160,7 +160,7 @@ def test_mcp_instrumentation_preserves_agent_framework_sdk_type():
 
     tool.call_tool = fake_call_tool
     wrapped = instrument_tool(tool, CapabilityDefinition("mcp", "external_read"), {})
-    assert wrapped is tool
+    assert wrapped is not tool
     assert isinstance(wrapped, MCPStreamableHTTPTool)
     assert asyncio.run(wrapped.call_tool("read", query="capacity"))["name"] == "read"
 
@@ -177,8 +177,8 @@ def test_reused_mcp_tool_rebinds_budget_and_metrics_per_run():
     first_metrics = RunMetrics("first", "DIRECT", "direct")
     second_metrics = RunMetrics("second", "DIRECT", "direct")
     first = instrument_tool(tool, CapabilityDefinition("mcp", "external_read"), {"budget": BudgetState(5, 1, 5, max_tool_calls=1), "metrics": first_metrics})
-    asyncio.run(first.call_tool("read"))
     second = instrument_tool(tool, CapabilityDefinition("mcp", "external_read"), {"budget": BudgetState(5, 1, 5, max_tool_calls=1), "metrics": second_metrics})
+    asyncio.run(first.call_tool("read"))
     asyncio.run(second.call_tool("read"))
     assert first_metrics.tool_calls == 1
     assert second_metrics.tool_calls == 1

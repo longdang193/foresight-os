@@ -76,6 +76,8 @@ def _provider_result_is_success(provider_id: str, result: object) -> bool:
         text = " ".join(_provider_result_text(item) for item in result).lower()
     else:
         text = _provider_result_text(result).lower()
+    if any(marker in text for marker in ("rate limit", "unauthorized", "forbidden", "invalid api key", "error")):
+        return False
     if provider_id == "alpha_vantage":
         return "global quote" in text or ("symbol" in text and "price" in text)
     if provider_id == "github":

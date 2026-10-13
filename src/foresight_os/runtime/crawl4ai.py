@@ -73,8 +73,20 @@ class Crawl4AICapability:
         retrieved_at = datetime.now(timezone.utc).isoformat()
         try:
             crawler_kwargs = {}
+            browser_config = None
+            if browser_config_type is not None:
+                extra_args = []
+                if initial_addresses:
+                    extra_args.append(f"--host-resolver-rules=MAP {urlsplit(url).hostname} {initial_addresses[0]}")
+                browser_config = browser_config_type(
+                    headless=True,
+                    java_script_enabled=True,
+                    verbose=False,
+                    ignore_https_errors=True,
+                    extra_args=extra_args,
+                )
             if strategy_type is not None:
-                strategy = strategy_type()
+                strategy = strategy_type(browser_config=browser_config)
                 origin_host = (urlsplit(url).hostname or "").lower().rstrip(".")
 
                 async def guard_page_context(page, **_):
@@ -96,17 +108,8 @@ class Crawl4AICapability:
 
                 strategy.set_hook("on_page_context_created", guard_page_context)
                 crawler_kwargs["crawler_strategy"] = strategy
-            if browser_config_type is not None:
-                extra_args = []
-                if initial_addresses:
-                    extra_args.append(f"--host-resolver-rules=MAP {urlsplit(url).hostname} {initial_addresses[0]}")
-                crawler_kwargs["config"] = browser_config_type(
-                    headless=True,
-                    java_script_enabled=True,
-                    verbose=False,
-                    ignore_https_errors=True,
-                    extra_args=extra_args,
-                )
+            if browser_config is not None:
+                crawler_kwargs["config"] = browser_config
             async with AsyncWebCrawler(**crawler_kwargs) as crawler:
                 if config_type is not None:
                     config = config_type(

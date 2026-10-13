@@ -104,10 +104,19 @@ async def _leak_control_probe() -> bool:
     task = asyncio.create_task(asyncio.sleep(60))
     try:
         after = _snapshot()
-        return after["unfinished_tasks"] > before["unfinished_tasks"]
+        return _sample_has_resource_drift({"before": before, "after": after})
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+def _sample_has_resource_drift(sample: dict) -> bool:
+    before = sample["before"]
+    after = sample["after"]
+    for key in ("unfinished_tasks", "open_files", "child_processes", "handles"):
+        if before.get(key) is not None and after.get(key) is not None and after[key] > before[key]:
+            return True
+    return False
 
 
 async def run_probe(runs: int, seed: str, warmup: int = 10) -> dict:
@@ -147,9 +156,10 @@ async def run_probe(runs: int, seed: str, warmup: int = 10) -> dict:
     monotonic_handles = bool(handle_values) and all(left <= right for left, right in zip(handle_values, handle_values[1:])) and handle_values[-1] > handle_values[0]
     boundaries = await _boundary_probes()
     leak_control_detected = await _leak_control_probe()
+    resource_leak_samples = [index for index, sample in enumerate(samples) if _sample_has_resource_drift(sample)]
     result = {
         "mode": "anomaly",
-        "status": "failed" if failures or len(set(state_hashes)) != 1 or monotonic_handles or not all(boundaries.values()) or not leak_control_detected else "verified",
+        "status": "failed" if failures or resource_leak_samples or len(set(state_hashes)) != 1 or monotonic_handles or not all(boundaries.values()) or not leak_control_detected else "verified",
         "runs": runs,
         "seed": seed,
         "warmup_runs": warmup,
@@ -160,6 +170,7 @@ async def run_probe(runs: int, seed: str, warmup: int = 10) -> dict:
         "failures": failures,
         "boundary_probes": boundaries,
         "leak_control_detected": leak_control_detected,
+        "resource_leak_samples": resource_leak_samples,
         "samples": samples,
     }
     tracemalloc.stop()

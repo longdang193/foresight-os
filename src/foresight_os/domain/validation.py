@@ -24,9 +24,11 @@ def migrate_analysis_dict(value: dict[str, Any]) -> dict[str, Any]:
         migrated["schema_version"] = CURRENT_SCHEMA_VERSION
         migrated.setdefault("revision_status", "ACCEPTED")
         migrated.setdefault("calculations", [])
+        migrated.setdefault("pending_token", None)
     elif version == CURRENT_SCHEMA_VERSION:
         migrated.setdefault("revision_status", "ACCEPTED")
         migrated.setdefault("calculations", [])
+        migrated.setdefault("pending_token", None)
     return migrated
 
 

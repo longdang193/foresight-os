@@ -72,8 +72,9 @@ def test_crawl4ai_is_injected_into_maf_agent_tools(monkeypatch):
 
 
 def test_crawl4ai_uses_concrete_installed_strategy(monkeypatch):
-    import crawl4ai
-    from crawl4ai.async_crawler_strategy import AsyncPlaywrightCrawlerStrategy
+    crawl4ai = pytest.importorskip("crawl4ai")
+    strategy_module = pytest.importorskip("crawl4ai.async_crawler_strategy")
+    AsyncPlaywrightCrawlerStrategy = strategy_module.AsyncPlaywrightCrawlerStrategy
 
     class CompatibleCrawler(_FakeCrawler):
         def __init__(self, **kwargs):

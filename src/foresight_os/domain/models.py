@@ -167,6 +167,7 @@ class AnalysisState:
     schema_version: int = 1
     revision_status: RevisionStatus = RevisionStatus.ACCEPTED
     calculations: list[CalculationRecord] = field(default_factory=list)
+    pending_token: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

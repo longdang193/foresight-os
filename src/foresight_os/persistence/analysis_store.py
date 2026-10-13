@@ -1,6 +1,7 @@
 import json
 import os
 import tempfile
+import uuid
 from pathlib import Path
 
 import yaml
@@ -88,6 +89,8 @@ class AnalysisStore:
                 raise ValueError(f"stale pending revision: expected {expected_revision}, pending {state.revision}")
             if pending is not None and pending.revision != expected_revision:
                 raise ValueError(f"stale pending snapshot: expected {expected_revision}, persisted {pending.revision}")
+            if pending is not None and (not state.pending_token or state.pending_token != pending.pending_token):
+                raise ValueError("stale pending identity")
             if pending is None and current is not None and current.revision != expected_revision:
                 raise ValueError(f"stale revision: expected {expected_revision}, current {current.revision}")
             if pending is not None and current is not None and not accepted:
@@ -111,24 +114,20 @@ class AnalysisStore:
             return committed
 
     def save_pending(self, state: AnalysisState) -> AnalysisState:
-        pending = replace(state, revision_status=RevisionStatus.PENDING_REVIEW)
+        pending = replace(state, revision_status=RevisionStatus.PENDING_REVIEW, pending_token=uuid.uuid4().hex)
         with FileLock(str(self.lock_path)):
             current = self._load_path(self.analysis_path) if self.analysis_path.exists() else None
             existing_pending = self._load_path(self.pending_analysis_path) if self.pending_analysis_path.exists() else None
-            base_revision = max(
-                (current.revision if current is not None else 0),
-                (existing_pending.revision if existing_pending is not None else 0),
-            )
-            if current is not None or existing_pending is not None:
-                number = base_revision + 1
+            if current is not None:
+                number = current.revision + 1
                 revision = Revision(
                     f"revision-{number}",
                     number,
                     "pending mutation",
                     [item.id for collection in [pending.evidence, pending.claims, pending.implications, pending.recommendations, pending.artifacts] for item in collection] + [item.id for item in pending.calculations],
                 )
-                prior_revisions = existing_pending.revisions if existing_pending is not None else current.revisions
-                pending = replace(pending, revision=number, revisions=[*prior_revisions, revision])
+                pending = replace(pending, revision=number, revisions=[*current.revisions, revision])
+                pending = self._merge_states(current, pending)
             self._write_validated(validate_analysis(pending), self.pending_analysis_path)
         return pending
 
@@ -201,6 +200,7 @@ class AnalysisStore:
             schema_version=value["schema_version"],
             revision_status=RevisionStatus(value["revision_status"]),
             calculations=calculations,
+            pending_token=value.get("pending_token"),
         )
 
     def _write_validated(self, value: dict, path: Path | None = None) -> None:
