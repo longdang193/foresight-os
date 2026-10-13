@@ -170,7 +170,7 @@ spec checks on PRs and reserve heavy closure evidence for nightly/release runs.
 | Task 4 | `completed` | current | `unresolved` | Task 2 | presentation compiler/spec validation | focused suites passed; local Canva boundary remains disconnected by design |
 | Task 5 | `completed` | current | `unresolved` | Tasks 3–4 | performance/resource receipt comparison | corrected schema and baseline captured; comparator self-check passed |
 | Task 6 | `completed` | current | `unresolved` | Tasks 2–5 | bounded caches, clean-wheel smoke passed; release comparison fail-closed on noisy p95 sample |
-| Task 7 | `active` | current | `unresolved` | Tasks 0–6 | final verification and acceptance evidence | pending |
+| Task 7 | `active` | current | `unresolved` | Tasks 0–6 | final verification and acceptance evidence | incomplete: fresh optimization comparator rejected a pattern p95 regression; Canva external delivery blocked by unavailable connector/approval |
 
 ## Task Breakdown
 
@@ -581,20 +581,21 @@ spec checks on PRs and reserve heavy closure evidence for nightly/release runs.
 - Stop for: marking the plan completed without fresh verification, external Canva mutation without explicit approval, or any unrecorded scope deviation
 
 **Steps:**
-- [ ] Step 1: Run focused regression tests for controller, workflow, relation/review, receipts, presentation, capabilities, and evaluation scope.
-- [ ] Step 2: Run `python -m pytest -q` with generated output routed to the new disposable root where applicable.
-- [ ] Step 3: Run the controller/contract matrices, selective-reuse probe, presentation validation, optimization comparison, and clean-wheel smoke using only new disposable output paths.
-- [ ] Step 4: If a Canva adapter is connected and the user explicitly approves the external write, run a smoke that creates or updates one editable presentation from `PresentationSpec`; otherwise record `BLOCKED_EXTERNAL: connector unavailable or approval not granted` and do not claim Canva delivery success.
+- [x] Step 1: Run focused regression tests for controller, workflow, relation/review, receipts, presentation, capabilities, and evaluation scope.
+- [x] Step 2: Run `python -m pytest -q` with generated output routed to the new disposable root where applicable.
+- [ ] Step 3: Run the controller/contract matrices, selective-reuse probe, presentation validation, optimization comparison, and clean-wheel smoke using only new disposable output paths. Contract/controller/selective/clean-wheel evidence passed; the fresh optimization comparison failed closed on a pattern p95 regression.
+- [x] Step 4: If a Canva adapter is connected and the user explicitly approves the external write, run a smoke that creates or updates one editable presentation from `PresentationSpec`; otherwise record `BLOCKED_EXTERNAL: connector unavailable or approval not granted` and do not claim Canva delivery success.
 - [ ] Step 5: Reconcile every task state, deviation, evidence path, and completion criterion, then report two independent verdicts: `Core three-increment closure: VERIFIED` or `FAILED`; `Canva external delivery: VERIFIED`, `BLOCKED_EXTERNAL`, or `FAILED`. Only `skill-verification-before-completion` may authorize a terminal `completed` status.
 
 **Verification:**
-- [ ] `python -m pytest -q`
-- [ ] `python evaluation/run.py --matrix contract --output-root work/closure-patch-canva-20261013/final/contract`
-- [ ] `python evaluation/run.py --matrix controller --write-report work/closure-patch-canva-20261013/final/controller.md`
-- [ ] `python evaluation/probes/run_selective_reuse_probe.py --output-root work/closure-patch-canva-20261013/final/selective-reuse`
-- [ ] `python evaluation/probes/run_optimization_probe.py --mode release --fixture tests/fixtures/analyst_multisheet.xlsx --output work/closure-patch-canva-20261013/final/optimization/release.json`
-- [ ] `git diff --check`
-- [ ] `git status --short --branch`
+- [x] `python -m pytest -q`
+- [x] `python evaluation/run.py --matrix contract --output-root work/closure-patch-canva-20261013/final/contract`
+- [x] `python evaluation/run.py --matrix controller --write-report work/closure-patch-canva-20261013/final/controller.md`
+- [x] `python evaluation/probes/run_selective_reuse_probe.py --output-root work/closure-patch-canva-20261013/final/selective-reuse`
+- [x] `python evaluation/probes/run_optimization_probe.py --mode release --fixture tests/fixtures/analyst_multisheet.xlsx --output work/closure-patch-canva-20261013/final/optimization/release.json` (receipt generated; comparator failed closed)
+- [ ] `python evaluation/probes/compare_optimization_receipts.py --baseline work/closure-patch-canva-20261013/baseline/optimization-corrected.json --release work/closure-patch-canva-20261013/final/optimization/release.json --output work/closure-patch-canva-20261013/final/optimization/comparison.json` (failed: `CHALLENGE_RECOMMENDATION` pattern p95 regression exceeded 20%)
+- [x] `git diff --check`
+- [x] `git status --short --branch`
 - Expected: all required local gates pass, no preserved untracked output changes, evidence is fresh and machine-readable, and external Canva status is either verified through an approved connector or explicitly blocked.
 
 **Exit Criteria:**
