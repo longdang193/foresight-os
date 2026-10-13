@@ -95,6 +95,28 @@ methods when continuing an investigation under an updated skill version; old
 reviews remain attributable to their recorded method identity. Registry and
 package tests prove resource integrity, not model reasoning quality.
 
+The skill exercise evaluator keeps those claims separate. Structural mode is
+offline and checks the tracked five-case reference contract, manifest identity,
+content hashes, fixture routing boundaries, and prompt-size measurements:
+
+```text
+PYTHONPATH=src py evaluation/probes/run_skill_exercise_evaluation.py --mode structural --exercise-root evaluation/cases --skill-fixture-root evaluation/skills --output-root work/skill-layer-hardening-20261014/final/structural
+```
+
+Provider mode is an optional second tier. It uses the approved provider
+configuration only when available; missing credentials or runtime dependencies
+are recorded as `BLOCKED_EXTERNAL`, never simulated as quality evidence:
+
+```text
+PYTHONPATH=src py evaluation/probes/run_skill_exercise_evaluation.py --mode provider --exercise-root evaluation/cases --skill-fixture-root evaluation/skills --extended-exercise-root data/exercise --output-root work/skill-layer-hardening-20261014/final/provider
+```
+
+Reports separate deterministic/reference checks, provider/runtime measurements,
+and human/rubric judgments. Human correction effort remains `not_measured`
+unless a human assessment is actually performed. The optional `data/exercise/`
+workbook tier is `BLOCKED_INPUT` when absent; these results do not resolve the
+separate Group Chat p95 follow-up.
+
 ## Presentation and Canva boundary
 
 The local presentation compiler derives a deterministic six-slide

@@ -212,8 +212,15 @@ async def _run_provider_cases(
     return reports
 
 
-def run_provider(exercise_root: Path, fixture_root: Path, output_root: Path, env_file: Path, config_file: Path) -> dict[str, Any]:
-    report = run_structural(exercise_root, fixture_root, output_root)
+def run_provider(
+    exercise_root: Path,
+    fixture_root: Path,
+    output_root: Path,
+    env_file: Path,
+    config_file: Path,
+    extended_exercise_root: Path | None = None,
+) -> dict[str, Any]:
+    report = run_structural(exercise_root, fixture_root, output_root, extended_exercise_root)
     registry = SkillRegistry()
     fixtures = _load_skill_fixtures(registry, fixture_root)
     case_dirs = [path for path in sorted(exercise_root.glob("case-*")) if (path / "reference.json").is_file()]
@@ -285,7 +292,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.mode == "structural":
         report = run_structural(args.exercise_root, args.skill_fixture_root, args.output_root, args.extended_exercise_root)
     else:
-        report = run_provider(args.exercise_root, args.skill_fixture_root, args.output_root, args.env_file, args.config_file)
+        report = run_provider(
+            args.exercise_root,
+            args.skill_fixture_root,
+            args.output_root,
+            args.env_file,
+            args.config_file,
+            args.extended_exercise_root,
+        )
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0
 

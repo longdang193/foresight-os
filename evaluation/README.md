@@ -41,6 +41,47 @@ outcomes without being forced to emit structured evidence.
 
 The case is synthetic and contains no customer data or external dependencies.
 
+## Skill exercise evaluation
+
+The bundled skill layer has one manifest-owned runtime source and one
+fixture-owned evaluation source. The nine files under `evaluation/skills/`
+contain routing examples and expected observable output properties; they are
+not injected into runtime prompts. Package tests verify manifest IDs, normalized
+UTF-8 content hashes, frontmatter identity, required sections, adjacent-skill
+references, least-privilege capabilities, and prompt-size measurements.
+
+Run the required offline tier with no provider or network dependency:
+
+```text
+PYTHONPATH=src py evaluation/probes/run_skill_exercise_evaluation.py --mode structural --exercise-root evaluation/cases --skill-fixture-root evaluation/skills --output-root work/skill-layer-hardening-20261014/final/structural
+```
+
+Structural mode validates the tracked `case-001` through `case-005`
+reference records and reports deterministic completeness counts. It does not
+claim model quality. The optional `data/exercise/` workbook tier is reported as
+`BLOCKED_INPUT` when absent.
+
+Provider mode is a separate, explicitly environment-gated path:
+
+```text
+PYTHONPATH=src py evaluation/probes/run_skill_exercise_evaluation.py --mode provider --exercise-root evaluation/cases --skill-fixture-root evaluation/skills --extended-exercise-root data/exercise --output-root work/skill-layer-hardening-20261014/final/provider
+```
+
+It uses `ParticipantConfig.skill_ids`, `SkillRegistry`, the approved provider
+settings/client, and `run_recipe_async`. Missing credentials, configuration, or
+the provider package produce `BLOCKED_EXTERNAL`; the report preserves the
+structural result. Every report has three independent metric classes:
+
+- `deterministic_reference`: package and frozen-reference checks;
+- `provider_runtime`: provider latency, calls, failures, and cleanup facts;
+- `human_rubric`: human judgments, left `not_measured` unless assessed.
+
+Do not infer correction effort from acceptance state, provider availability, or
+deterministic reference completeness. This evaluation does not change the
+Controller, `AnalysisState`, `PresentationSpec`, Canva boundary, or frozen
+optimization thresholds, and it does not close the separate Group Chat p95
+investigation.
+
 ## Probe tiers
 
 - Pull requests run deterministic tests, package-resource checks, the contract

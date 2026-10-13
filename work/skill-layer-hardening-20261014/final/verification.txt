@@ -1,0 +1,20 @@
+Final verification
+==================
+Workspace: dedicated managed worktree on codex/actionable-foresight-skills.
+Base: origin/main at 657c17b1fed4d4e54aeee0067e03abc8b645acd4.
+
+Passed:
+- Full pytest suite with the worktree src path: all tests passed.
+- Structural skill evaluation: five tracked cases, 35/35 deterministic reference checks.
+- Clean-wheel smoke: build, install, and isolated site-packages import passed.
+- git diff --check.
+
+Recorded boundaries:
+- data/exercise/ optional workbook tier: BLOCKED_INPUT.
+- Provider skill evaluation: BLOCKED_EXTERNAL because the worktree has no .env credential boundary; no provider call was attempted.
+- Human/rubric metrics: not_measured; no correction effort inferred from acceptance state.
+- Group Chat / CHALLENGE_RECOMMENDATION p95 follow-up: deferred and unchanged.
+
+Publication handoff:
+- Local implementation and evidence are complete.
+- Push, PR update, CI rerun, merge, and worktree cleanup remain approval-controlled and were not performed.

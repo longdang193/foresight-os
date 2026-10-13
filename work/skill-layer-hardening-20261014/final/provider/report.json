@@ -1,0 +1,177 @@
+{
+  "cases": [
+    {
+      "case_id": "case-001",
+      "checks_passed": 7,
+      "checks_total": 7,
+      "contradictions": 1,
+      "failed_checks": [],
+      "reference_findings": 3,
+      "status": "VERIFIED"
+    },
+    {
+      "case_id": "case-002",
+      "checks_passed": 7,
+      "checks_total": 7,
+      "contradictions": 1,
+      "failed_checks": [],
+      "reference_findings": 3,
+      "status": "VERIFIED"
+    },
+    {
+      "case_id": "case-003",
+      "checks_passed": 7,
+      "checks_total": 7,
+      "contradictions": 1,
+      "failed_checks": [],
+      "reference_findings": 3,
+      "status": "VERIFIED"
+    },
+    {
+      "case_id": "case-004",
+      "checks_passed": 7,
+      "checks_total": 7,
+      "contradictions": 1,
+      "failed_checks": [],
+      "reference_findings": 3,
+      "status": "VERIFIED"
+    },
+    {
+      "case_id": "case-005",
+      "checks_passed": 7,
+      "checks_total": 7,
+      "contradictions": 1,
+      "failed_checks": [],
+      "reference_findings": 3,
+      "status": "VERIFIED"
+    }
+  ],
+  "extended_exercise": {
+    "reason": "optional extended workbook pack is absent",
+    "root": "data\\exercise",
+    "status": "BLOCKED_INPUT"
+  },
+  "limitations": [
+    "Deterministic scores validate package and reference completeness, not model quality.",
+    "Provider runtime and human/rubric metrics are independent evidence classes.",
+    "The separate Group Chat / CHALLENGE_RECOMMENDATION p95 follow-up is outside this evaluation."
+  ],
+  "metric_classes": {
+    "deterministic_reference": {
+      "checks_passed": 35,
+      "checks_total": 35,
+      "contradictions": 5,
+      "reference_findings": 15,
+      "status": "VERIFIED"
+    },
+    "human_rubric": {
+      "correction_effort": null,
+      "measured": false,
+      "status": "not_measured"
+    },
+    "provider_runtime": {
+      "boundary": "FileNotFoundError",
+      "human_correction": null,
+      "message": "[Errno 2] No such file or directory: 'C:\\\\Users\\\\HOANG PHI LONG DANG\\\\.codex\\\\worktrees\\\\actionable-foresight-skills\\\\foresight-OS\\\\.env'",
+      "runs": [],
+      "status": "BLOCKED_EXTERNAL"
+    }
+  },
+  "provider": {
+    "status": "BLOCKED_EXTERNAL"
+  },
+  "schema_version": 1,
+  "skills": [
+    {
+      "content_sha256": "0c97607da2ccee44f5a10183977c2ac0fa393b3622f38d4212381cb03b122e31",
+      "fixture_version": "1.1.0",
+      "prompt_size": {
+        "utf8_bytes": 3227,
+        "word_count": 421
+      },
+      "skill_id": "abstain-or-escalate",
+      "version": "1.1.0"
+    },
+    {
+      "content_sha256": "548d1937c282ecad2d677bf2b3c75509a5ff494adb3d5504e4a150b3c7cd0741",
+      "fixture_version": "1.0.0",
+      "prompt_size": {
+        "utf8_bytes": 3861,
+        "word_count": 534
+      },
+      "skill_id": "evidence-visualization",
+      "version": "1.0.0"
+    },
+    {
+      "content_sha256": "66744cbacf9b61cfc74841c085dadce99ad41aef657d034890fd6d7e37e3432d",
+      "fixture_version": "1.1.0",
+      "prompt_size": {
+        "utf8_bytes": 3105,
+        "word_count": 395
+      },
+      "skill_id": "key-assumptions-check",
+      "version": "1.1.0"
+    },
+    {
+      "content_sha256": "09a679caf048e3352a9f1ee02cb6e349d7fa582ff468ee66431fca20ae925655",
+      "fixture_version": "1.0.0",
+      "prompt_size": {
+        "utf8_bytes": 4053,
+        "word_count": 530
+      },
+      "skill_id": "presentation-storytelling",
+      "version": "1.0.0"
+    },
+    {
+      "content_sha256": "0711d992f5a8bb6b6f6eadfa01a02e44cf593e9e645ca4531bbb818e63fcdbb4",
+      "fixture_version": "1.1.0",
+      "prompt_size": {
+        "utf8_bytes": 3173,
+        "word_count": 408
+      },
+      "skill_id": "quantitative-sanity-check",
+      "version": "1.1.0"
+    },
+    {
+      "content_sha256": "5fceb46ebaf75b9be1ec5301896453c459c393b75fa90e29b3569470e971380c",
+      "fixture_version": "1.1.0",
+      "prompt_size": {
+        "utf8_bytes": 3147,
+        "word_count": 406
+      },
+      "skill_id": "red-team-claim",
+      "version": "1.1.0"
+    },
+    {
+      "content_sha256": "1cc0f970168c92dffb321e2d38b80f29bc7807c87b0c06cd5020305a8dd7e136",
+      "fixture_version": "1.1.0",
+      "prompt_size": {
+        "utf8_bytes": 3158,
+        "word_count": 399
+      },
+      "skill_id": "scenario-planning",
+      "version": "1.1.0"
+    },
+    {
+      "content_sha256": "e40e86219041ecc094c196c3926f9d4f318d16ba1cb17b96456d504d3b960256",
+      "fixture_version": "1.0.0",
+      "prompt_size": {
+        "utf8_bytes": 4130,
+        "word_count": 539
+      },
+      "skill_id": "slide-design-review",
+      "version": "1.0.0"
+    },
+    {
+      "content_sha256": "9968bfeec0b465cf14bf949161e43eb98b8876d230d6d64017d245141f67331d",
+      "fixture_version": "1.1.0",
+      "prompt_size": {
+        "utf8_bytes": 3234,
+        "word_count": 424
+      },
+      "skill_id": "source-appraisal",
+      "version": "1.1.0"
+    }
+  ],
+  "status": "BLOCKED_EXTERNAL"
+}

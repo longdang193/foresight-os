@@ -1,0 +1,12 @@
+M	README.md
+M	src/foresight_os/skills/abstain-or-escalate/SKILL.md
+A	src/foresight_os/skills/evidence-visualization/SKILL.md
+M	src/foresight_os/skills/key-assumptions-check/SKILL.md
+M	src/foresight_os/skills/manifest.json
+A	src/foresight_os/skills/presentation-storytelling/SKILL.md
+M	src/foresight_os/skills/quantitative-sanity-check/SKILL.md
+M	src/foresight_os/skills/red-team-claim/SKILL.md
+M	src/foresight_os/skills/scenario-planning/SKILL.md
+A	src/foresight_os/skills/slide-design-review/SKILL.md
+M	src/foresight_os/skills/source-appraisal/SKILL.md
+A	tests/test_skill_package.py

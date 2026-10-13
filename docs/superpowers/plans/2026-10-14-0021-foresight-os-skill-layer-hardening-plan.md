@@ -2,7 +2,7 @@
 layer: change
 artifact_type: plan
 contract_version: "1"
-status: proposed
+status: active
 template_id: implementation-plan
 name: foresight-os-skill-layer-hardening
 targets:
@@ -121,8 +121,8 @@ tests never claim model reasoning quality.
 - Branch: `codex/actionable-foresight-skills`
 - Base commit: `657c17b1fed4d4e54aeee0067e03abc8b645acd4` (`origin/main`)
 - Expected workspace: dedicated PR #9 checkout with tracked files clean before edits; preserve unrelated untracked outputs in the current workspace and do not stage them
-- Next action: add deterministic package-contract tests and nine external evaluation fixtures for Task 3
-- Blockers: the separate Group Chat p95 follow-up remains outside this plan; provider-backed evaluation remains approval/configuration dependent
+- Next action: obtain authorization to publish the verified branch so PR #9 CI can rerun against the local fixes
+- Blockers: PR #9 CI cannot reflect this work until an authorized push; provider mode is `BLOCKED_EXTERNAL` because `.env` is absent; the separate Group Chat p95 follow-up remains outside this plan
 
 | Task | State | Workspace | Executor | Depends On | Required Proof | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -130,7 +130,7 @@ tests never claim model reasoning quality.
 | Task 1 | `completed` | current | `lead controller` | Task 0 | P0 version and capability tests | `python -m pytest -q tests/test_review_records.py tests/test_skill_package.py tests/test_participant_scope.py tests/test_research_needs.py` |
 | Task 2 | `completed` | current | `lead controller` | Task 1 | nine-skill content and routing contract checks | `python -m pytest -q tests/test_skill_package.py tests/test_review_records.py tests/test_participant_scope.py tests/test_research_needs.py`; manifest hash reconciliation |
 | Task 3 | `completed` | current | `lead controller` | Task 2 | package contract tests and nine evaluation fixtures | `python -m pytest -q tests/test_skill_package.py tests/test_skill_exercise_evaluation.py tests/test_skills.py`; `work/skill-layer-hardening-20261014/task-3/structural/` |
-| Task 4 | `pending` | current | `unresolved` | Task 3 | exercise-pack evaluation and final local proof | `work/skill-layer-hardening-20261014/final/` |
+| Task 4 | `completed` | current | `lead controller` | Task 3 | exercise-pack evaluation and final local proof | `work/skill-layer-hardening-20261014/final/`; provider boundary recorded as `BLOCKED_EXTERNAL` |
 
 ## Task Breakdown
 
@@ -402,19 +402,20 @@ tests never claim model reasoning quality.
 - Stop for: provider execution without explicit approval, missing provider credentials, missing optional exercise inputs, external writes, threshold changes, new exercise fixtures, or any claim that structural tests prove provider reasoning quality.
 
 **Steps:**
-- [ ] Step 1: Implement structural mode over tracked `evaluation/cases/case-001..005`, load each reference rubric, resolve the selected skill bundle through `SkillRegistry`, and record manifest IDs, versions, hashes, deterministic scores, and `not_measured` human/provider fields.
-- [ ] Step 2: Implement the provider runner as a separate path using `ParticipantConfig(skill_ids=...)`, `SkillRegistry`, `load_provider_settings`, an approved `OpenAIChatClient`, and `run_recipe_async`; do not route through `run_candidate` or relabel the existing live smoke probe.
-- [ ] Step 3: Run the required structural mode from a clean-clone-compatible checkout and validate report completeness. If `data/exercise/` is absent, add an extended-tier `BLOCKED_INPUT` record without changing required results.
-- [ ] Step 4: Run provider-backed mode only when an approved provider configuration is present; otherwise record `BLOCKED_EXTERNAL` with the missing boundary and preserve structural results without fabricating provider or human metrics.
-- [ ] Step 5: Update `README.md` and `evaluation/README.md` with the nine-skill catalog, routing rules, package source of truth, two-tier commands, metric classes, and evaluation limits.
-- [ ] Step 6: Reconcile the plan ledger, PR #9 evidence, and the separate p95 follow-up reference.
+- [x] Step 1: Implement structural mode over tracked `evaluation/cases/case-001..005`, load each reference rubric, resolve the selected skill bundle through `SkillRegistry`, and record manifest IDs, versions, hashes, deterministic scores, and `not_measured` human/provider fields.
+- [x] Step 2: Implement the provider runner as a separate path using `ParticipantConfig(skill_ids=...)`, `SkillRegistry`, `load_provider_settings`, an approved `OpenAIChatClient`, and `run_recipe_async`; do not route through `run_candidate` or relabel the existing live smoke probe.
+- [x] Step 3: Run the required structural mode from a clean-clone-compatible checkout and validate report completeness. If `data/exercise/` is absent, add an extended-tier `BLOCKED_INPUT` record without changing required results.
+- [x] Step 4: Run provider-backed mode only when an approved provider configuration is present; otherwise record `BLOCKED_EXTERNAL` with the missing boundary and preserve structural results without fabricating provider or human metrics.
+- [x] Step 5: Update `README.md` and `evaluation/README.md` with the nine-skill catalog, routing rules, package source of truth, two-tier commands, metric classes, and evaluation limits.
+- [x] Step 6: Reconcile the plan ledger, PR #9 evidence, and the separate p95 follow-up reference.
 
 **Verification:**
-- [ ] `python -m pytest -q`
-- [ ] `python evaluation/probes/run_skill_exercise_evaluation.py --mode structural --exercise-root evaluation/cases --skill-fixture-root evaluation/skills --output-root work/skill-layer-hardening-20261014/final/structural`
-- [ ] `python evaluation/probes/run_skill_exercise_evaluation.py --mode provider --exercise-root evaluation/cases --skill-fixture-root evaluation/skills --extended-exercise-root data/exercise --output-root work/skill-layer-hardening-20261014/final/provider`
-- [ ] `python evaluation/probes/run_clean_wheel_smoke.py --output-root work/skill-layer-hardening-20261014/final/clean-wheel`
-- Expected: full tests, tracked structural/reference evaluation, and clean-wheel proof pass; the optional workbook tier is either evaluated or explicitly `BLOCKED_INPUT`; provider mode is either verified with an approved runner or explicitly `BLOCKED_EXTERNAL`; no p95 threshold is changed.
+- [x] `python -m pytest -q` (full suite passed)
+- [x] `python evaluation/probes/run_skill_exercise_evaluation.py --mode structural --exercise-root evaluation/cases --skill-fixture-root evaluation/skills --output-root work/skill-layer-hardening-20261014/final/structural` (five cases, 35/35 reference checks)
+- [x] `python evaluation/probes/run_skill_exercise_evaluation.py --mode provider --exercise-root evaluation/cases --skill-fixture-root evaluation/skills --extended-exercise-root data/exercise --output-root work/skill-layer-hardening-20261014/final/provider` (`BLOCKED_EXTERNAL`; `.env` absent; no provider call)
+- [x] `python evaluation/probes/run_clean_wheel_smoke.py --output-root work/skill-layer-hardening-20261014/final/clean-wheel` (passed in isolated venv)
+- [x] `git diff --check` (passed)
+- Expected: full tests, tracked structural/reference evaluation, and clean-wheel proof pass; the optional workbook tier is explicitly `BLOCKED_INPUT`; provider mode is explicitly `BLOCKED_EXTERNAL`; no p95 threshold is changed.
 
 **Exit Criteria:**
 - PR #9 has green deterministic CI and no unresolved P0 finding; the skill layer is merge-ready; exercise evidence is durable and honest; formal three-increment closure remains unverified until the separate performance follow-up closes.
@@ -452,5 +453,5 @@ The plan is ready for completion verification when:
 5. Contract tests and nine evaluation fixtures pass without network access or new runtime dependencies.
 6. The tracked five-case evaluation report passes deterministic/reference scoring and separates provider/runtime measurements from human/rubric metrics; optional workbook absence is `BLOCKED_INPUT`, provider unavailability is `BLOCKED_EXTERNAL`, and no human correction effort is inferred from acceptance state.
 7. The deferred Group Chat/`CHALLENGE_RECOMMENDATION` p95 regression remains recorded with frozen thresholds and is not relabeled as resolved.
-8. `skill-verification-before-completion` returns `verified` for this skill-layer plan, or leaves the plan active with the exact failed/blocked evidence recorded.
+8. `skill-verification-before-completion` can return `verified` for this skill-layer plan after PR #9 is pushed and deterministic CI reruns; until then the plan remains active with the exact external publication blocker recorded.
 9. No plan status changes to `completed` until fresh verification confirms every required task and the separate performance follow-up is explicitly outside this plan’s completion scope.
