@@ -163,8 +163,8 @@ not rewritten into onboarding pages.
 | 3. Author getting-started and extending pages | completed | Codex | One runnable user workflow and one bounded contributor extension workflow | Tasks 1–2 | `docs/getting-started.md` and `docs/extending.md` added with reviewed CSV quickstart and extension owners | none | add documentation navigation |
 | 4. Add documentation navigation | completed | Codex | `docs/README.md` links users to the six canonical content pages without duplicating content | Tasks 1–3 | navigation-only `docs/README.md` links all six canonical pages | none | reduce and reconcile README |
 | 5. Reduce and reconcile README | completed | Codex | Root README becomes a concise product front door and points to canonical docs | Tasks 1–4 | README rewritten to product overview, quickstart, architecture, evidence boundary, and canonical links | none | implement explicit-target checker |
-| 6. Add local Markdown-link validation | active | Codex | Lightweight checker and focused tests for all canonical and historical local links | Tasks 1–5 | pending | none | implement explicit-target checker |
-| 7. Perform final documentation verification | proposed | unresolved | Full evidence that content, links, source ownership, and repository behavior are consistent | Tasks 0–6 | pending | none | run final verification and settle plan status |
+| 6. Add local Markdown-link validation | completed | Codex | Lightweight checker and focused tests for all canonical and historical local links | Tasks 1–5 | checker passed across explicit canonical targets plus tracked docs; focused tests passed | none | perform final documentation verification |
+| 7. Perform final documentation verification | active | Codex | Full evidence that content, links, source ownership, and repository behavior are consistent | Tasks 0–6 | pending | none | run final verification and settle plan status |
 
 ### Task 0: Establish the documentation baseline
 

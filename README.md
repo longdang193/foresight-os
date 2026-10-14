@@ -41,6 +41,11 @@ The report command writes:
 work/docs-quickstart/artifacts/executive-report.md
 ```
 
+The CLI also supports `inspect-powerbi` for metadata-only project inspection,
+`challenge` for recording a review challenge, and `scope-change` for recording
+a changed decision scope. These commands preserve the same work-directory
+state model; use their `--help` output for the current required arguments.
+
 To continue after changed evidence:
 
 ```text
