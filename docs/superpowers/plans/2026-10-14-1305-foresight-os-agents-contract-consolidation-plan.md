@@ -1,7 +1,7 @@
 ---
 layer: change
 artifact_type: plan
-status: active
+status: completed
 template_id: implementation-plan
 name: foresight-os-agents-contract-consolidation
 targets:
@@ -133,6 +133,11 @@ procedures, inventories, or private governance.
 - Task 2 accepted: `CLAUDE.md` and `GEMINI.md` are deleted; the remaining
   filename and generator mentions are intentional plan records only, with no
   source, script, configuration, or maintained-document dependency.
+- Task 3 verified: `AGENTS.md` is 70 lines with all nine headings; the
+  Markdown checker passed 24 paths; pytest and compileall exited successfully;
+  diff-check passed; and the committed diff contains only the approved plan,
+  contract replacement, and two adapter deletions. Existing untracked
+  `work/toolbelt-probes/` was preserved.
 
 ## Acceptance Criteria
 
@@ -168,7 +173,7 @@ procedures, inventories, or private governance.
 | 0. Establish contract provenance and baseline | completed | lead | Confirm `AGENTS.md` ownership, adapter-file references, and current line/content baseline | None | verified | none | rewrite canonical contract |
 | 1. Rewrite the ForesightOS project contract | completed | lead | Compact repo-specific `AGENTS.md` with nine required sections and no generic governance | Task 0 | verified | none | delete duplicate adapters |
 | 2. Remove duplicate adapter files and stale references | completed | lead | Delete `CLAUDE.md` and `GEMINI.md`; reconcile any tracked consumers | Tasks 0–1 | verified | none | run final verification |
-| 3. Verify contract, deletion, and scope | active | lead | Fresh proof that only the approved instruction surfaces changed | Tasks 1–2 | pending | none | run focused and broad checks |
+| 3. Verify contract, deletion, and scope | completed | lead | Fresh proof that only the approved instruction surfaces changed | Tasks 1–2 | verified | none | close plan |
 
 ### Task 0: Establish contract provenance and baseline
 
