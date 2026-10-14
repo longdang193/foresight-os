@@ -22,6 +22,34 @@ The exact command surface is discoverable with:
 python -m foresight_os.cli --help
 ```
 
+## Propose and approve an execution plan
+
+The canonical local flow persists the brief and exact recipe before approval:
+
+```text
+python -m foresight_os.cli propose --work-dir work/proposal --question "What decision should be made?" --investigation-id proposal-001 --format markdown --detailed
+```
+
+The command prints a review package and displayed fingerprint. Approve only the
+fingerprint that was reviewed:
+
+```text
+python -m foresight_os.cli approve --work-dir work/proposal --fingerprint <displayed-fingerprint>
+```
+
+Execution reloads the persisted recipe and crosses the shared gate:
+
+```text
+python -m foresight_os.cli execute --work-dir work/proposal --prompt "Answer the approved question"
+```
+
+If the brief or recipe changes after review, approval is rejected and a new
+proposal must be rendered. Re-running `propose` re-renders the persisted exact
+recipe, so a prior `revise` override is not silently discarded; use `revise` to
+make an intentional recipe change. The local CLI is an explicit human
+boundary; it is not an authenticated identity provider and does not perform
+external writes.
+
 ## Run the local analysis
 
 Use the repository fixture and an ignored work directory:

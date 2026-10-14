@@ -237,6 +237,21 @@ def _recipe_for_patterns(
                     ]
                 )
             ) if brief is not None else (),
+            rationale=(
+                f"{source}: {rationale}; selected {stage_patterns[index - 1].value} for "
+                f"stage {getattr(work_stages[index - 1], 'stage_id', f'stage-{index}') if index <= len(work_stages) else f'stage-{index}'}"
+            ),
+            capabilities=stage_capabilities(work_stages[index - 1])[0] if index <= len(work_stages) else (),
+            access_scope=("read:local",),
+            participant_responsibilities=tuple(
+                {"participant_id": str(role.get("id", "")), "responsibility": str(role.get("purpose", "execute"))}
+                for role in stage_roles(work_stages[index - 1] if index <= len(work_stages) else object(), stage_patterns[index - 1], index == stage_count)
+            ),
+            review_checks=("independent review" if review_required and index == stage_count else "stage output validation",),
+            completion_rule="stage output matches expected result and required checks pass",
+            escalation_rule="escalate unresolved capability, contradiction, or budget exhaustion",
+            partial_result_rule="preserve completed evidence and mark incomplete stage explicitly",
+            adaptation_policy=("bounded_retry", "reduced_concurrency", "dependency_safe_topology_reduction"),
         )
         for index in range(1, stage_count + 1)
     )
@@ -273,10 +288,17 @@ def _recipe_for_patterns(
         },
         purpose=base.purpose,
         stages=stages,
+        rationale=rationale,
+        review_policy="required review policy applies at the final stage" if review_required else "stage output validation",
+        reuse_policy="reuse only committed, provenance-complete matching receipts",
+        adaptation_policy=("bounded_retry", "reduced_concurrency", "dependency_safe_topology_reduction"),
     )
 
 
 def select_recipe(brief: WorkBrief, task_shape: TaskShape | None = None, override=None) -> ExecutionRecipe:
+    intent = getattr(brief, "execution_intent", None)
+    if override is None and intent is not None and intent.required_patterns:
+        override = list(intent.required_patterns)
     override = override if override is not None else brief.execution_pattern_override
     if override is not None:
         selected = _patterns_from_override(override)

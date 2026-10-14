@@ -21,12 +21,14 @@ from foresight_os.runtime.metrics import (
     FailureClass,
     RunMetrics,
     RunResult,
+    RunCanceledError,
 )
 from foresight_os.runtime.capabilities import CapabilityResolver, CapabilityScope, ScopeOwnership
 from foresight_os.runtime.crawl4ai import bind_crawl4ai
 from foresight_os.runtime.external_signals import load_hosted_mcp_bindings
 from foresight_os.runtime.web_search import bind_web_search
 from foresight_os.persistence.analysis_store import AnalysisStore, StageReceipt
+from foresight_os.persistence.ids import canonical_json_hash
 from foresight_os.runtime.page_retrieval import PageRetrievalCapability, bind_page_retrieval
 from foresight_os.runtime.local_toolbelt import bind_local_toolbelt
 from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
@@ -102,6 +104,11 @@ async def _run_native_stage(
     if not hasattr(client, "as_agent"):
         raise RuntimeError("a native MAF client with as_agent() is required for this pattern")
     context = dict(run_context or {})
+    if context.get("execution_admitted"):
+        expected_recipe_fingerprint = context.get("approved_recipe_fingerprint")
+        actual_recipe_fingerprint = canonical_json_hash(recipe.to_dict())
+        if expected_recipe_fingerprint and expected_recipe_fingerprint != actual_recipe_fingerprint:
+            raise ValidationError("approved recipe snapshot is immutable and cannot be changed at runtime")
     context.setdefault("skill_registry", SkillRegistry())
     context["handoff"] = pattern == ExecutionPattern.HANDOFF
     max_rounds = _positive_limit(context.get("max_rounds"), default=4, label="max_rounds")
@@ -356,6 +363,18 @@ async def run_recipe_async(
                 if impacted_ids.intersection(getattr(receipt, "result_references", ()))
             )
         )
+    fresh_requested = set(str(item) for item in context.get("run_fresh_stages", ()))
+    if fresh_requested:
+        affected = set(fresh_requested)
+        changed = True
+        while changed:
+            changed = False
+            for stage in recipe.stages or ():
+                stage_id = str(getattr(stage, "stage_id", ""))
+                if stage_id not in affected and any(str(dep) in affected for dep in getattr(stage, "dependencies", ())):
+                    affected.add(stage_id)
+                    changed = True
+        context["invalidated_stage_ids"] = tuple(sorted(set(context.get("invalidated_stage_ids", ())) | affected))
     for stage_id, receipt in context["stage_receipts"].items():
         if stage_id in context["canonical_outputs"] or not context["canonical_records"]:
             continue
@@ -421,6 +440,8 @@ async def run_recipe_async(
         if isinstance(error, asyncio.TimeoutError):
             return FailureClass.TIMEOUT
         if isinstance(error, asyncio.CancelledError):
+            return FailureClass.CANCELLATION
+        if isinstance(error, RunCanceledError):
             return FailureClass.CANCELLATION
         if isinstance(error, ValidationError):
             return FailureClass.DOMAIN_VALIDATION
@@ -597,6 +618,9 @@ async def run_recipe_async(
             status="committed",
             committed=True,
             provenance_complete=True,
+            source_revision=str(context.get("source_revision", "")),
+            created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            reuse_decision="run_fresh" if getattr(stage, "stage_id", "") in fresh_requested else "reuse",
         )
         context["stage_receipts"][committed_receipt.stage_id] = committed_receipt
         if isinstance(receipt_store, AnalysisStore):
@@ -610,6 +634,12 @@ async def run_recipe_async(
             stages = (type("Stage", (), {"pattern": ExecutionPattern(recipe.pattern), "participants": tuple(recipe.roles)})(),)
         outputs_by_stage: dict[str, object] = {}
         for stage in stages:
+            run_control = context.get("run_control")
+            if run_control is not None:
+                try:
+                    await run_control.before_stage()
+                except Exception as error:
+                    raise RunCanceledError(str(error)) from error
             dependencies = tuple(getattr(stage, "dependencies", ()))
             missing = tuple(dependency for dependency in dependencies if dependency not in outputs_by_stage)
             if missing:

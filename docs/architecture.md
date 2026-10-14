@@ -8,7 +8,10 @@ that a report can be traced back to the evidence and revision that produced it.
 
 ```text
 WorkBrief
-  -> controller policy and recipe selection
+  -> typed ExecutionIntent
+  -> controller policy and complete ExecutionRecipe
+  -> derived ApprovalPackage and durable ApprovalRecord
+  -> shared execution gate
   -> RecipeStage
   -> participants + skills + capabilities
   -> execution pattern and stage receipts
@@ -22,7 +25,9 @@ WorkBrief
 `WorkBrief` records the decision question, objective, horizon, constraints,
 stages, participants, and research needs. Validation happens before the brief
 is used by the controller. The persisted brief is stored as `brief.md` in the
-work directory.
+work directory. New briefs store uncommitted user preferences and typed
+required/preferred execution intent; legacy pattern overrides are translated at
+load time and are not re-emitted.
 
 ### 2. Controller and recipe
 
@@ -34,6 +39,11 @@ are direct, sequential, concurrent, handoff, and group chat.
 Each stage has an input and output contract, participant set, skill IDs,
 dependencies, research needs, limits, and expected result. Dependencies and
 stage fingerprints make reuse explicit rather than implicit.
+
+`execution-recipe.json` is the exact controller or human-edited recipe reviewed
+by the human. `ApprovalPackage` is a derived Markdown/JSON view. Approval is
+stored separately in `execution-approval.json`; it binds the displayed package
+fingerprint and is recorded only through the explicit local CLI human boundary.
 
 ### 3. Participants, skills, and capabilities
 
@@ -50,7 +60,13 @@ Capability resources are scoped to a run. Owned resources are closed at scope
 end; borrowed resources are not closed by ForesightOS. This keeps external
 clients and local caches from leaking across investigations.
 
-### 4. Execution and receipts
+### 4. Execution admission, execution, and receipts
+
+User-facing execution paths reload the brief, exact recipe, and approval under
+the `AnalysisStore` investigation lock. The shared execution gate rejects
+missing, stale, rejected, superseded, or out-of-envelope approvals before MAF
+dispatch. Direct `run_recipe_async` calls remain a low-level primitive for
+tests and evaluation probes, not a public approval path.
 
 The workflow runtime executes each stage using the selected pattern and
 enforces the recipe limits. Stage receipts record input and policy fingerprints,

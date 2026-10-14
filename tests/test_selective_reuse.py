@@ -3,6 +3,7 @@ import asyncio
 from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, RecipeName, RecipeStage, StageInput, make_recipe
 from foresight_os.persistence.analysis_store import StageReceipt
 from foresight_os.persistence.analysis_store import AnalysisStore
+from foresight_os.controller.proposal import classify_reuse
 from foresight_os.runtime.workflow import CanonicalStageResult, _canonical_result_hash, _stage_cache_key, run_recipe_async
 
 
@@ -23,6 +24,8 @@ def test_stage_receipt_reuse_revalidates_semantic_scope_and_provenance():
     assert receipt.reusable_for(input_fingerprint="input-v1", skill_hashes=("skill-v1",), capability_fingerprints=("local-v1",), model_config_fingerprint="model-v1", authorization_scope_fingerprint="scope-v1")
     assert not receipt.reusable_for(input_fingerprint="input-v1", authorization_scope_fingerprint="scope-v2")
     assert not receipt.reusable_for(input_fingerprint="input-v1", execution_policy_fingerprint="policy-v2", skill_hashes=("skill-v1",), capability_fingerprints=("local-v1",), model_config_fingerprint="model-v1", authorization_scope_fingerprint="scope-v1")
+    assert classify_reuse(receipt, reusable=True)["status"] == "reusable"
+    assert classify_reuse(None, reusable=False)["status"] == "fresh"
 
 
 def test_committed_stage_cache_hits_complete_ordered_stages_without_new_calls():
@@ -144,3 +147,16 @@ def test_temporary_stage_output_does_not_create_a_receipt(tmp_path):
     asyncio.run(run_recipe_async(recipe, "start", run_context={"analysis_store": store}))
 
     assert store.load_stage_receipts() == {}
+
+
+def test_run_fresh_reassesses_selected_stage_and_descendants():
+    base = make_recipe(RecipeName.DIRECT)
+    first = RecipeStage("first", ExecutionPattern.DIRECT, ({"id": "first"},), "prompt", "typed-result", {})
+    second = RecipeStage("second", ExecutionPattern.DIRECT, ({"id": "second"},), "prompt", "typed-result", {}, dependencies=("first",))
+    recipe = ExecutionRecipe(
+        base.name, base.pattern, base.roles, base.max_agent_steps, base.max_correction_rounds,
+        base.max_total_agent_calls, base.completion, base.escalation, base.partial_result,
+        stages=(first, second),
+    )
+    result = asyncio.run(run_recipe_async(recipe, "start", run_context={"run_fresh_stages": ("first",)}))
+    assert result.metrics.reassessed_stages == 2

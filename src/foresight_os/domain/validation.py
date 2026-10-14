@@ -5,7 +5,9 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from .models import AnalysisState, EvidenceCandidate, ResearchNeed, ResearchNeedKind, WorkBrief
+from .models import AnalysisState, EvidenceCandidate, ExecutionIntent, ResearchNeed, ResearchNeedKind, WorkBrief
+from foresight_os.controller.recipes import ExecutionRecipe
+from foresight_os.domain.approval import ApprovalRecord, AdaptationEnvelope
 from .relationships import RecordKind, relationship_rule
 
 
@@ -54,11 +56,58 @@ def validate_work_brief(brief: WorkBrief | dict[str, Any]) -> dict[str, Any]:
     return value
 
 
+def validate_execution_recipe(recipe: ExecutionRecipe | dict[str, Any]) -> dict[str, Any]:
+    value = recipe.to_dict() if isinstance(recipe, ExecutionRecipe) else dict(recipe)
+    _validate_schema(value, "execution_recipe.schema.json")
+    stage_ids = [stage["stage_id"] for stage in value.get("stages", [])]
+    if len(stage_ids) != len(set(stage_ids)):
+        raise ValidationError("recipe stage IDs must be unique")
+    seen: set[str] = set()
+    for stage in value.get("stages", []):
+        if any(dependency not in seen for dependency in stage.get("dependencies", [])):
+            raise ValidationError(f"stage {stage['stage_id']} depends on missing or later stage")
+        if any(isinstance(limit, int) and limit < 0 for limit in stage.get("limits", {}).values()):
+            raise ValidationError(f"stage {stage['stage_id']} has a negative limit")
+        seen.add(stage["stage_id"])
+    return value
+
+
+def validate_approval_record(record: ApprovalRecord | dict[str, Any]) -> dict[str, Any]:
+    value = record.to_dict() if isinstance(record, ApprovalRecord) else dict(record)
+    _validate_schema(value, "approval_record.schema.json")
+    projection = value.get("projection", {})
+    if value.get("projection_fingerprint") != _canonical_projection_fingerprint(projection):
+        raise ValidationError("approval projection fingerprint does not match projection")
+    if value.get("displayed_fingerprint") != value.get("projection_fingerprint"):
+        raise ValidationError("displayed fingerprint must match the projection fingerprint")
+    if value.get("status") not in {"APPROVED", "REJECTED", "SUPERSEDED"}:
+        raise ValidationError("invalid approval status")
+    return value
+
+
 def _normalize_work_brief(value: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(value)
+    legacy_override = normalized.pop("execution_pattern_override", None)
+    if legacy_override is not None and "execution_intent" not in normalized:
+        patterns = (legacy_override,) if isinstance(legacy_override, str) else tuple(legacy_override)
+        normalized["execution_intent"] = ExecutionIntent(
+            required_patterns=tuple(str(pattern) for pattern in patterns),
+            source="legacy_execution_pattern_override",
+        ).to_dict()
+    if "execution_intent" in normalized:
+        normalized["execution_intent"] = _normalize_execution_intent(normalized["execution_intent"])
     stages = []
     for stage in value.get("stages", []):
         current = dict(stage)
+        legacy_stage_override = current.pop("execution_pattern_override", None)
+        if legacy_stage_override is not None and "execution_intent" not in current:
+            patterns = (legacy_stage_override,) if isinstance(legacy_stage_override, str) else tuple(legacy_stage_override)
+            current["execution_intent"] = ExecutionIntent(
+                required_patterns=tuple(str(pattern) for pattern in patterns),
+                source="legacy_execution_pattern_override",
+            ).to_dict()
+        if "execution_intent" in current:
+            current["execution_intent"] = _normalize_execution_intent(current["execution_intent"])
         needs = []
         for need in current.get("research_needs", []):
             if isinstance(need, str):
@@ -82,13 +131,41 @@ def _normalize_work_brief(value: dict[str, Any]) -> dict[str, Any]:
                 needs.append(normalized_need)
         current["research_needs"] = needs
         current.setdefault("skill_ids", [])
-        current.setdefault("execution_pattern_override", None)
         current.setdefault("limits", {})
         stages.append(current)
     normalized["stages"] = stages
     normalized.setdefault("horizon", "unspecified")
     normalized.setdefault("consequence_level", "standard")
     return normalized
+
+
+def _normalize_execution_intent(value: ExecutionIntent | dict[str, Any]) -> dict[str, Any]:
+    if isinstance(value, ExecutionIntent):
+        normalized = value.to_dict()
+    else:
+        normalized = dict(value)
+    for key in (
+        "required_patterns",
+        "preferred_patterns",
+        "required_participants",
+        "preferred_participants",
+        "required_capabilities",
+        "preferred_capabilities",
+    ):
+        normalized[key] = [str(item) for item in normalized.get(key, ())]
+    normalized["preferred_reasoning_controls"] = dict(normalized.get("preferred_reasoning_controls", {}))
+    normalized["source"] = str(normalized.get("source", "user"))
+    required = set(normalized["required_patterns"])
+    preferred = set(normalized["preferred_patterns"])
+    if required & preferred:
+        raise ValidationError("execution intent cannot require and prefer the same pattern")
+    return normalized
+
+
+def _canonical_projection_fingerprint(value: dict[str, Any]) -> str:
+    from foresight_os.persistence.ids import canonical_json_hash
+
+    return canonical_json_hash(value)
 
 
 def validate_evidence_candidate(candidate: EvidenceCandidate | dict[str, Any]) -> EvidenceCandidate:
