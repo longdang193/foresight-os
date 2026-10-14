@@ -14,13 +14,13 @@
     "frozen_optimization_comparison": "passed"
   },
   "optimization": {
-    "comparison": "work/closure-identity-performance/task-6/repeat-5/comparison.json",
+    "comparison": "work/closure-identity-performance/task-6/repeat-6/comparison.json",
     "baseline_commit": "368f58e4fe2ce77d02023713f76adf2aac6622f1",
-    "candidate_commit": "b723e50",
+    "candidate_commit": "dcced6e",
     "stability": "passed",
     "ordinal_pairs": 2,
-    "group_chat_p95_delta_pct": [-0.399, 2.279],
-    "overall_p95_delta_pct": [11.563, 7.056],
+    "group_chat_p95_delta_pct": [-0.218, 2.33],
+    "overall_p95_delta_pct": [7.464, 8.671],
     "thresholds_changed": false
   },
   "skills": {
