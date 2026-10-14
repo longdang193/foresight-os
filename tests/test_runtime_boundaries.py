@@ -78,6 +78,9 @@ def test_run_recipe_returns_typed_metrics_and_real_executor_calls():
     assert result.metrics.run_id == "run-test"
     assert len(result.outputs) == 2
     assert result.metrics.settled
+    assert result.metrics.runtime_status == "SETTLED"
+    assert result.metrics.persistence_status == "NOT_STARTED"
+    assert result.metrics.analysis_status == "NOT_STARTED"
 
 
 def test_budget_failure_is_rejected_before_dispatch_and_keeps_metrics():
@@ -87,6 +90,7 @@ def test_budget_failure_is_rejected_before_dispatch_and_keeps_metrics():
     assert caught.value.metrics.failure_class == FailureClass.BUDGET.value
     assert caught.value.metrics.settled
     assert caught.value.metrics.model_calls == 0
+    assert caught.value.metrics.runtime_status == "FAILED"
 
 
 @pytest.mark.parametrize(("limit", "expected_outputs", "expected_rounds"), ((1, 1, 1), (2, 2, 2), (4, 2, 2)))

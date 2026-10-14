@@ -41,6 +41,13 @@ Strategic Wayfinding is a host-facing procedure under
 under `src/foresight_os/skills/` and are selected by the controller; the host
 procedure is not a second packaged skill or manifest entry.
 
+Approved investigation execution is a separate host-facing procedure under
+`.agents/skills/foresight-execution/`. Wayfinding stops at human execution
+approval. Execution performs preflight, dispatches the approved recipe through
+the shared gate, persists provisional analytical results, verifies recovery, and
+stops again for analytical review and human acceptance. Runtime settlement is
+not analytical completion.
+
 ### 2. Controller and recipe
 
 The controller resolves policy into an `ExecutionRecipe`. A recipe names the
@@ -81,10 +88,23 @@ dispatch. Direct `run_recipe_async` calls remain a low-level primitive for
 tests and evaluation probes, not a public approval path.
 
 The workflow runtime executes each stage using the selected pattern and
-enforces the recipe limits. Stage receipts record input and policy fingerprints,
+enforces the recipe limits. Structured stage results are normalized through the
+approved output contract before they enter analytical state. The committer
+persists provisional state and returns a verified canonical result; the
+workflow is the sole writer of `StageReceipt`. Stage receipts record input and policy fingerprints,
 skill hashes, capability fingerprints, result references and hashes, commit
 status, and provenance completeness. A receipt is reusable only when its
 fingerprints and committed result evidence still match the current stage.
+
+Approved execution reports four independent outcome dimensions: runtime
+settlement, persistence, analytical review/acceptance, and each requested
+deliverable. A settled runtime may therefore report `PERSISTED` with
+`PENDING_REVIEW`, or a mixture of persisted and not-started deliverables; it
+must not infer completion from `settled=true`, process exit, or output count.
+Canonical typed persistence currently rejects concurrent stages during
+preflight because branch aggregation has no declared deterministic result
+contract. Low-level orchestration still supports concurrent probes without the
+approved committer.
 
 ## Analytical state
 

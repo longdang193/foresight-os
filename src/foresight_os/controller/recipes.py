@@ -76,6 +76,7 @@ class RecipeStage:
     partial_result_rule: str = ""
     reuse_policy: str = "reuse only committed, provenance-complete matching receipts"
     adaptation_policy: tuple[str, ...] = ()
+    result_contract: str = "analysis-stage-result/v1"
 
     def to_dict(self) -> dict[str, Any]:
         value = {
@@ -106,6 +107,7 @@ class RecipeStage:
             "partial_result_rule": self.partial_result_rule,
             "reuse_policy": self.reuse_policy,
             "adaptation_policy": list(self.adaptation_policy),
+            "result_contract": self.result_contract,
         }
         return value
 
@@ -139,6 +141,7 @@ class RecipeStage:
             partial_result_rule=str(value.get("partial_result_rule", "")),
             reuse_policy=str(value.get("reuse_policy", "reuse only committed, provenance-complete matching receipts")),
             adaptation_policy=tuple(value.get("adaptation_policy", ())),
+            result_contract=str(value.get("result_contract", "analysis-stage-result/v1")),
         )
 
 

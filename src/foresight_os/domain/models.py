@@ -196,6 +196,13 @@ class AnalysisState:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
+    def canonical_records(self) -> dict[str, dict[str, Any]]:
+        value = self.to_dict()
+        records: dict[str, dict[str, Any]] = {}
+        for collection in ("evidence", "calculations", "claims", "implications", "recommendations", "artifacts", "relationships"):
+            records.update({item["id"]: item for item in value[collection]})
+        return records
+
 
 @dataclass(frozen=True)
 class WorkStage:

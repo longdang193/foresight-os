@@ -7,7 +7,7 @@ from agent_framework.orchestrations import HandoffBuilder
 from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, RecipeName, RecipeStage, make_recipe
 from foresight_os.controller.budgets import BudgetState
 from foresight_os.persistence.ids import canonical_json_hash
-from foresight_os.runtime.workflow import _close_agents, _run_native_stage, run_recipe_async
+from foresight_os.runtime.workflow import CanonicalStageResult, _canonical_result_hash, _close_agents, _run_native_stage, run_recipe_async
 from foresight_os.runtime.metrics import RunMetrics
 
 
@@ -99,6 +99,33 @@ def test_admitted_native_execution_validates_the_approved_recipe_snapshot():
     )
 
     assert result.outputs
+
+
+def test_stage_context_binds_recipe_contract_and_structured_output_mode():
+    captured = {}
+
+    def committer(stage, output, context):
+        captured.update(context)
+        canonical = {"stage_id": stage.stage_id, "output": output}
+        return CanonicalStageResult(("canonical-1",), (_canonical_result_hash(canonical),), canonical)
+
+    recipe = _recipe((ExecutionPattern.SEQUENTIAL,))
+    asyncio.run(
+        run_recipe_async(
+            recipe,
+            "hello",
+            FakeChatClient(),
+            "contract-context",
+            {
+                "require_structured_output": True,
+                "canonical_result_committer": committer,
+            },
+        )
+    )
+
+    assert captured["result_contract"] == "analysis-stage-result/v1"
+    assert captured["require_structured_output"] is True
+    assert captured["structured_output_schema"]["json_schema"]["schema"]["additionalProperties"] is False
 
 
 def test_handoff_metrics_report_observed_transfer_not_recipe_shape():

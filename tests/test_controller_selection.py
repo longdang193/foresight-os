@@ -15,6 +15,7 @@ def test_controller_selects_bounded_analysis_review_recipe():
     assert recipe.max_correction_rounds == 1
     assert recipe.max_total_agent_calls == 3
     assert {role["purpose"] for role in recipe.roles} == {"execute", "review"}
+    assert all(stage.result_contract == "analysis-stage-result/v1" for stage in recipe.stages)
 
 
 def test_controller_scales_call_budget_to_cover_ordered_stages():

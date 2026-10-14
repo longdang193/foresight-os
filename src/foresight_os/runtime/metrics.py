@@ -77,6 +77,10 @@ class RunMetrics:
     failure_message: str | None = None
     failure_counts: dict[str, int] = field(default_factory=dict)
     settled: bool = False
+    runtime_status: str = "NOT_STARTED"
+    persistence_status: str = "NOT_STARTED"
+    analysis_status: str = "NOT_STARTED"
+    deliverable_status: dict[str, str] = field(default_factory=dict)
 
     def record_tool_call(self, kind: str = "local") -> None:
         self.tool_calls += 1

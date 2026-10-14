@@ -1,18 +1,80 @@
 from dataclasses import dataclass
+import os
 from pathlib import Path
+import tempfile
 from typing import Any
 
 from filelock import FileLock
 
 from foresight_os.domain.approval import AdaptationEnvelope, ApprovalStatus, approval_projection
 from foresight_os.controller.recipes import ExecutionRecipe
+from foresight_os.analysis.result_committer import ANALYSIS_STAGE_RESULT_CONTRACT, CanonicalResultCommitter, analysis_stage_result_schema
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.persistence.ids import canonical_json_hash
+from foresight_os.runtime.capabilities import CapabilityResolver, CapabilityUnavailableError
+from foresight_os.runtime.local_toolbelt import bind_local_toolbelt
 from foresight_os.runtime.workflow import run_recipe_async
 
 
 class ExecutionAdmissionError(ValueError):
     pass
+
+
+def _required_capability_ids(recipe: ExecutionRecipe) -> tuple[str, ...]:
+    values: list[str] = []
+    for stage in recipe.stages:
+        values.extend(str(item) for item in getattr(stage, "capabilities", ()))
+        for participant in getattr(stage, "participants", ()):
+            if isinstance(participant, dict):
+                values.extend(str(item) for item in participant.get("capability_ids", participant.get("capabilities", ())))
+    if not recipe.stages:
+        for participant in recipe.roles:
+            values.extend(str(item) for item in participant.get("capability_ids", participant.get("capabilities", ())))
+    return tuple(dict.fromkeys(item for item in values if item))
+
+
+def _assert_store_writable(store: AnalysisStore) -> None:
+    try:
+        store.root.mkdir(parents=True, exist_ok=True)
+        fd, path = tempfile.mkstemp(prefix=".execution-preflight-", dir=store.root)
+        os.close(fd)
+        Path(path).unlink(missing_ok=True)
+    except OSError as exc:
+        raise ExecutionAdmissionError(f"RESULT_PERSISTENCE_UNAVAILABLE: analysis store is not writable: {exc}") from exc
+
+
+def _preflight_recipe(store: AnalysisStore, recipe: ExecutionRecipe, run_context: dict[str, Any]) -> None:
+    _assert_store_writable(store)
+    for stage in recipe.stages:
+        contract = str(getattr(stage, "result_contract", ""))
+        if contract != ANALYSIS_STAGE_RESULT_CONTRACT:
+            raise ExecutionAdmissionError(f"unsupported result contract for stage {stage.stage_id}: {contract or 'missing'}")
+        if str(getattr(stage, "output_type", "")) != "typed-result":
+            raise ExecutionAdmissionError(f"stage {stage.stage_id} requires unsupported output type")
+        if getattr(stage, "pattern", None) is None:
+            raise ExecutionAdmissionError(f"stage {stage.stage_id} has no execution pattern")
+        pattern = getattr(getattr(stage, "pattern", None), "value", getattr(stage, "pattern", ""))
+        if str(pattern) == "concurrent":
+            raise ExecutionAdmissionError(
+                f"stage {stage.stage_id} uses unsupported concurrent pattern for canonical typed persistence"
+            )
+    required = _required_capability_ids(recipe)
+    if required:
+        context = {
+            **run_context,
+            "local_capabilities": {**bind_local_toolbelt(), **dict(run_context.get("local_capabilities", {}))},
+            "mcp_tools": dict(run_context.get("mcp_bindings", run_context.get("mcp_tools", {}))),
+            "human_approved": True,
+        }
+        try:
+            resolved = CapabilityResolver().resolve(required, context)
+        except (CapabilityUnavailableError, RuntimeError, ValueError) as exc:
+            raise ExecutionAdmissionError(f"capability preflight failed: {exc}") from exc
+        unavailable = [f"{key}: {item.reason}" for key, item in resolved.items() if not item.available]
+        if unavailable:
+            raise ExecutionAdmissionError(f"capability preflight failed: {'; '.join(unavailable)}")
+    if not isinstance(analysis_stage_result_schema(), dict):
+        raise ExecutionAdmissionError("structured output schema is unavailable")
 
 
 def classify_material_changes(before: dict[str, Any], after: dict[str, Any], envelope: AdaptationEnvelope) -> tuple[dict[str, Any], ...]:
@@ -45,7 +107,7 @@ class ExecutionGate:
     def __init__(self, store: AnalysisStore):
         self.store = store
 
-    def admit(self, *, prompt: str, run_id: str | None = None) -> ApprovedExecution:
+    def admit(self, *, prompt: str, run_id: str | None = None, run_context: dict[str, Any] | None = None) -> ApprovedExecution:
         with FileLock(str(self.store.lock_path)):
             if not self.store.brief_path.exists():
                 raise ExecutionAdmissionError("execution requires a persisted WorkBrief")
@@ -69,6 +131,7 @@ class ExecutionGate:
                 raise ExecutionAdmissionError("persisted recipe no longer matches the approved snapshot")
             if approval.investigation_id != brief.investigation_id:
                 raise ExecutionAdmissionError("approval investigation does not match the WorkBrief")
+            _preflight_recipe(self.store, recipe, dict(run_context or {}))
             return ApprovedExecution(
                 work_dir=self.store.root,
                 prompt=prompt,
@@ -90,7 +153,7 @@ class ExecutionGate:
         run_id: str | None = None,
         run_context: dict[str, Any] | None = None,
     ):
-        admission = self.admit(prompt=prompt, run_id=run_id)
+        admission = self.admit(prompt=prompt, run_id=run_id, run_context=run_context)
         with FileLock(str(self.store.lock_path)):
             current_approval = self.store.load_execution_approval()
             if current_approval is None or current_approval.status != ApprovalStatus.APPROVED or current_approval.projection_fingerprint != admission.approval_fingerprint:
@@ -105,6 +168,9 @@ class ExecutionGate:
             "run_fresh_stages": tuple(admission.run_decisions.get("run_fresh_stages", ())),
             "fallback_on_stale_reuse": admission.run_decisions.get("fallback_on_stale_reuse", "run_fresh"),
             "analysis_store": self.store,
+            "require_structured_output": True,
+            "structured_output_schema": analysis_stage_result_schema(),
+            "canonical_result_committer": CanonicalResultCommitter(self.store, self.store.load_brief().investigation_id),
         })
         return await run_recipe_async(admission.recipe, prompt, client, admission.run_id, context)
 

@@ -313,6 +313,11 @@ class AnalysisStore:
         path = self.pending_analysis_path if self.pending_analysis_path.exists() else self.analysis_path
         return self._load_path(path)
 
+    def load_accepted(self) -> AnalysisState:
+        if not self.analysis_path.exists():
+            raise FileNotFoundError(self.analysis_path)
+        return self._load_path(self.analysis_path)
+
     def _load_path(self, path: Path) -> AnalysisState:
         value = migrate_analysis_dict(json.loads(path.read_text(encoding="utf-8")))
         value = validate_analysis(value)

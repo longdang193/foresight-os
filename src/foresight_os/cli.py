@@ -175,19 +175,44 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "execute":
         try:
             import asyncio
-
             client = build_configured_client(args.env_file, args.config_file)
+        except (ImportError, OSError):
+            print(json.dumps({"status": "BLOCKED_EXTERNAL", "error": "execution requires configured provider credentials"}))
+            return 2
+        try:
             result = asyncio.run(execute_approved_investigation(args.work_dir, args.prompt, client, args.run_id))
         except ExecutionAdmissionError as exc:
-            print(json.dumps({"error": str(exc)}))
+            status = "FAILED" if "RESULT_PERSISTENCE_UNAVAILABLE" in str(exc) else "BLOCKED_INPUT"
+            print(json.dumps({"status": status, "error": str(exc)}, sort_keys=True))
             return 2
         except CapabilityUnavailableError:
             print(json.dumps({"status": "BLOCKED_EXTERNAL", "error": "required capability is unavailable"}))
             return 2
-        except (OSError, ValueError, ImportError):
-            print(json.dumps({"status": "BLOCKED_EXTERNAL", "error": "execution requires configured provider credentials"}))
+        except OSError as exc:
+            print(json.dumps({"status": "FAILED", "error": str(exc)}, sort_keys=True))
             return 2
-        print(json.dumps({"run_id": result.run_id, "outputs": len(result.outputs), "settled": result.metrics.settled}, sort_keys=True))
+        except ValueError as exc:
+            print(json.dumps({"status": "FAILED", "error": str(exc)}, sort_keys=True))
+            return 2
+        except RuntimeError as exc:
+            metrics = getattr(exc, "metrics", None)
+            payload = {
+                "status": getattr(metrics, "runtime_status", "FAILED"),
+                "error": str(exc),
+                "persistence_status": getattr(metrics, "persistence_status", "NOT_STARTED"),
+                "analysis_status": getattr(metrics, "analysis_status", "NOT_STARTED"),
+            }
+            print(json.dumps(payload, sort_keys=True))
+            return 2
+        print(json.dumps({
+            "run_id": result.run_id,
+            "outputs": len(result.outputs),
+            "settled": result.metrics.settled,
+            "runtime_status": result.metrics.runtime_status,
+            "persistence_status": result.metrics.persistence_status,
+            "analysis_status": result.metrics.analysis_status,
+            "deliverable_status": result.metrics.deliverable_status,
+        }, sort_keys=True))
         return 0
     if args.command in {"pause", "cancel"}:
         from foresight_os.runtime.orchestration import get_run_control

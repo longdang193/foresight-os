@@ -47,6 +47,24 @@ def test_skill_capability_denial_happens_before_agent_construction():
         )
 
 
+def test_factory_injects_recipe_bound_structured_output_schema():
+    captured = {}
+
+    class Client:
+        def as_agent(self, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+    schema = {"type": "json_schema", "json_schema": {"name": "test"}}
+
+    AgentFactory(Client()).create(
+        ParticipantConfig("source", "analyst", "calculate"),
+        {"require_structured_output": True, "structured_output_schema": schema},
+    )
+
+    assert captured["default_options"]["response_format"] == schema
+
+
 def test_stage_local_skills_do_not_leak_between_stages():
     class Agent:
         async def run(self, prompt):
