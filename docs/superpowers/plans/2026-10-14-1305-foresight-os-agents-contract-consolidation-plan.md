@@ -124,6 +124,10 @@ procedures, inventories, or private governance.
   `C:\Users\HOANG PHI LONG DANG\.codex\worktrees\documentation-consolidation\foresight-OS`.
 - Approved-plan SHA-256: `51C092597C5724DC5721F4381B717A8D073CA7858E652F9A1F40CC98F57232DB`.
 - Initial plan checkpoint commit: `740579dc16fee13f61151d1c295bac37e817958f`.
+- Task 0 accepted: the three instruction files are byte-identical; no tracked
+  generator or alternate canonical source exists; all filename/generator
+  references are intentional records in this plan; and separate `--follow`
+  history checks resolve to the same original starter-kit commit.
 
 ## Acceptance Criteria
 
@@ -156,8 +160,8 @@ procedures, inventories, or private governance.
 
 | Task | Status | Executor | Outcome | Dependencies | Accepted proof | Blocker | Next action |
 |---|---|---|---|---|---|---|---|
-| 0. Establish contract provenance and baseline | proposed | unresolved | Confirm `AGENTS.md` ownership, adapter-file references, and current line/content baseline | None | pending | none | inspect generator/source and references |
-| 1. Rewrite the ForesightOS project contract | proposed | unresolved | Compact repo-specific `AGENTS.md` with nine required sections and no generic governance | Task 0 | pending | none | write canonical contract |
+| 0. Establish contract provenance and baseline | completed | lead | Confirm `AGENTS.md` ownership, adapter-file references, and current line/content baseline | None | verified | none | rewrite canonical contract |
+| 1. Rewrite the ForesightOS project contract | active | lead | Compact repo-specific `AGENTS.md` with nine required sections and no generic governance | Task 0 | pending | none | write canonical contract |
 | 2. Remove duplicate adapter files and stale references | proposed | unresolved | Delete `CLAUDE.md` and `GEMINI.md`; reconcile any tracked consumers | Tasks 0–1 | pending | none | delete files after canonical contract is accepted |
 | 3. Verify contract, deletion, and scope | proposed | unresolved | Fresh proof that only the approved instruction surfaces changed | Tasks 1–2 | pending | none | run focused and broad checks |
 
