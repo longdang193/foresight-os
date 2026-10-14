@@ -1,228 +1,146 @@
-# Foresight OS v0.1
+# ForesightOS
 
-Foresight OS is a small evidence-aware strategic reasoning prototype. Its
-runtime vocabulary is intentionally separate from the build document:
+ForesightOS is an evidence-aware strategic reasoning prototype. It turns a
+decision question and structured source material into traceable claims,
+implications, recommendations, and local artifacts while preserving review,
+revision, and invalidation state.
 
-`Investigation → Work Brief → Execution Recipe → Run → Analysis State → Artifact`
+## What it does
 
-The current prototype provides:
+- Reads bounded local workbook or CSV inputs and records source locators.
+- Selects a bounded execution recipe for direct, sequential, concurrent,
+  handoff, or group-chat work.
+- Resolves reusable skills and runtime capabilities without merging their
+  responsibilities.
+- Persists analytical state, revisions, calculations, relationships, review
+  records, and invalidation metadata.
+- Generates an evidence-linked executive report from committed state.
+- Keeps optional web, MCP, Power BI, and presentation boundaries separate from
+  the provider-free local analysis path.
 
-- a synthetic workbook evaluation case;
-- validated Work Brief and Analysis State persistence in `brief.md` and
-  `analysis.json`;
-- native Microsoft Agent Framework Direct, Sequential, Concurrent, Handoff, and
-  Group Chat pattern contracts with bounded Controller recipes;
-- explicit budget exhaustion and settled run metrics;
-- semantic capability resolution with participant-scoped tools and explicit
-  unavailable/approval results;
-- first-class `web_search` capability with provider adapters, public-scope
-  authorization, typed evidence candidates, and sanitized provenance;
-- bounded `page_retrieval` with SSRF checks and adapter-issued retrieval proof;
-- deterministic Analyst toolbelt bindings for CSV/XLSX inspection, table
-  analysis, calculations, graph context, and domain validation;
-- read-only PBIP/PBIR project inspection with semantic-model metadata,
-  report-page/visual discovery, and source-hash provenance;
-- mandatory multi-sheet XLSX release proof covering hidden content, formulas
-  versus cached values, dates/errors, merged headers, cross-sheet references,
-  provenance, scenarios, cancellation limits, and unchanged source bytes;
-- provenance-bearing `EvidenceCandidate` normalization before durable evidence;
-- dependency invalidation, fresh-process continuation, and stale-artifact
-  protection;
-- relation-aware, bounded NetworkX graph context rebuilt from durable
-  relationships;
-- nine bundled analytical and presentation skills with manifest hashes and stage-local
-  injection; no runtime skill downloads;
-- immutable review records bound to material-input fingerprints and derived
-  finding views; accepted recommendations require a current accepted review;
-- committed stage-cache reuse that preserves dependency order and skips new
-  model/tool calls for complete hits;
-- one local client adapter over the canonical commands.
+ForesightOS does not treat a model response or an external provider result as
+accepted evidence automatically. Missing inputs, unavailable providers, failed
+checks, and unresolved review issues remain explicit.
 
-Provider/model execution is proven through the configured custom `9router`
-OpenAI-compatible endpoint with one bounded structured-output probe.
-Pattern support is separate from measurement: evaluation results tune defaults
-and budgets but do not disable an implemented pattern. The configured custom
-`9router` provider remains the live-probe boundary.
+## Five-minute local quickstart
 
-The first-class `web_search` capability accepts a provider adapter through
-`FORESIGHT_WEB_SEARCH_URL` and optional `FORESIGHT_WEB_SEARCH_TOKEN`. The
-default `json-post` provider accepts a JSON POST request with `query`,
-`max_results`, and optional `freshness`, and returns
-`{"results": [{"title", "url", "snippet"}]}`. A local SearXNG instance can be
-selected explicitly with `FORESIGHT_WEB_SEARCH_PROVIDER=searxng`; point the
-same URL at its base URL, such as `http://127.0.0.1:8888`, and optionally set
-`FORESIGHT_SEARXNG_CATEGORIES` or `FORESIGHT_SEARXNG_LANGUAGE`. Search results
-are discovery candidates only: a source must pass bounded
-`page_retrieval` and carry adapter-issued retrieval proof before it can enter
-durable analysis state. Source credibility remains a separate human decision.
-
-The semantic registry contains `web_search`, `page_retrieval`, `web_crawl`,
-`spreadsheet_read`, `data_analysis`, `calculation`, `graph_context`, and
-`domain_validation`, and `powerbi_project_read`, plus explicitly unavailable `document_read`,
-  `internal_knowledge`, and `artifact_generation` follow-ups.
-
-## Selecting analytical and presentation skills
-
-Select only the methods needed for the current stage through
-`RecipeStage.skill_ids` or `ParticipantConfig.skill_ids`. Each bundled skill
-defines inputs, an actionable workflow, an output contract, and completion
-checks. The manifest owns versions, hashes, and required capabilities; skills
-do not grant tools, accept findings, or authorize external writes.
-
-| Skill | Expected work product |
-| --- | --- |
-| `source-appraisal` | Claim-specific support boundaries, source independence, and limitations |
-| `key-assumptions-check` | Material assumptions, sensitivity, and observable disconfirmation conditions |
-| `quantitative-sanity-check` | Reproducible numerical checks, formula trust, and discrepancy explanations |
-| `red-team-claim` | Typed objections, alternative explanations, and resolving evidence |
-| `abstain-or-escalate` | A bounded disposition, useful partial results, and an actionable next step |
-| `scenario-planning` | Distinct plausible futures, comparable options, and monitoring signposts |
-| `presentation-storytelling` | A decision-focused slide brief tied to current findings and sources |
-| `evidence-visualization` | Traceable chart/table values, honest scales, uncertainty, and citations |
-| `slide-design-review` | Per-slide content/design corrections and explicit verification status |
-
-For presentation preparation, select `presentation-storytelling`; add
-`evidence-visualization` when a quantitative display helps the decision, and
-use `slide-design-review` for the final content/rendering review. These methods
-preserve the fixed six-slide compiler contract. Visual instructions are a
-derived handoff to the renderer, not additional `PresentationSpec` fields.
-Visible source labels accompany factual key points; notes preserve full
-locators and calculation references. An unavailable render is reported as
-unverified, and a source ID alone does not prove a claim or a chart is correct.
-
-Skill content changes receive new versions and hashes. Re-run the selected
-methods when continuing an investigation under an updated skill version; old
-reviews remain attributable to their recorded method identity. Registry and
-package tests prove resource integrity, not model reasoning quality.
-
-The skill exercise evaluator keeps those claims separate. Structural mode is
-offline and checks the tracked five-case reference contract, manifest identity,
-content hashes, fixture routing boundaries, and prompt-size measurements:
+Requirements: Python 3.11 or newer and the project dependencies.
 
 ```text
-PYTHONPATH=src py evaluation/probes/run_skill_exercise_evaluation.py --mode structural --exercise-root evaluation/cases --skill-fixture-root evaluation/skills --output-root work/skill-layer-hardening-20261014/final/structural
+python -m pip install -e .
+python -m foresight_os.cli --help
+python -m foresight_os.cli analyze --workbook evaluation/cases/case-001/workbook.csv --work-dir work/docs-quickstart --accept
+python -m foresight_os.cli report --work-dir work/docs-quickstart
 ```
 
-Provider mode is an optional second tier. It uses the approved provider
-configuration only when available; missing credentials or runtime dependencies
-are recorded as `BLOCKED_EXTERNAL`, never simulated as quality evidence:
+The local fixture path requires no provider authentication. The analysis command
+returns an accepted status and writes state under `work/docs-quickstart/`.
+The report command writes:
 
 ```text
-PYTHONPATH=src py evaluation/probes/run_skill_exercise_evaluation.py --mode provider --exercise-root evaluation/cases --skill-fixture-root evaluation/skills --extended-exercise-root data/exercise --output-root work/skill-layer-hardening-20261014/final/provider
+work/docs-quickstart/artifacts/executive-report.md
 ```
 
-Reports separate deterministic/reference checks, provider/runtime measurements,
-and human/rubric judgments. Human correction effort remains `not_measured`
-unless a human assessment is actually performed. The optional `data/exercise/`
-workbook tier is `BLOCKED_INPUT` when absent; these results do not resolve the
-separate Group Chat p95 follow-up.
-
-## Presentation and Canva boundary
-
-The local presentation compiler derives a deterministic six-slide
-`PresentationSpec` from accepted `AnalysisState` findings. The spec carries its
-analysis revision, provenance IDs, qualifications, and content hash; it does
-not create a second analytical or artifact state model. `presentation_spec`
-artifacts are linked to their source findings through the existing
-`produces` relationships and become stale through the normal invalidation
-path.
-
-Canva remains an optional external boundary. No connector is activated by
-default, provisional specs cannot be published, and external mutation requires
-explicit human approval. A connected adapter returns only durable provider,
-design, revision, spec-hash, confirmation, and verification-time fields;
-preview or export URLs are transient and are not stored as analytical truth.
-
-Verification runs accept a disposable `--output-root`; preserved probe outputs
-under `work/` are not used as evaluation storage or rewritten by default.
-
-The second client is a v0.2 stretch item. All clients must consume the same
-durable state and must not own analytical truth.
-
-External verification is tiered: deterministic local checks are release
-evidence, the disposable MCP fixture is a nightly boundary check, and the
-hosted-web probe is a health check for the first-class `web_search` capability.
-Provider-backed search requires explicit environment configuration; unavailable
-external providers remain `BLOCKED_EXTERNAL` and are reported separately from
-implementation verification.
-
-The `scheduled-evidence` workflow repeats the structural skill evaluation,
-clean-wheel smoke, and release optimization measurement on a weekly schedule or
-manual dispatch. Provider-backed evaluation is a separate opt-in job guarded by
-the protected `provider-evidence` environment and is disabled by default.
-
-The `scheduled-evidence` workflow repeats the structural skill evaluation,
-clean-wheel smoke, and release optimization measurement on a weekly schedule or
-manual dispatch. Provider-backed evaluation is a separate opt-in job guarded by
-the protected `provider-evidence` environment and is disabled by default.
-
-## External Signal MCP Integrations
-
-Foresight exposes three hosted, read-only signal providers as MAF-agent tools
-through the vendor-neutral `technology_signals`, `market_signals`, and
-`macro_signals` capabilities. The controller never calls these providers
-directly. Credentials are read at run time and are never written to receipts.
-
-- **GitHub MCP** — technology, repository, ecosystem, and competitor signals;
-  configure `GITHUB_MCP_TOKEN` or use the local `gh` keyring only for a probe.
-- **Alpha Vantage MCP** — market and financial foresight; configure
-  `ALPHAVANTAGE_API_KEY`.
-- **FRED MCP Connector** — macroeconomic and quantitative foresight; configure
-  the OAuth bearer token in `FRED_MCP_TOKEN` plus a bounded read operation for
-  the live probe. Activation also requires `FRED_MCP_READ_TOOL`; only that
-  explicitly allowlisted tool is exposed to the MAF agent.
-
-Run `python evaluation/probes/run_external_signal_probe.py --output-root
-work/toolbelt-probes` to verify MAF injection, remote discovery, a bounded
-read-only call, result sanitization, and scope cleanup. Missing credentials are
-reported as `BLOCKED_EXTERNAL`; a successful transport with a public demo key
-is not considered production credential readiness.
-
-### Local environment setup
-
-Use the committed `.env.example` as the variable inventory for local work:
+To continue after changed evidence:
 
 ```text
-copy .env.example .env
+python -m foresight_os.cli continue --work-dir work/docs-quickstart --changed-id claim-northern-demand-growth --reason "Updated source evidence"
 ```
 
-The runtime reads inherited environment variables and does not load `.env`
-automatically. This keeps production behavior explicit: local shells may load
-`.env` through their own tooling, while CI and deployments inject secrets from
-their secret manager. Do not commit `.env`; it is ignored by Git. MCP
-subprocesses must receive the same variables through their launcher rather than
-assuming that a parent application's `.env` loader is inherited.
+See [Getting Started](docs/getting-started.md) for expected outputs, state
+inspection, troubleshooting, and the difference between the local CSV path and
+optional XLSX, Power BI, or provider boundaries.
 
-## MAF-Agent Web Crawling
+## Architecture at a glance
 
-Crawl4AI is activated as the optional `web_crawl` capability for MAF agents. It
-provides bounded crawling for company reports, policy websites, and hard-to-extract
-pages. Crawl results pass public-destination validation, provenance normalization,
-read-only authorization, raw-payload stripping, and scope-owned cleanup before
-they can become durable evidence.
-External MCP results must enter the same sanitized evidence boundary as web
-search: no raw payloads in durable analysis state, explicit source identity,
-retrieval time, query provenance, read-only authorization, and independent
-`VERIFIED`/`BLOCKED_EXTERNAL`/`FAILED` receipts.
+```text
+WorkBrief
+  -> controller policy and ExecutionRecipe
+  -> RecipeStage
+  -> participants + skills + capabilities
+  -> bounded workflow and stage receipts
+  -> AnalysisState
+  -> review and finding views
+  -> report or optional presentation boundary
+```
 
-## Optimization release evidence
+The `WorkBrief` captures the decision question, objective, horizon, constraints,
+stages, participants, and research needs. The controller turns it into a
+recipe. Each stage carries its pattern, participants, skill IDs, dependencies,
+limits, and expected result. The runtime resolves capabilities and records
+fingerprints before executing.
 
-The optimization probe records corrected-schema baseline and release receipts under ignored disposable roots. Receipts separate model calls, local/MCP/external tool calls, token counters, accepted-finding-normalized economics, pattern p95 latency components, and portable resource snapshots. The comparator fails closed for missing evidence, workload/schema/denominator mismatches, monotonic leak indicators, and threshold regressions.
+`AnalysisState` is the durable analytical owner. It contains evidence, claims,
+implications, recommendations, calculations, relationships, artifacts,
+revisions, review records, and invalidation information. `AnalysisStore` writes
+validated state atomically and keeps pending mutations separate from accepted
+revisions.
 
-- Baseline: `python evaluation/probes/run_optimization_probe.py --mode baseline --output work/optimization-baseline/receipt.json`
-- Release: `python evaluation/probes/run_optimization_probe.py --mode release --output work/optimization-release/receipt.json`
-- Acceptance is frozen at two warmups and ten measured runs per MAF pattern, with p95/event-loop regressions capped at 20%, peak allocation at 15%, no tool-call increase per accepted finding, and a 100-run no-growth soak.
-- Compare receipts with `python evaluation/probes/compare_optimization_receipts.py --baseline work/optimization-plan/baseline/receipt.json --release work/optimization-plan/release/receipt.json`.
-- `CapabilityScope` owns run-scoped semaphores, bounded blocking execution, cancellation settlement, workbook reuse, and cleanup. Native MCP tools use public Agent Framework middleware; local XLSX reads remain read-only and preserve source-path provenance.
-- Browser crawling keeps certificate validation enabled, validates each destination and same-host DNS change, and uses native WebSocket/service-worker controls.
+Reports are derived from committed state. Optional presentations are revision-
+bound and cannot be sent to an external destination without the existing human
+approval and durable receipt boundary.
 
-## Power BI project files
+See [Architecture](docs/architecture.md) for the runtime flow and state model.
 
-The `powerbi_project_read` capability and `inspect-powerbi` command accept
-source-controlled `.pbip` projects, `.pbir` report definitions, or a directory
-containing either. They read report definition paths plus TMDL/BIM
-semantic-model metadata and return deterministic file hashes for provenance.
-This boundary is read-only and metadata-only: it does not parse `.pbix`
-binaries, execute DAX, or load model data. Those operations require a
-connected Power BI Desktop, Analysis Services/XMLA, Fabric, or Power BI
-Modeling MCP boundary.
+## Evidence and verification boundary
+
+The repository distinguishes local structural proof from model or provider
+quality. Common statuses are:
+
+- `VERIFIED`: required deterministic checks passed;
+- `FAILED`: an attempted operation or acceptance check failed;
+- `BLOCKED_INPUT`: approved inputs are absent or incomplete;
+- `BLOCKED_EXTERNAL`: a provider or protected external boundary is unavailable;
+- `not_measured`: a required human or performance measurement was not collected.
+
+Structural checks can prove schemas, hashes, persistence, invalidation, fixture
+determinism, and boundary handling. They do not prove strategic usefulness or
+model reasoning quality. Evaluation thresholds and durable receipts live with
+the evaluation sources, not in this README.
+
+## Documentation
+
+Use [the documentation index](docs/README.md) for the maintained user-facing
+guides:
+
+- [Getting Started](docs/getting-started.md)
+- [Architecture](docs/architecture.md)
+- [Skills and Capabilities](docs/skills.md)
+- [Evidence and Evaluation](docs/evidence-and-evaluation.md)
+- [Configuration](docs/configuration.md)
+- [Extending ForesightOS](docs/extending.md)
+
+The repository also retains historical plans and durable evidence under
+`docs/intent/` and `docs/superpowers/`. Those records remain source-specific and
+are not duplicated into onboarding pages.
+
+## Repository map
+
+```text
+src/foresight_os/       runtime, domain, controller, persistence, artifacts
+evaluation/              frozen cases, rubrics, probes, and reports
+tests/                   unit and contract tests
+docs/                    maintained user guides and durable project records
+schemas/                 checked-in schema inputs
+scripts/                 repository maintenance helpers
+```
+
+The implementation and tests are authoritative when this overview and source
+behavior differ.
+
+## Development checks
+
+Run the full test suite from the repository root:
+
+```text
+python -m pytest -q
+python -m compileall -q src tests evaluation
+```
+
+For configuration, use `.env.example` as the variable inventory. The runtime
+reads inherited environment variables; it does not automatically load `.env`.
+Keep credentials out of source, state, receipts, and public documentation.
+
+For contribution workflows, start with [Extending ForesightOS](docs/extending.md)
+and keep new behavior inside its existing owner rather than adding a parallel
+registry, store, or evidence format.
