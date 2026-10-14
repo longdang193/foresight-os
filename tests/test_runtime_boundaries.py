@@ -1,15 +1,17 @@
 import asyncio
+import inspect
 import time
 from types import SimpleNamespace
 import pytest
 
-from agent_framework import Agent, ChatResponse, ChatResponseUpdate, Content, Message, ResponseStream
+from agent_framework import Agent, ChatResponse, ChatResponseUpdate, Content, FunctionTool, Message, ResponseStream
 from foresight_os.controller.recipes import ExecutionPattern, RecipeName, ExecutionRecipe, RecipeStage, make_recipe
 from foresight_os.runtime.metrics import BudgetExceededError, FailureClass, RunMetrics
-from foresight_os.runtime.capabilities import CapabilityDefinition, ExecutionMode, ForesightFunctionMiddleware, ScopeOwnership, CapabilityScope, instrument_tool
+from foresight_os.runtime.capabilities import CapabilityDefinition, CapabilityUnavailableError, ExecutionMode, ForesightFunctionMiddleware, ScopeOwnership, CapabilityScope, instrument_tool
 from foresight_os.controller.budgets import BudgetState
 from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
 from foresight_os.runtime.workflow import run_recipe_async
+from foresight_os.runtime.local_toolbelt import data_analysis, spreadsheet_read
 
 
 class FakeClient:
@@ -208,7 +210,7 @@ def test_stage_capability_override_is_required_at_dispatch():
         stages=(stage,),
     )
 
-    with pytest.raises(RuntimeError, match="capabilities unavailable"):
+    with pytest.raises(CapabilityUnavailableError, match="capabilities unavailable"):
         asyncio.run(run_recipe_async(recipe, "find signals", FakeClient()))
 
 
@@ -234,6 +236,30 @@ def test_tool_budget_fails_before_dispatch_and_reports_budget():
     assert metrics.tool_calls == 1
     assert metrics.budget_failures == 1
     assert metrics.tool_failures == 0
+
+
+@pytest.mark.parametrize(
+    ("tool", "tool_name", "public_parameters"),
+    [
+        (spreadsheet_read, "spreadsheet_read", {"source", "selection", "limits"}),
+        (data_analysis, "data_analysis", {"table", "operation", "limits"}),
+    ],
+)
+def test_instrumented_local_tool_hides_host_only_parameters_from_model_schema(tool, tool_name, public_parameters):
+    wrapped = instrument_tool(
+        tool,
+        CapabilityDefinition(tool_name, "local_deterministic"),
+        {},
+    )
+
+    parameters = inspect.signature(wrapped).parameters
+    assert "cancel_check" not in parameters
+    assert "_cache" not in parameters
+    assert set(parameters) == public_parameters
+
+    function_tool = FunctionTool(name=tool_name, func=wrapped)
+    schema = function_tool.parameters()
+    assert set(schema["properties"]) == public_parameters
 
 
 def test_tool_semaphore_enforces_declared_parallelism():

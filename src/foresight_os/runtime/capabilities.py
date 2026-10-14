@@ -17,6 +17,10 @@ class CapabilityDecision(StrEnum):
     UNSUPPORTED = "UNSUPPORTED"
 
 
+class CapabilityUnavailableError(RuntimeError):
+    """Raised when an admitted participant cannot resolve a required capability."""
+
+
 class CapabilityBindingKind(StrEnum):
     TOOL = "TOOL"
     FACTORY = "FACTORY"
@@ -415,6 +419,14 @@ def instrument_tool(tool: Any, definition: CapabilityDefinition, context: Mappin
     async def invoke(*args: Any, **kwargs: Any) -> Any:
         return await dispatch(*args, **kwargs)
 
+    signature = inspect.signature(tool)
+    invoke.__signature__ = signature.replace(
+        parameters=[
+            parameter
+            for parameter in signature.parameters.values()
+            if parameter.name not in {"cancel_check", "_cache"}
+        ]
+    )
     setattr(invoke, "__foresight_instrumented__", True)
     setattr(invoke, "__foresight_original_callable__", original)
     setattr(invoke, "capability_id", definition.id)

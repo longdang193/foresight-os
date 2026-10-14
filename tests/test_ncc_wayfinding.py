@@ -46,12 +46,23 @@ def _brief_from_fixture() -> WorkBrief:
         horizon=value["horizon"],
         consequence_level=value["consequence_level"],
         user_preferences=value["user_preferences"],
+        execution_intent=ExecutionIntent(
+            required_patterns=tuple(value.get("execution_intent", {}).get("required_patterns", [])),
+            preferred_patterns=tuple(value.get("execution_intent", {}).get("preferred_patterns", [])),
+            required_participants=tuple(value.get("execution_intent", {}).get("required_participants", [])),
+            preferred_participants=tuple(value.get("execution_intent", {}).get("preferred_participants", [])),
+            required_capabilities=tuple(value.get("execution_intent", {}).get("required_capabilities", [])),
+            preferred_capabilities=tuple(value.get("execution_intent", {}).get("preferred_capabilities", [])),
+            preferred_reasoning_controls=value.get("execution_intent", {}).get("preferred_reasoning_controls", {}),
+            source=value.get("execution_intent", {}).get("source", "user"),
+        ) if value.get("execution_intent") else None,
     )
 
 
 def test_ncc_fixture_round_trips_through_canonical_execution_path(tmp_path):
     brief = _brief_from_fixture()
-    assert brief.execution_intent is None
+    assert brief.execution_intent.required_patterns == ("sequential",)
+    assert brief.execution_intent.required_capabilities == ("spreadsheet_read",)
     assert all(stage.execution_intent is None for stage in brief.stages)
     assert [stage.stage_id for stage in brief.stages] == ["source-audit", "category-screen", "channel-screen", "joint-validation", "challenge-synthesis"]
     assert brief.stages[3].dependencies == ["category-screen", "channel-screen"]
@@ -68,8 +79,12 @@ def test_ncc_fixture_round_trips_through_canonical_execution_path(tmp_path):
     rendered_approval = render_approval_markdown(package, detailed=True)
 
     assert loaded == brief
+    assert all("artifact_generation" not in stage.capabilities for stage in recipe.stages)
+    assert recipe.stages[-1].capabilities == ("domain_validation", "spreadsheet_read")
     assert "Trad.Trade" in rendered_brief
     assert "conditional growth bridge" in rendered_brief
+    assert "Required patterns: sequential" in rendered_brief
+    assert "Required capabilities: spreadsheet_read" in rendered_brief
     assert "category-screen" in rendered_approval
     assert "joint-validation" in rendered_approval
     assert "map.md" not in rendered_brief

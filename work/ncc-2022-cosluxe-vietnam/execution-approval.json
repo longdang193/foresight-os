@@ -1,0 +1,706 @@
+{
+  "approval_source": "local_cli",
+  "approved_at": "2026-10-14T21:43:30.806669+00:00",
+  "approver_label": "local-user",
+  "displayed_fingerprint": "e30a7cf09dc59b73291c8e34437c1679867354c51d128498d75f4193a5141a58",
+  "investigation_id": "ncc-2022-cosluxe-vietnam-entry",
+  "projection": {
+    "adaptation_envelope": {
+      "allowed_operations": [
+        "bounded_retry",
+        "reduced_concurrency",
+        "dependency_safe_topology_reduction"
+      ],
+      "compatible_participant_substitution": true,
+      "dependency_safe_topology_reduction": true,
+      "evidence_reuse": true,
+      "fallback_on_stale_reuse": "stop",
+      "max_concurrency_reduction": null,
+      "max_retries": 1
+    },
+    "brief": {
+      "assumptions": [
+        "Vietnam entry begins in 2023 and stable-growth planning begins from 2024 onward.",
+        "Workbook facts retain their stated source, period, units, and dummy-case status.",
+        "First entry category means the initial priority category, not exclusion of the remainder of the portfolio.",
+        "Offline and ecommerce measures are not comparable until definitions, periods, and units are normalized.",
+        "The 8% growth ambition is a planning target, not an observed result."
+      ],
+      "consequence_level": "high",
+      "current_direction": "Build a traceable category-by-channel scorecard and keep any recommendation provisional until category growth, portfolio fit, consumer relevance, channel dynamics, competitive intensity, and execution constraints are reconciled.",
+      "decision_question": "Which Personal Care category should Cosluxe Nature enter first in Vietnam, and which channels should it prioritize across 2023-2025 to support stable growth of at least 8% from 2024 onward?",
+      "desired_deliverables": [
+        "A traceable category-attractiveness screen identifying a provisional first-entry category and its evidence.",
+        "A three-year channel-prioritization and phasing recommendation for 2023-2025.",
+        "Target consumer, price-tier, and premium-natural positioning hypotheses with explicit assumptions.",
+        "A conditional growth bridge showing whether the proposed category-channel choices could support the 8% planning target from 2024 onward.",
+        "Risks, evidence gaps, trigger conditions, and an executive presentation outline within the case's suggested maximum of 20 slides."
+      ],
+      "execution_intent": {
+        "preferred_capabilities": [],
+        "preferred_participants": [],
+        "preferred_patterns": [],
+        "preferred_reasoning_controls": {},
+        "required_capabilities": [
+          "spreadsheet_read"
+        ],
+        "required_participants": [],
+        "required_patterns": [
+          "sequential"
+        ],
+        "source": "wayfinding"
+      },
+      "horizon": "2023 entry; 2023-2025 channel plan; stable-growth planning from 2024 onward",
+      "investigation_id": "ncc-2022-cosluxe-vietnam-entry",
+      "next_useful_step": "Normalize MAT TY versus MAT YA and MAT 2YA measures, reconcile them with channel and consumer evidence, and open the category and channel decision questions for review.",
+      "open_dependencies": [
+        "Confirm launch budget, margin, supply, distribution, and portfolio-cannibalization constraints with the client.",
+        "Confirm whether the recommendation optimizes revenue, profit, market share, reach, or a weighted combination.",
+        "Confirm acceptable external desk-research scope and evidence-quality threshold for claims beyond the workbook.",
+        "Reconcile category definitions and channel boundaries across the named workbook sheets.",
+        "Validate whether the 2023-2025 horizon and 2024 growth baseline match the client's planning calendar."
+      ],
+      "scope": [
+        "Vietnam Personal Care category performance in offline channels using MAT 2YA, MAT YA, and MAT TY measures ending September 2022.",
+        "Vietnam Personal Care ecommerce category growth, new launches, and survival of new launches.",
+        "Vietnam consumer price-tier movement, essential and routine category perceptions, channel penetration, and shopping frequency.",
+        "Vietnam traditional-trade regional and urban-rural dynamics, modern-trade store universe, and channel value sales.",
+        "Cosluxe Nature portfolio focus, premium image, and natural-ingredient positioning as stated in the case materials."
+      ],
+      "stages": [
+        {
+          "dependencies": [],
+          "expected_result": "A source and metric dictionary with observed-versus-derived labels and unresolved comparability issues.",
+          "limits": {},
+          "objective": "Inventory workbook sources, definitions, periods, units, and comparability limits before calculating attractiveness.",
+          "participants": [
+            "analyst"
+          ],
+          "research_needs": [
+            {
+              "kind": "STRUCTURED_DATA",
+              "query": "Inspect the Case and Glossary sheets for business objectives, category definitions, source notes, and period conventions.",
+              "source_hint": "data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx; sheets Case and Glossary"
+            },
+            {
+              "kind": "STRUCTURED_DATA",
+              "query": "Inventory measures, units, and source notes across Macro & FMCG, Personal Care, Consumer, Channel Dynamic, Trad.Trade, Modern Trade, and Ecommerce.",
+              "source_hint": "data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx; sheets Macro & FMCG, Personal Care, Consumer, Channel Dynamic, Trad.Trade, Modern Trade, Ecommerce"
+            },
+            {
+              "kind": "VALIDATION",
+              "query": "Confirm whether offline, ecommerce, value, volume, store, penetration, and frequency measures can be compared directly.",
+              "source_hint": "data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx; source notes and headers"
+            },
+            {
+              "kind": "STRUCTURED_DATA",
+              "query": "Explicitly decide whether the hidden Others sheet is included in the first-pass evidence boundary.",
+              "source_hint": "data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx; hidden sheet Others"
+            }
+          ],
+          "skill_ids": [],
+          "stage_id": "source-audit",
+          "subtasks": []
+        },
+        {
+          "dependencies": [
+            "source-audit"
+          ],
+          "expected_result": "A reproducible category scorecard with sensitivity to alternative weights and explicit unresolved assumptions.",
+          "limits": {},
+          "objective": "Compare candidate Personal Care categories on growth, scale, consumer relevance, portfolio fit, and competitive or launch signals.",
+          "participants": [
+            "analyst"
+          ],
+          "research_needs": [
+            {
+              "kind": "QUANTITATIVE_ANALYSIS",
+              "query": "Calculate MAT TY versus MAT YA and MAT 2YA growth, scale, and category contribution for candidate categories.",
+              "source_hint": "data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx; sheet Personal Care"
+            },
+            {
+              "kind": "QUANTITATIVE_ANALYSIS",
+              "query": "Compare ecommerce growth, new-launch intensity, and survival of new launches by candidate category.",
+              "source_hint": "data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx; sheet Ecommerce"
+            },
+            {
+              "kind": "EXISTING_EVIDENCE",
+              "query": "Connect consumer essentiality, face or body care relevance, price-tier movement, and Cosluxe portfolio fit to category hypotheses.",
+              "source_hint": "data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx; sheets Consumer and Case"
+            }
+          ],
+          "skill_ids": [],
+          "stage_id": "category-screen",
+          "subtasks": []
+        },
+        {
+          "dependencies": [
+            "source-audit"
+          ],
+          "expected_result": "A phased channel recommendation linked to shopper reach, frequency, store economics, regional dynamics, and category fit.",
+          "limits": {},
+          "objective": "Determine which traditional trade, modern trade, and ecommerce channels should lead, follow, or support the entry plan across 2023-2025.",
+          "participants": [
+            "analyst"
+          ],
+          "research_needs": [
+            {
+              "kind": "QUANTITATIVE_ANALYSIS",
+              "query": "Compare Personal Care value sales and growth across modern trade, traditional trade, and ecommerce.",
+              "source_hint": "data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx; sheets Channel Dynamic, Trad.Trade, Modern Trade, Ecommerce"
+            },
+            {
+              "kind": "EXISTING_EVIDENCE",
+              "query": "Reconcile channel penetration and shopping frequency with store-universe and regional or urban-rural dynamics.",
+              "source_hint": "data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx; sheets Consumer, Modern Trade, Trad.Trade"
+            },
+            {
+              "kind": "VALIDATION",
+              "query": "Test whether proposed phasing is consistent with the chosen category's launch and distribution requirements.",
+              "source_hint": "Derived category-channel scorecard"
+            }
+          ],
+          "skill_ids": [],
+          "stage_id": "channel-screen",
+          "subtasks": []
+        },
+        {
+          "dependencies": [
+            "category-screen",
+            "channel-screen"
+          ],
+          "expected_result": "A joint category-channel assessment with explicit trade-offs, alternative weights, and conditional growth logic.",
+          "limits": {},
+          "objective": "Test the interaction between category attractiveness and channel phasing before committing to a recommendation.",
+          "participants": [
+            "analyst"
+          ],
+          "research_needs": [
+            {
+              "kind": "VALIDATION",
+              "query": "Reconcile category choice, channel sequence, consumer relevance, portfolio fit, and the conditional 8% growth bridge.",
+              "source_hint": "Outputs from source-audit, category-screen, and channel-screen"
+            }
+          ],
+          "skill_ids": [],
+          "stage_id": "joint-validation",
+          "subtasks": []
+        },
+        {
+          "dependencies": [
+            "joint-validation"
+          ],
+          "expected_result": "A reviewed recommendation outline with evidence links, assumptions, risks, triggers, and no unsupported claims.",
+          "limits": {},
+          "objective": "Challenge the recommendation, expose contradictions, and prepare a reviewable executive-story outline.",
+          "participants": [
+            "analyst",
+            "reviewer"
+          ],
+          "research_needs": [
+            {
+              "kind": "VALIDATION",
+              "query": "Challenge the recommendation against alternative categories, channel phasing, data limitations, and the 8% growth target.",
+              "source_hint": "All prior stage outputs and the supplied workbook"
+            },
+            {
+              "kind": "VALIDATION",
+              "query": "Draft a text-based executive presentation outline within the suggested maximum of 20 slides.",
+              "source_hint": "data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx; sheet Case"
+            }
+          ],
+          "skill_ids": [],
+          "stage_id": "challenge-synthesis",
+          "subtasks": []
+        }
+      ],
+      "user_preferences": {
+        "audience": "Cosluxe Nature business-planning and strategy stakeholders",
+        "evidence_basis": "supplied_workbook_first",
+        "presentation_limit_slides": 20,
+        "review": "independent"
+      }
+    },
+    "recipe": {
+      "adaptation_policy": [
+        "bounded_retry",
+        "reduced_concurrency",
+        "dependency_safe_topology_reduction"
+      ],
+      "completion": "accepted recommendation after required evidence and review",
+      "escalation": "route to human decision/review boundary",
+      "max_agent_steps": 5,
+      "max_correction_rounds": 1,
+      "max_total_agent_calls": 5,
+      "metadata": {
+        "decision_question": "Which Personal Care category should Cosluxe Nature enter first in Vietnam, and which channels should it prioritize across 2023-2025 to support stable growth of at least 8% from 2024 onward?",
+        "horizon": "2023 entry; 2023-2025 channel plan; stable-growth planning from 2024 onward",
+        "relevant_constraints": "Vietnam Personal Care category performance in offline channels using MAT 2YA, MAT YA, and MAT TY measures ending September 2022.|Vietnam Personal Care ecommerce category growth, new launches, and survival of new launches.|Vietnam consumer price-tier movement, essential and routine category perceptions, channel penetration, and shopping frequency.|Vietnam traditional-trade regional and urban-rural dynamics, modern-trade store universe, and channel value sales.|Cosluxe Nature portfolio focus, premium image, and natural-ingredient positioning as stated in the case materials.|Vietnam entry begins in 2023 and stable-growth planning begins from 2024 onward.|Workbook facts retain their stated source, period, units, and dummy-case status.|First entry category means the initial priority category, not exclusion of the remainder of the portfolio.|Offline and ecommerce measures are not comparable until definitions, periods, and units are normalized.|The 8% growth ambition is a planning target, not an observed result.|Confirm launch budget, margin, supply, distribution, and portfolio-cannibalization constraints with the client.|Confirm whether the recommendation optimizes revenue, profit, market share, reach, or a weighted combination.|Confirm acceptable external desk-research scope and evidence-quality threshold for claims beyond the workbook.|Reconcile category definitions and channel boundaries across the named workbook sheets.|Validate whether the 2023-2025 horizon and 2024 growth baseline match the client's planning calendar.",
+        "required_capabilities": "spreadsheet_read",
+        "required_participants": "",
+        "selected_patterns": "sequential",
+        "selection_rationale": "valid explicit execution-pattern override",
+        "selection_source": "explicit_override",
+        "unresolved_capabilities": ""
+      },
+      "name": "ANALYZE_REVIEW",
+      "partial_result": "no accepted recommendation; preserve partial state",
+      "pattern": "sequential",
+      "purpose": "ANALYZE_REVIEW",
+      "rationale": "valid explicit execution-pattern override",
+      "reuse_policy": "reuse only committed, provenance-complete matching receipts",
+      "review_policy": "stage output validation",
+      "roles": [
+        {
+          "profile": "normal",
+          "purpose": "execute"
+        },
+        {
+          "profile": "normal",
+          "purpose": "review"
+        }
+      ],
+      "stages": [
+        {
+          "access_scope": [
+            "read:local"
+          ],
+          "adaptation_policy": [
+            "bounded_retry",
+            "reduced_concurrency",
+            "dependency_safe_topology_reduction"
+          ],
+          "capabilities": [
+            "spreadsheet_read",
+            "domain_validation"
+          ],
+          "completion_rule": "stage output matches expected result and required checks pass",
+          "decision_question": "Which Personal Care category should Cosluxe Nature enter first in Vietnam, and which channels should it prioritize across 2023-2025 to support stable growth of at least 8% from 2024 onward?",
+          "dependencies": [],
+          "escalation_rule": "escalate unresolved capability, contradiction, or budget exhaustion",
+          "expected_result": "A source and metric dictionary with observed-versus-derived labels and unresolved comparability issues.",
+          "horizon": "2023 entry; 2023-2025 channel plan; stable-growth planning from 2024 onward",
+          "input_type": "typed-result",
+          "limits": {
+            "max_agent_steps": 5,
+            "max_total_agent_calls": 5
+          },
+          "model": "unspecified",
+          "objective": "Inventory workbook sources, definitions, periods, units, and comparability limits before calculating attractiveness.",
+          "output_type": "typed-result",
+          "partial_result_rule": "preserve completed evidence and mark incomplete stage explicitly",
+          "participant_responsibilities": [
+            {
+              "participant_id": "analyst",
+              "responsibility": "analyst"
+            }
+          ],
+          "participants": [
+            {
+              "capability_ids": [
+                "spreadsheet_read",
+                "domain_validation"
+              ],
+              "id": "analyst",
+              "profile": "normal",
+              "purpose": "analyst",
+              "role": "analyst",
+              "unresolved_capabilities": []
+            }
+          ],
+          "pattern": "sequential",
+          "provider": "local",
+          "rationale": "explicit_override: valid explicit execution-pattern override; selected sequential for stage source-audit",
+          "reasoning_controls": {},
+          "relevant_constraints": [
+            "Vietnam Personal Care category performance in offline channels using MAT 2YA, MAT YA, and MAT TY measures ending September 2022.",
+            "Vietnam Personal Care ecommerce category growth, new launches, and survival of new launches.",
+            "Vietnam consumer price-tier movement, essential and routine category perceptions, channel penetration, and shopping frequency.",
+            "Vietnam traditional-trade regional and urban-rural dynamics, modern-trade store universe, and channel value sales.",
+            "Cosluxe Nature portfolio focus, premium image, and natural-ingredient positioning as stated in the case materials.",
+            "Vietnam entry begins in 2023 and stable-growth planning begins from 2024 onward.",
+            "Workbook facts retain their stated source, period, units, and dummy-case status.",
+            "First entry category means the initial priority category, not exclusion of the remainder of the portfolio.",
+            "Offline and ecommerce measures are not comparable until definitions, periods, and units are normalized.",
+            "The 8% growth ambition is a planning target, not an observed result.",
+            "Confirm launch budget, margin, supply, distribution, and portfolio-cannibalization constraints with the client.",
+            "Confirm whether the recommendation optimizes revenue, profit, market share, reach, or a weighted combination.",
+            "Confirm acceptable external desk-research scope and evidence-quality threshold for claims beyond the workbook.",
+            "Reconcile category definitions and channel boundaries across the named workbook sheets.",
+            "Validate whether the 2023-2025 horizon and 2024 growth baseline match the client's planning calendar."
+          ],
+          "research_needs": [
+            "ResearchNeed(kind=<ResearchNeedKind.STRUCTURED_DATA: 'STRUCTURED_DATA'>, query='Inspect the Case and Glossary sheets for business objectives, category definitions, source notes, and period conventions.', source_hint='data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx; sheets Case and Glossary')",
+            "ResearchNeed(kind=<ResearchNeedKind.STRUCTURED_DATA: 'STRUCTURED_DATA'>, query='Inventory measures, units, and source notes across Macro & FMCG, Personal Care, Consumer, Channel Dynamic, Trad.Trade, Modern Trade, and Ecommerce.', source_hint='data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx; sheets Macro & FMCG, Personal Care, Consumer, Channel Dynamic, Trad.Trade, Modern Trade, Ecommerce')",
+            "ResearchNeed(kind=<ResearchNeedKind.VALIDATION: 'VALIDATION'>, query='Confirm whether offline, ecommerce, value, volume, store, penetration, and frequency measures can be compared directly.', source_hint='data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx; source notes and headers')",
+            "ResearchNeed(kind=<ResearchNeedKind.STRUCTURED_DATA: 'STRUCTURED_DATA'>, query='Explicitly decide whether the hidden Others sheet is included in the first-pass evidence boundary.', source_hint='data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx; hidden sheet Others')"
+          ],
+          "reuse_policy": "reuse only committed, provenance-complete matching receipts",
+          "review_checks": [
+            "stage output validation"
+          ],
+          "skill_ids": [],
+          "stage_id": "source-audit"
+        },
+        {
+          "access_scope": [
+            "read:local"
+          ],
+          "adaptation_policy": [
+            "bounded_retry",
+            "reduced_concurrency",
+            "dependency_safe_topology_reduction"
+          ],
+          "capabilities": [
+            "data_analysis",
+            "calculation",
+            "graph_context",
+            "spreadsheet_read"
+          ],
+          "completion_rule": "stage output matches expected result and required checks pass",
+          "decision_question": "Which Personal Care category should Cosluxe Nature enter first in Vietnam, and which channels should it prioritize across 2023-2025 to support stable growth of at least 8% from 2024 onward?",
+          "dependencies": [
+            "source-audit"
+          ],
+          "escalation_rule": "escalate unresolved capability, contradiction, or budget exhaustion",
+          "expected_result": "A reproducible category scorecard with sensitivity to alternative weights and explicit unresolved assumptions.",
+          "horizon": "2023 entry; 2023-2025 channel plan; stable-growth planning from 2024 onward",
+          "input_type": "typed-result",
+          "limits": {
+            "max_agent_steps": 5,
+            "max_total_agent_calls": 5
+          },
+          "model": "unspecified",
+          "objective": "Compare candidate Personal Care categories on growth, scale, consumer relevance, portfolio fit, and competitive or launch signals.",
+          "output_type": "typed-result",
+          "partial_result_rule": "preserve completed evidence and mark incomplete stage explicitly",
+          "participant_responsibilities": [
+            {
+              "participant_id": "analyst",
+              "responsibility": "analyst"
+            }
+          ],
+          "participants": [
+            {
+              "capability_ids": [
+                "data_analysis",
+                "calculation",
+                "graph_context",
+                "spreadsheet_read"
+              ],
+              "id": "analyst",
+              "profile": "normal",
+              "purpose": "analyst",
+              "role": "analyst",
+              "unresolved_capabilities": []
+            }
+          ],
+          "pattern": "sequential",
+          "provider": "local",
+          "rationale": "explicit_override: valid explicit execution-pattern override; selected sequential for stage category-screen",
+          "reasoning_controls": {},
+          "relevant_constraints": [
+            "Vietnam Personal Care category performance in offline channels using MAT 2YA, MAT YA, and MAT TY measures ending September 2022.",
+            "Vietnam Personal Care ecommerce category growth, new launches, and survival of new launches.",
+            "Vietnam consumer price-tier movement, essential and routine category perceptions, channel penetration, and shopping frequency.",
+            "Vietnam traditional-trade regional and urban-rural dynamics, modern-trade store universe, and channel value sales.",
+            "Cosluxe Nature portfolio focus, premium image, and natural-ingredient positioning as stated in the case materials.",
+            "Vietnam entry begins in 2023 and stable-growth planning begins from 2024 onward.",
+            "Workbook facts retain their stated source, period, units, and dummy-case status.",
+            "First entry category means the initial priority category, not exclusion of the remainder of the portfolio.",
+            "Offline and ecommerce measures are not comparable until definitions, periods, and units are normalized.",
+            "The 8% growth ambition is a planning target, not an observed result.",
+            "Confirm launch budget, margin, supply, distribution, and portfolio-cannibalization constraints with the client.",
+            "Confirm whether the recommendation optimizes revenue, profit, market share, reach, or a weighted combination.",
+            "Confirm acceptable external desk-research scope and evidence-quality threshold for claims beyond the workbook.",
+            "Reconcile category definitions and channel boundaries across the named workbook sheets.",
+            "Validate whether the 2023-2025 horizon and 2024 growth baseline match the client's planning calendar."
+          ],
+          "research_needs": [
+            "ResearchNeed(kind=<ResearchNeedKind.QUANTITATIVE_ANALYSIS: 'QUANTITATIVE_ANALYSIS'>, query='Calculate MAT TY versus MAT YA and MAT 2YA growth, scale, and category contribution for candidate categories.', source_hint='data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx; sheet Personal Care')",
+            "ResearchNeed(kind=<ResearchNeedKind.QUANTITATIVE_ANALYSIS: 'QUANTITATIVE_ANALYSIS'>, query='Compare ecommerce growth, new-launch intensity, and survival of new launches by candidate category.', source_hint='data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx; sheet Ecommerce')",
+            "ResearchNeed(kind=<ResearchNeedKind.EXISTING_EVIDENCE: 'EXISTING_EVIDENCE'>, query='Connect consumer essentiality, face or body care relevance, price-tier movement, and Cosluxe portfolio fit to category hypotheses.', source_hint='data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx; sheets Consumer and Case')"
+          ],
+          "reuse_policy": "reuse only committed, provenance-complete matching receipts",
+          "review_checks": [
+            "stage output validation"
+          ],
+          "skill_ids": [],
+          "stage_id": "category-screen"
+        },
+        {
+          "access_scope": [
+            "read:local"
+          ],
+          "adaptation_policy": [
+            "bounded_retry",
+            "reduced_concurrency",
+            "dependency_safe_topology_reduction"
+          ],
+          "capabilities": [
+            "data_analysis",
+            "calculation",
+            "graph_context",
+            "domain_validation",
+            "spreadsheet_read"
+          ],
+          "completion_rule": "stage output matches expected result and required checks pass",
+          "decision_question": "Which Personal Care category should Cosluxe Nature enter first in Vietnam, and which channels should it prioritize across 2023-2025 to support stable growth of at least 8% from 2024 onward?",
+          "dependencies": [
+            "source-audit"
+          ],
+          "escalation_rule": "escalate unresolved capability, contradiction, or budget exhaustion",
+          "expected_result": "A phased channel recommendation linked to shopper reach, frequency, store economics, regional dynamics, and category fit.",
+          "horizon": "2023 entry; 2023-2025 channel plan; stable-growth planning from 2024 onward",
+          "input_type": "typed-result",
+          "limits": {
+            "max_agent_steps": 5,
+            "max_total_agent_calls": 5
+          },
+          "model": "unspecified",
+          "objective": "Determine which traditional trade, modern trade, and ecommerce channels should lead, follow, or support the entry plan across 2023-2025.",
+          "output_type": "typed-result",
+          "partial_result_rule": "preserve completed evidence and mark incomplete stage explicitly",
+          "participant_responsibilities": [
+            {
+              "participant_id": "analyst",
+              "responsibility": "analyst"
+            }
+          ],
+          "participants": [
+            {
+              "capability_ids": [
+                "data_analysis",
+                "calculation",
+                "graph_context",
+                "domain_validation",
+                "spreadsheet_read"
+              ],
+              "id": "analyst",
+              "profile": "normal",
+              "purpose": "analyst",
+              "role": "analyst",
+              "unresolved_capabilities": []
+            }
+          ],
+          "pattern": "sequential",
+          "provider": "local",
+          "rationale": "explicit_override: valid explicit execution-pattern override; selected sequential for stage channel-screen",
+          "reasoning_controls": {},
+          "relevant_constraints": [
+            "Vietnam Personal Care category performance in offline channels using MAT 2YA, MAT YA, and MAT TY measures ending September 2022.",
+            "Vietnam Personal Care ecommerce category growth, new launches, and survival of new launches.",
+            "Vietnam consumer price-tier movement, essential and routine category perceptions, channel penetration, and shopping frequency.",
+            "Vietnam traditional-trade regional and urban-rural dynamics, modern-trade store universe, and channel value sales.",
+            "Cosluxe Nature portfolio focus, premium image, and natural-ingredient positioning as stated in the case materials.",
+            "Vietnam entry begins in 2023 and stable-growth planning begins from 2024 onward.",
+            "Workbook facts retain their stated source, period, units, and dummy-case status.",
+            "First entry category means the initial priority category, not exclusion of the remainder of the portfolio.",
+            "Offline and ecommerce measures are not comparable until definitions, periods, and units are normalized.",
+            "The 8% growth ambition is a planning target, not an observed result.",
+            "Confirm launch budget, margin, supply, distribution, and portfolio-cannibalization constraints with the client.",
+            "Confirm whether the recommendation optimizes revenue, profit, market share, reach, or a weighted combination.",
+            "Confirm acceptable external desk-research scope and evidence-quality threshold for claims beyond the workbook.",
+            "Reconcile category definitions and channel boundaries across the named workbook sheets.",
+            "Validate whether the 2023-2025 horizon and 2024 growth baseline match the client's planning calendar."
+          ],
+          "research_needs": [
+            "ResearchNeed(kind=<ResearchNeedKind.QUANTITATIVE_ANALYSIS: 'QUANTITATIVE_ANALYSIS'>, query='Compare Personal Care value sales and growth across modern trade, traditional trade, and ecommerce.', source_hint='data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx; sheets Channel Dynamic, Trad.Trade, Modern Trade, Ecommerce')",
+            "ResearchNeed(kind=<ResearchNeedKind.EXISTING_EVIDENCE: 'EXISTING_EVIDENCE'>, query='Reconcile channel penetration and shopping frequency with store-universe and regional or urban-rural dynamics.', source_hint='data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx; sheets Consumer, Modern Trade, Trad.Trade')",
+            "ResearchNeed(kind=<ResearchNeedKind.VALIDATION: 'VALIDATION'>, query=\"Test whether proposed phasing is consistent with the chosen category's launch and distribution requirements.\", source_hint='Derived category-channel scorecard')"
+          ],
+          "reuse_policy": "reuse only committed, provenance-complete matching receipts",
+          "review_checks": [
+            "stage output validation"
+          ],
+          "skill_ids": [],
+          "stage_id": "channel-screen"
+        },
+        {
+          "access_scope": [
+            "read:local"
+          ],
+          "adaptation_policy": [
+            "bounded_retry",
+            "reduced_concurrency",
+            "dependency_safe_topology_reduction"
+          ],
+          "capabilities": [
+            "domain_validation",
+            "spreadsheet_read"
+          ],
+          "completion_rule": "stage output matches expected result and required checks pass",
+          "decision_question": "Which Personal Care category should Cosluxe Nature enter first in Vietnam, and which channels should it prioritize across 2023-2025 to support stable growth of at least 8% from 2024 onward?",
+          "dependencies": [
+            "category-screen",
+            "channel-screen"
+          ],
+          "escalation_rule": "escalate unresolved capability, contradiction, or budget exhaustion",
+          "expected_result": "A joint category-channel assessment with explicit trade-offs, alternative weights, and conditional growth logic.",
+          "horizon": "2023 entry; 2023-2025 channel plan; stable-growth planning from 2024 onward",
+          "input_type": "typed-result",
+          "limits": {
+            "max_agent_steps": 5,
+            "max_total_agent_calls": 5
+          },
+          "model": "unspecified",
+          "objective": "Test the interaction between category attractiveness and channel phasing before committing to a recommendation.",
+          "output_type": "typed-result",
+          "partial_result_rule": "preserve completed evidence and mark incomplete stage explicitly",
+          "participant_responsibilities": [
+            {
+              "participant_id": "analyst",
+              "responsibility": "analyst"
+            }
+          ],
+          "participants": [
+            {
+              "capability_ids": [
+                "domain_validation",
+                "spreadsheet_read"
+              ],
+              "id": "analyst",
+              "profile": "normal",
+              "purpose": "analyst",
+              "role": "analyst",
+              "unresolved_capabilities": []
+            }
+          ],
+          "pattern": "sequential",
+          "provider": "local",
+          "rationale": "explicit_override: valid explicit execution-pattern override; selected sequential for stage joint-validation",
+          "reasoning_controls": {},
+          "relevant_constraints": [
+            "Vietnam Personal Care category performance in offline channels using MAT 2YA, MAT YA, and MAT TY measures ending September 2022.",
+            "Vietnam Personal Care ecommerce category growth, new launches, and survival of new launches.",
+            "Vietnam consumer price-tier movement, essential and routine category perceptions, channel penetration, and shopping frequency.",
+            "Vietnam traditional-trade regional and urban-rural dynamics, modern-trade store universe, and channel value sales.",
+            "Cosluxe Nature portfolio focus, premium image, and natural-ingredient positioning as stated in the case materials.",
+            "Vietnam entry begins in 2023 and stable-growth planning begins from 2024 onward.",
+            "Workbook facts retain their stated source, period, units, and dummy-case status.",
+            "First entry category means the initial priority category, not exclusion of the remainder of the portfolio.",
+            "Offline and ecommerce measures are not comparable until definitions, periods, and units are normalized.",
+            "The 8% growth ambition is a planning target, not an observed result.",
+            "Confirm launch budget, margin, supply, distribution, and portfolio-cannibalization constraints with the client.",
+            "Confirm whether the recommendation optimizes revenue, profit, market share, reach, or a weighted combination.",
+            "Confirm acceptable external desk-research scope and evidence-quality threshold for claims beyond the workbook.",
+            "Reconcile category definitions and channel boundaries across the named workbook sheets.",
+            "Validate whether the 2023-2025 horizon and 2024 growth baseline match the client's planning calendar."
+          ],
+          "research_needs": [
+            "ResearchNeed(kind=<ResearchNeedKind.VALIDATION: 'VALIDATION'>, query='Reconcile category choice, channel sequence, consumer relevance, portfolio fit, and the conditional 8% growth bridge.', source_hint='Outputs from source-audit, category-screen, and channel-screen')"
+          ],
+          "reuse_policy": "reuse only committed, provenance-complete matching receipts",
+          "review_checks": [
+            "stage output validation"
+          ],
+          "skill_ids": [],
+          "stage_id": "joint-validation"
+        },
+        {
+          "access_scope": [
+            "read:local"
+          ],
+          "adaptation_policy": [
+            "bounded_retry",
+            "reduced_concurrency",
+            "dependency_safe_topology_reduction"
+          ],
+          "capabilities": [
+            "domain_validation",
+            "spreadsheet_read"
+          ],
+          "completion_rule": "stage output matches expected result and required checks pass",
+          "decision_question": "Which Personal Care category should Cosluxe Nature enter first in Vietnam, and which channels should it prioritize across 2023-2025 to support stable growth of at least 8% from 2024 onward?",
+          "dependencies": [
+            "joint-validation"
+          ],
+          "escalation_rule": "escalate unresolved capability, contradiction, or budget exhaustion",
+          "expected_result": "A reviewed recommendation outline with evidence links, assumptions, risks, triggers, and no unsupported claims.",
+          "horizon": "2023 entry; 2023-2025 channel plan; stable-growth planning from 2024 onward",
+          "input_type": "typed-result",
+          "limits": {
+            "max_agent_steps": 5,
+            "max_total_agent_calls": 5
+          },
+          "model": "unspecified",
+          "objective": "Challenge the recommendation, expose contradictions, and prepare a reviewable executive-story outline.",
+          "output_type": "typed-result",
+          "partial_result_rule": "preserve completed evidence and mark incomplete stage explicitly",
+          "participant_responsibilities": [
+            {
+              "participant_id": "analyst",
+              "responsibility": "analyst"
+            },
+            {
+              "participant_id": "reviewer",
+              "responsibility": "review"
+            }
+          ],
+          "participants": [
+            {
+              "capability_ids": [
+                "domain_validation",
+                "spreadsheet_read"
+              ],
+              "id": "analyst",
+              "profile": "normal",
+              "purpose": "analyst",
+              "role": "analyst",
+              "unresolved_capabilities": []
+            },
+            {
+              "capability_ids": [
+                "domain_validation",
+                "spreadsheet_read"
+              ],
+              "id": "reviewer",
+              "profile": "normal",
+              "purpose": "review",
+              "role": "reviewer",
+              "unresolved_capabilities": []
+            }
+          ],
+          "pattern": "sequential",
+          "provider": "local",
+          "rationale": "explicit_override: valid explicit execution-pattern override; selected sequential for stage challenge-synthesis",
+          "reasoning_controls": {},
+          "relevant_constraints": [
+            "Vietnam Personal Care category performance in offline channels using MAT 2YA, MAT YA, and MAT TY measures ending September 2022.",
+            "Vietnam Personal Care ecommerce category growth, new launches, and survival of new launches.",
+            "Vietnam consumer price-tier movement, essential and routine category perceptions, channel penetration, and shopping frequency.",
+            "Vietnam traditional-trade regional and urban-rural dynamics, modern-trade store universe, and channel value sales.",
+            "Cosluxe Nature portfolio focus, premium image, and natural-ingredient positioning as stated in the case materials.",
+            "Vietnam entry begins in 2023 and stable-growth planning begins from 2024 onward.",
+            "Workbook facts retain their stated source, period, units, and dummy-case status.",
+            "First entry category means the initial priority category, not exclusion of the remainder of the portfolio.",
+            "Offline and ecommerce measures are not comparable until definitions, periods, and units are normalized.",
+            "The 8% growth ambition is a planning target, not an observed result.",
+            "Confirm launch budget, margin, supply, distribution, and portfolio-cannibalization constraints with the client.",
+            "Confirm whether the recommendation optimizes revenue, profit, market share, reach, or a weighted combination.",
+            "Confirm acceptable external desk-research scope and evidence-quality threshold for claims beyond the workbook.",
+            "Reconcile category definitions and channel boundaries across the named workbook sheets.",
+            "Validate whether the 2023-2025 horizon and 2024 growth baseline match the client's planning calendar."
+          ],
+          "research_needs": [
+            "ResearchNeed(kind=<ResearchNeedKind.VALIDATION: 'VALIDATION'>, query='Challenge the recommendation against alternative categories, channel phasing, data limitations, and the 8% growth target.', source_hint='All prior stage outputs and the supplied workbook')",
+            "ResearchNeed(kind=<ResearchNeedKind.VALIDATION: 'VALIDATION'>, query='Draft a text-based executive presentation outline within the suggested maximum of 20 slides.', source_hint='data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx; sheet Case')"
+          ],
+          "reuse_policy": "reuse only committed, provenance-complete matching receipts",
+          "review_checks": [
+            "stage output validation"
+          ],
+          "skill_ids": [],
+          "stage_id": "challenge-synthesis"
+        }
+      ]
+    }
+  },
+  "projection_fingerprint": "e30a7cf09dc59b73291c8e34437c1679867354c51d128498d75f4193a5141a58",
+  "recipe_snapshot_fingerprint": "140ff74c5282630f6cd34713623c5b40544aed21e5fced4d38426798bc1f0114",
+  "run_decisions": {
+    "run_fresh_stages": []
+  },
+  "status": "APPROVED",
+  "supersedes_fingerprint": "67eda63d784dca14a7be2e11aa7200adc44a25abb990056a5d8eac04d7f68ba8"
+}

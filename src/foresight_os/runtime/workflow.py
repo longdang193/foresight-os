@@ -148,8 +148,11 @@ async def _run_native_stage(
         ).build()
     else:
         return [await agents[0].run(prompt)]
-    if metrics is None:
+    tools_enabled = any(getattr(agent, "default_options", {}).get("tools") for agent in agents)
+    if metrics is None or tools_enabled:
         result = await workflow.run(prompt)
+        if metrics is not None and tools_enabled:
+            metrics.model_calls += len(agents)
     else:
         agent_ids = {getattr(agent, "id", None) for agent in agents}
         observed_rounds: set[int] = set()

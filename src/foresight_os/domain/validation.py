@@ -62,6 +62,8 @@ def validate_execution_recipe(recipe: ExecutionRecipe | dict[str, Any]) -> dict[
     stage_ids = [stage["stage_id"] for stage in value.get("stages", [])]
     if len(stage_ids) != len(set(stage_ids)):
         raise ValidationError("recipe stage IDs must be unique")
+    if value.get("stages") and value.get("max_total_agent_calls", 0) < len(value["stages"]):
+        raise ValidationError("global agent-call budget must cover the recipe stage count")
     seen: set[str] = set()
     for stage in value.get("stages", []):
         if any(dependency not in seen for dependency in stage.get("dependencies", [])):

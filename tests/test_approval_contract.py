@@ -1,4 +1,5 @@
 from dataclasses import replace
+from copy import deepcopy
 
 import pytest
 
@@ -29,6 +30,17 @@ def test_recipe_rejects_negative_limits():
     recipe = make_recipe(RecipeName.DIRECT).to_dict()
     recipe["stages"][0]["limits"]["max_agent_steps"] = -1
     with pytest.raises(ValidationError, match="negative"):
+        validate_execution_recipe(recipe)
+
+
+def test_recipe_rejects_global_call_budget_below_stage_count():
+    recipe = make_recipe(RecipeName.DIRECT).to_dict()
+    second_stage = deepcopy(recipe["stages"][0])
+    second_stage["stage_id"] = "stage-2"
+    recipe["stages"].append(second_stage)
+    recipe["max_total_agent_calls"] = 1
+
+    with pytest.raises(ValidationError, match="stage count"):
         validate_execution_recipe(recipe)
 
 

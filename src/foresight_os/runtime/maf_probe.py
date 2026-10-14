@@ -73,6 +73,17 @@ def load_provider_settings(env_file: Path, config_file: Path) -> ProviderSetting
     return ProviderSettings(provider_name, model, base_url, credential_env, api_key)
 
 
+def build_configured_client(env_file: Path, config_file: Path):
+    settings = load_provider_settings(env_file, config_file)
+    from agent_framework.openai import OpenAIChatClient
+
+    return OpenAIChatClient(
+        model=settings.model,
+        api_key=settings.api_key,
+        base_url=settings.base_url,
+    )
+
+
 def run_live_provider_probe(
     env_file: Path,
     config_file: Path,

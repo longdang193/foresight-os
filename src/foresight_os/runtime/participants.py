@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from foresight_os.runtime.capabilities import ForesightFunctionMiddleware, instrument_tool
+from foresight_os.runtime.capabilities import CapabilityUnavailableError, ForesightFunctionMiddleware, instrument_tool
 
 
 @dataclass(frozen=True)
@@ -87,7 +87,7 @@ class AgentFactory:
             resolutions = context["capability_resolver"].resolve(required_capabilities, participant_context)
             denied = [item.reason for item in resolutions.values() if not item.available]
             if denied:
-                raise RuntimeError(f"participant {config.id} capabilities unavailable: {'; '.join(denied)}")
+                raise CapabilityUnavailableError(f"participant {config.id} capabilities unavailable: {'; '.join(denied)}")
             resolved_tools = []
             native_mcp_definitions = {}
             for item in resolutions.values():
@@ -103,7 +103,7 @@ class AgentFactory:
             if native_mcp_definitions:
                 middleware.append(ForesightFunctionMiddleware(native_mcp_definitions, participant_context))
         elif tools is None and required_capabilities:
-            raise RuntimeError(f"participant {config.id} capabilities require a configured resolver")
+            raise CapabilityUnavailableError(f"participant {config.id} capabilities require a configured resolver")
         elif tools:
             native_mcp_definitions = {}
             for item in tools:

@@ -16,6 +16,8 @@ from foresight_os.domain.approval import AdaptationEnvelope, ApprovalRecord, App
 from foresight_os.persistence.ids import canonical_json_hash
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.runtime.execution_gate import ExecutionAdmissionError, execute_approved_investigation
+from foresight_os.runtime.maf_probe import build_configured_client
+from foresight_os.runtime.capabilities import CapabilityUnavailableError
 from foresight_os.persistence.recovery import continue_investigation
 from foresight_os.clients.first_client_adapter import LocalClient
 from foresight_os.analysis.powerbi import read_powerbi_project
@@ -51,6 +53,8 @@ def build_parser() -> argparse.ArgumentParser:
     execute.add_argument("--work-dir", type=Path, required=True)
     execute.add_argument("--prompt", required=True)
     execute.add_argument("--run-id")
+    execute.add_argument("--env-file", type=Path, default=Path(".env"))
+    execute.add_argument("--config-file", type=Path, default=Path.home() / ".codex" / "config.toml")
 
     for name in ("pause", "cancel"):
         control = subparsers.add_parser(name)
@@ -172,9 +176,16 @@ def main(argv: list[str] | None = None) -> int:
         try:
             import asyncio
 
-            result = asyncio.run(execute_approved_investigation(args.work_dir, args.prompt, run_id=args.run_id))
+            client = build_configured_client(args.env_file, args.config_file)
+            result = asyncio.run(execute_approved_investigation(args.work_dir, args.prompt, client, args.run_id))
         except ExecutionAdmissionError as exc:
             print(json.dumps({"error": str(exc)}))
+            return 2
+        except CapabilityUnavailableError:
+            print(json.dumps({"status": "BLOCKED_EXTERNAL", "error": "required capability is unavailable"}))
+            return 2
+        except (OSError, ValueError, ImportError):
+            print(json.dumps({"status": "BLOCKED_EXTERNAL", "error": "execution requires configured provider credentials"}))
             return 2
         print(json.dumps({"run_id": result.run_id, "outputs": len(result.outputs), "settled": result.metrics.settled}, sort_keys=True))
         return 0

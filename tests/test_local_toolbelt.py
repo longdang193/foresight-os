@@ -93,6 +93,33 @@ def test_formula_without_cache_blocks_decision_critical_calculation(workbook_pat
         calculation([formula], formula=__import__("foresight_os.runtime.local_toolbelt", fromlist=["FormulaSpec"]).FormulaSpec("formula", "sum"), units=__import__("foresight_os.runtime.local_toolbelt", fromlist=["UnitSpec"]).UnitSpec("units"))
 
 
+def test_calculation_accepts_json_shaped_tool_arguments():
+    measurement = {
+        "id": "measurement-1",
+        "value": 12,
+        "data_type": "number",
+        "formula": None,
+        "cached_value": 12,
+        "formula_status": "VALUE",
+        "provenance": {
+            "workbook_sha256": "workbook-hash",
+            "sheet": "Demand",
+            "coordinate": "C3",
+            "range": "C3",
+        },
+    }
+
+    result = calculation(
+        [measurement],
+        formula={"expression": "Demand!C3", "operation": "sum"},
+        units={"units": "units"},
+    )
+
+    assert result.output == 12
+    assert result.input_ids == ["measurement-1"]
+    assert result.units == "units"
+
+
 def test_formula_cache_and_manual_recalculation_state_are_truthful(workbook_path, tmp_path):
     cached_path = tmp_path / "cached.xlsx"
     cached_path.write_bytes(workbook_path.read_bytes())

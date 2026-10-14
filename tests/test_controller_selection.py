@@ -17,6 +17,21 @@ def test_controller_selects_bounded_analysis_review_recipe():
     assert {role["purpose"] for role in recipe.roles} == {"execute", "review"}
 
 
+def test_controller_scales_call_budget_to_cover_ordered_stages():
+    brief = create_work_brief(
+        "Which category should launch first?",
+        stages=[WorkStage(f"stage-{index}", f"stage {index}") for index in range(1, 5)],
+    )
+
+    recipe = select_recipe(brief)
+
+    assert recipe.max_total_agent_calls >= len(recipe.stages)
+    assert all(
+        stage.limits["max_total_agent_calls"] >= len(recipe.stages)
+        for stage in recipe.stages
+    )
+
+
 def test_budget_exhaustion_prevents_extra_call_or_correction():
     budget = BudgetState(5, 1, 3)
 

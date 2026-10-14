@@ -56,6 +56,13 @@ class ProtocolClient:
         return response()
 
 
+class NonStreamingToolClient(ProtocolClient):
+    def get_response(self, messages, **kwargs):
+        if kwargs.get("stream"):
+            raise AssertionError("tool-enabled workflows must not require streamed tool calls")
+        return super().get_response(messages, **kwargs)
+
+
 def _context(client, metrics, scope):
     async def retrieve(query: str) -> str:
         client.events.append(("tool_dispatch", query))
@@ -91,6 +98,19 @@ def test_maf_tool_cycle_runs_through_native_patterns_and_scope_cleanup():
         assert ("tool_dispatch", "capacity") in client.events
         assert metrics.tool_calls >= 1
         assert metrics.cleanup_complete is False
+
+
+def test_tool_enabled_workflow_uses_non_streaming_provider_path():
+    client = NonStreamingToolClient()
+    metrics = RunMetrics("non-streaming", "SEQUENTIAL", "sequential")
+    scope = CapabilityScope()
+    roles = [{"id": "analyst", "role": "analyst", "purpose": "retrieve evidence", "capability_ids": ("web_search",)}]
+
+    outputs = asyncio.run(_run_native_stage(ExecutionPattern.SEQUENTIAL, "find capacity", client, roles, metrics, _context(client, metrics, scope)))
+    asyncio.run(scope.close())
+
+    assert outputs
+    assert ("tool_dispatch", "capacity") in client.events
 
 
 def test_handoff_does_not_grant_sender_tool_to_receiver():

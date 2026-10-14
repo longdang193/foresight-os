@@ -172,6 +172,7 @@ def _recipe_for_patterns(
         return tuple(dict.fromkeys((*capabilities, *required_stage_capabilities))), tuple(unresolved)
 
     stage_count = len(work_stages) or len(patterns)
+    max_total_agent_calls = max(base.max_total_agent_calls, stage_count)
     if work_stages and source == "explicit_override" and len(patterns) not in (1, len(work_stages)):
         raise ValueError("pattern list must contain one pattern or exactly one pattern per WorkStage")
     stage_patterns = []
@@ -247,7 +248,7 @@ def _recipe_for_patterns(
                     else {}
                 ),
                 "max_agent_steps": base.max_agent_steps,
-                "max_total_agent_calls": base.max_total_agent_calls,
+                "max_total_agent_calls": max_total_agent_calls,
             },
             tuple(getattr(work_stages[index - 1], "skill_ids", ())) if index <= len(work_stages) else (),
             getattr(work_stages[index - 1], "objective", "") if index <= len(work_stages) else "",
@@ -289,7 +290,7 @@ def _recipe_for_patterns(
         base.roles,
         base.max_agent_steps,
         base.max_correction_rounds,
-        base.max_total_agent_calls,
+        max_total_agent_calls,
         base.completion,
         base.escalation,
         base.partial_result,

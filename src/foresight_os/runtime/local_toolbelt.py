@@ -12,7 +12,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import openpyxl
 
@@ -729,7 +729,91 @@ def _numeric(value: Any, *, allow_legacy_prose: bool = False) -> float:
     return float(match.group(1))
 
 
-def calculation(inputs: Sequence[Evidence | CalculationRecord | TypedMeasurement], formula: FormulaSpec, units: UnitSpec) -> CalculationRecord:
+def _coerce_cell_provenance(value: CellProvenance | Mapping[str, Any]) -> CellProvenance:
+    if isinstance(value, CellProvenance):
+        return value
+    if not isinstance(value, Mapping):
+        raise ToolbeltError("calculation measurement provenance is unavailable")
+    return CellProvenance(
+        workbook_sha256=str(value.get("workbook_sha256", "")),
+        sheet=str(value.get("sheet", "")),
+        coordinate=str(value.get("coordinate", "")),
+        range=str(value.get("range", "")),
+    )
+
+
+def _coerce_calculation_input(value: Evidence | CalculationRecord | TypedMeasurement | Mapping[str, Any]) -> Evidence | CalculationRecord | TypedMeasurement:
+    if isinstance(value, (Evidence, CalculationRecord, TypedMeasurement)):
+        return value
+    if not isinstance(value, Mapping):
+        raise ToolbeltError("calculation input must be structured evidence")
+    if "output" in value and "key" in value:
+        key_value = value["key"]
+        if not isinstance(key_value, Mapping):
+            raise ToolbeltError("calculation record key is unavailable")
+        return CalculationRecord(
+            id=str(value.get("id", "")),
+            key=MeasurementKey(**{name: key_value.get(name, "") for name in ("region", "measure", "period", "units", "scenario", "version")}),
+            formula=str(value.get("formula", "")),
+            input_ids=[str(item) for item in value.get("input_ids", ())],
+            output=float(value["output"]),
+            units=str(value.get("units", "")),
+            source_locators=[str(item) for item in value.get("source_locators", ())],
+        )
+    if "value" in value and "provenance" in value:
+        status = value.get("formula_status", FormulaStatus.VALUE)
+        return TypedMeasurement(
+            id=str(value.get("id", "")),
+            value=value.get("value"),
+            data_type=str(value.get("data_type", "")),
+            formula=value.get("formula"),
+            cached_value=value.get("cached_value"),
+            formula_status=status if isinstance(status, FormulaStatus) else FormulaStatus(str(status)),
+            provenance=_coerce_cell_provenance(value["provenance"]),
+            cross_sheet_references=tuple(str(item) for item in value.get("cross_sheet_references", ())),
+            cross_sheet_cells=tuple(tuple(str(part) for part in item) for item in value.get("cross_sheet_cells", ())),
+        )
+    if "excerpt" in value and "source_locator" in value:
+        locator_value = value["source_locator"]
+        if not isinstance(locator_value, Mapping):
+            raise ToolbeltError("evidence source locator is unavailable")
+        measurement_key = value.get("measurement_key")
+        return Evidence(
+            id=str(value.get("id", "")),
+            source_locator=SourceLocator(**{name: str(locator_value.get(name, "")) for name in ("file_version", "sheet", "range", "units", "transformation", "calculation")}),
+            version=str(value.get("version", "")),
+            date=str(value.get("date", "")),
+            excerpt=str(value.get("excerpt", "")),
+            limitations=[str(item) for item in value.get("limitations", ())],
+            measurement_key=MeasurementKey(**measurement_key) if isinstance(measurement_key, Mapping) else None,
+        )
+    raise ToolbeltError("calculation input must be structured evidence")
+
+
+def _coerce_formula_spec(value: FormulaSpec | Mapping[str, Any]) -> FormulaSpec:
+    if isinstance(value, FormulaSpec):
+        return value
+    if not isinstance(value, Mapping):
+        raise ToolbeltError("calculation formula is unavailable")
+    return FormulaSpec(str(value.get("expression", "")), str(value.get("operation", "sum")))
+
+
+def _coerce_unit_spec(value: UnitSpec | Mapping[str, Any]) -> UnitSpec:
+    if isinstance(value, UnitSpec):
+        return value
+    if not isinstance(value, Mapping):
+        raise ToolbeltError("calculation units are unavailable")
+    return UnitSpec(str(value.get("units", "")), float(value.get("relative_tolerance", 1e-9)))
+
+
+def calculation(
+    inputs: Sequence[Evidence | CalculationRecord | TypedMeasurement | Mapping[str, Any]],
+    formula: FormulaSpec | Mapping[str, Any],
+    units: UnitSpec | Mapping[str, Any],
+) -> CalculationRecord:
+    inputs = tuple(_coerce_calculation_input(item) for item in inputs)
+    formula = _coerce_formula_spec(formula)
+    units = _coerce_unit_spec(units)
     if any(isinstance(item, TypedMeasurement) and item.formula_status in {FormulaStatus.FORMULA_WITHOUT_CACHE, FormulaStatus.FORMULA_STALE_OR_UNKNOWN, FormulaStatus.ERROR} for item in inputs):
         raise ToolbeltError("BLOCKED_RECALCULATION: formula input is not trustworthy")
     values = [

@@ -172,9 +172,9 @@ stages:
     query: Challenge the recommendation against alternative categories, channel phasing,
       data limitations, and the 8% growth target.
     source_hint: All prior stage outputs and the supplied workbook
-  - kind: ARTIFACT_OUTPUT
-    query: Produce an executive presentation outline within the suggested maximum
-      of 20 slides.
+  - kind: VALIDATION
+    query: Draft a text-based executive presentation outline within the suggested
+      maximum of 20 slides.
     source_hint: data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx;
       sheet Case
   skill_ids: []
@@ -186,6 +186,17 @@ user_preferences:
   review: independent
   audience: Cosluxe Nature business-planning and strategy stakeholders
   presentation_limit_slides: 20
+execution_intent:
+  required_patterns:
+  - sequential
+  preferred_patterns: []
+  required_participants: []
+  preferred_participants: []
+  required_capabilities:
+  - spreadsheet_read
+  preferred_capabilities: []
+  preferred_reasoning_controls: {}
+  source: wayfinding
 ---
 
 # Work Brief
@@ -225,7 +236,7 @@ Which Personal Care category should Cosluxe Nature enter first in Vietnam, and w
 - [VALIDATION] Test whether proposed phasing is consistent with the chosen category's launch and distribution requirements. (source: Derived category-channel scorecard)
 - [VALIDATION] Reconcile category choice, channel sequence, consumer relevance, portfolio fit, and the conditional 8% growth bridge. (source: Outputs from source-audit, category-screen, and channel-screen)
 - [VALIDATION] Challenge the recommendation against alternative categories, channel phasing, data limitations, and the 8% growth target. (source: All prior stage outputs and the supplied workbook)
-- [ARTIFACT_OUTPUT] Produce an executive presentation outline within the suggested maximum of 20 slides. (source: data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx; sheet Case)
+- [VALIDATION] Draft a text-based executive presentation outline within the suggested maximum of 20 slides. (source: data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx; sheet Case)
 
 ## Assumptions
 
@@ -245,7 +256,9 @@ Which Personal Care category should Cosluxe Nature enter first in Vietnam, and w
 
 ## Execution intent
 
-- not specified
+- Required patterns: sequential
+- Required capabilities: spreadsheet_read
+- Intent source: wayfinding
 
 ## Proposed investigation
 
