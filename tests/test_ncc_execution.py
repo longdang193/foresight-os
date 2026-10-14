@@ -1,15 +1,20 @@
 from pathlib import Path
 
 from openpyxl import load_workbook
+import pytest
 
 from foresight_os.domain.models import AnalysisState, Artifact, Lifecycle, Revision, RevisionStatus
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.wayfinding import create_work_brief
 
 
-WORKBOOK = Path("data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx")
+WORKBOOK = Path(__file__).resolve().parents[1] / "data" / "exercise1-nielsenIQ" / "NCC 2022 - Semi Final Case - Data set.xlsx"
 
 
+@pytest.mark.skipif(
+    not WORKBOOK.exists(),
+    reason="NCC workbook is an approved external fixture and is not tracked in the repository",
+)
 def test_ncc_workbook_boundary_is_available_without_claiming_analytical_completion():
     workbook = load_workbook(WORKBOOK, read_only=True, data_only=True)
 
