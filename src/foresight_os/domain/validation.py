@@ -90,13 +90,6 @@ def _normalize_work_brief(value: dict[str, Any]) -> dict[str, Any]:
     producer = normalized.get("producer")
     if isinstance(producer, MethodProvenance):
         normalized["producer"] = producer.to_dict()
-    elif producer is not None:
-        normalized["producer"] = {
-            "id": str(producer["id"]),
-            "source": str(producer["source"]),
-            "contract_version": str(producer.get("contract_version", "1")),
-            **({"content_sha256": str(producer["content_sha256"])} if producer.get("content_sha256") else {}),
-        }
     legacy_override = normalized.pop("execution_pattern_override", None)
     if legacy_override is not None and "execution_intent" not in normalized:
         patterns = (legacy_override,) if isinstance(legacy_override, str) else tuple(legacy_override)

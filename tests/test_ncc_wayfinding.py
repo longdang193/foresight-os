@@ -6,9 +6,10 @@ import pytest
 import yaml
 
 from foresight_os.artifacts.approval import build_approval_package, render_approval_markdown
+from foresight_os.artifacts.brief import render_work_brief_markdown
 from foresight_os.controller.proposal import build_execution_recipe
 from foresight_os.domain.approval import ApprovalRecord, ApprovalStatus
-from foresight_os.domain.models import ResearchNeed, ResearchNeedKind, WorkBrief, WorkStage
+from foresight_os.domain.models import ExecutionIntent, ResearchNeed, ResearchNeedKind, WorkBrief, WorkStage
 from foresight_os.domain.validation import validate_work_brief
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.persistence.ids import canonical_json_hash
@@ -72,6 +73,44 @@ def test_ncc_fixture_round_trips_through_canonical_execution_path(tmp_path):
     assert "category-screen" in rendered_approval
     assert "joint-validation" in rendered_approval
     assert "map.md" not in rendered_brief
+
+
+def test_human_brief_renders_global_execution_intent():
+    brief = replace(
+        _brief_from_fixture(),
+        execution_intent=ExecutionIntent(
+            required_patterns=("sequential",),
+            required_capabilities=("spreadsheet_read",),
+        ),
+    )
+
+    rendered = render_work_brief_markdown(brief)
+
+    assert "## Execution intent" in rendered
+    assert "Required patterns: sequential" in rendered
+    assert "Required capabilities: spreadsheet_read" in rendered
+
+
+def test_human_brief_renders_global_and_stage_execution_intent():
+    brief = _brief_from_fixture()
+    brief = replace(
+        brief,
+        execution_intent=ExecutionIntent(required_participants=("reviewer",)),
+        stages=[
+            replace(
+                brief.stages[0],
+                execution_intent=ExecutionIntent(preferred_patterns=("sequential",)),
+            ),
+            *brief.stages[1:],
+        ],
+    )
+
+    rendered = render_work_brief_markdown(brief)
+
+    assert rendered.count("## Execution intent") == 1
+    assert rendered.count("- Execution intent:") == 5
+    assert "Required participants: reviewer" in rendered
+    assert "Preferred patterns: sequential" in rendered
 
 
 def test_ncc_material_brief_change_changes_approval_fingerprint(tmp_path):

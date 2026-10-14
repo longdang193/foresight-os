@@ -243,6 +243,10 @@ Which Personal Care category should Cosluxe Nature enter first in Vietnam, and w
 - Reconcile category definitions and channel boundaries across the named workbook sheets.
 - Validate whether the 2023-2025 horizon and 2024 growth baseline match the client's planning calendar.
 
+## Execution intent
+
+- not specified
+
 ## Proposed investigation
 
 ### source-audit

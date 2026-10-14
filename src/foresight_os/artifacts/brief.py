@@ -99,6 +99,8 @@ def render_work_brief_markdown(brief: WorkBrief | dict[str, Any]) -> str:
     _append_bullets(lines, value.get("assumptions"), _NONE_DECLARED)
     lines.extend(["", "## Open dependencies", ""])
     _append_bullets(lines, value.get("open_dependencies"), _NONE_DECLARED)
+    lines.extend(["", "## Execution intent", ""])
+    _render_intent(lines, value.get("execution_intent"))
     lines.extend(["", "## Proposed investigation", ""])
     stages = value.get("stages") or ()
     if not stages:

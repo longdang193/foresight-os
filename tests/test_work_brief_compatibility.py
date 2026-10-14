@@ -55,3 +55,38 @@ def test_required_and_preferred_intent_conflict_is_rejected():
                 "preferred_patterns": ["direct"],
             },
         })
+
+
+def test_producer_null_fields_are_rejected_by_the_schema():
+    with pytest.raises(ValidationError, match="not of type 'string'"):
+        validate_work_brief({
+            "investigation_id": "producer-null",
+            "decision_question": "Question",
+            "scope": [],
+            "desired_deliverables": ["answer"],
+            "assumptions": [],
+            "open_dependencies": [],
+            "current_direction": "direction",
+            "next_useful_step": "next",
+            "producer": {"id": None, "source": None, "contract_version": None},
+        })
+
+
+def test_producer_unknown_fields_are_rejected_by_the_schema():
+    with pytest.raises(ValidationError, match="unexpected"):
+        validate_work_brief({
+            "investigation_id": "producer-extra",
+            "decision_question": "Question",
+            "scope": [],
+            "desired_deliverables": ["answer"],
+            "assumptions": [],
+            "open_dependencies": [],
+            "current_direction": "direction",
+            "next_useful_step": "next",
+            "producer": {
+                "id": "producer",
+                "source": "source",
+                "contract_version": "1",
+                "unexpected": "value",
+            },
+        })
