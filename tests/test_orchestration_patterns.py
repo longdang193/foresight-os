@@ -5,6 +5,7 @@ from agent_framework import Agent, ChatResponse, ChatResponseUpdate, Content, Me
 from agent_framework.orchestrations import HandoffBuilder
 
 from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, RecipeName, RecipeStage, make_recipe
+from foresight_os.controller.budgets import BudgetState
 from foresight_os.runtime.workflow import _close_agents, _run_native_stage, run_recipe_async
 from foresight_os.runtime.metrics import RunMetrics
 
@@ -153,6 +154,55 @@ def test_group_chat_metrics_report_observed_rounds():
     )
 
     assert result.metrics.chat_rounds == 4
+
+
+def test_native_group_chat_receives_effective_round_limit_and_charges_observed_rounds(monkeypatch):
+    captured = {}
+
+    class GroupChatRequestSentEvent:
+        def __init__(self, round_index):
+            self.round_index = round_index
+
+    class Stream:
+        def __aiter__(self):
+            async def events():
+                yield SimpleNamespace(type="group_chat", data=GroupChatRequestSentEvent(0))
+                yield SimpleNamespace(type="group_chat", data=GroupChatRequestSentEvent(1))
+
+            return events()
+
+        async def get_final_response(self):
+            return SimpleNamespace(get_outputs=lambda: ["native"])
+
+    class Workflow:
+        async def run(self, prompt, stream=False):
+            return Stream()
+
+    class Builder:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def build(self):
+            return Workflow()
+
+    monkeypatch.setattr("agent_framework.orchestrations.GroupChatBuilder", Builder)
+    metrics = RunMetrics("native-rounds", "GROUP_CHAT", "group_chat")
+    budget = BudgetState(5, 1, 5, max_rounds=2)
+    outputs = asyncio.run(
+        _run_native_stage(
+            ExecutionPattern.GROUP_CHAT,
+            "hello",
+            FakeChatClient(),
+            [{"purpose": "one"}, {"purpose": "two"}],
+            metrics,
+            {"budget": budget, "max_rounds": 2},
+        )
+    )
+
+    assert outputs == ["native"]
+    assert captured["max_rounds"] == 2
+    assert metrics.chat_rounds == 2
+    assert budget.rounds == 2
 
 
 def test_close_agents_attempts_every_agent_and_reports_failures():

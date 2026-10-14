@@ -166,12 +166,12 @@ contracts and evidence are still verified independently.
 
 | Task | State | Executor | Depends On | Required Proof | Durable Evidence |
 | --- | --- | --- | --- | --- | --- |
-| 0. Reconcile merged main | pending | unresolved | none | exact base, source findings, clean isolated worktree | `work/closure-identity-performance/reconciliation/` |
-| 1. Canonical effective skill plan | pending | unresolved | 0 | mixed stage/participant instructions and capability test | `work/closure-identity-performance/task-1/` |
-| 2. Receipt and fingerprint identity | pending | unresolved | 1 | participant-only skill change misses reuse | `work/closure-identity-performance/task-2/` |
-| 3. Group Chat round/budget contract | pending | unresolved | 1 | native/fallback declared-versus-observed round proof | `work/closure-identity-performance/task-3/` |
-| 4. Evaluator/provider boundary repair | pending | unresolved | 1 | structural pass plus classified provider outcomes | `work/closure-identity-performance/task-4/` |
-| 5. Process-scoped registry reuse | pending | unresolved | 1, 4 | shared registry identity and unchanged hash validation | `work/closure-identity-performance/task-5/` |
+| 0. Reconcile merged main | completed | unresolved | none | exact base, source findings, clean isolated worktree | `work/closure-identity-performance/reconciliation/` |
+| 1. Canonical effective skill plan | completed | unresolved | 0 | mixed stage/participant instructions and capability test | `work/closure-identity-performance/task-1/` |
+| 2. Receipt and fingerprint identity | completed | unresolved | 1 | participant-only skill change misses reuse | `work/closure-identity-performance/task-2/` |
+| 3. Group Chat round/budget contract | completed | unresolved | 1 | native/fallback declared-versus-observed round proof | `work/closure-identity-performance/task-3/` |
+| 4. Evaluator/provider boundary repair | completed | unresolved | 1 | structural pass plus classified provider outcomes | `work/closure-identity-performance/task-4/` |
+| 5. Process-scoped registry reuse | completed | unresolved | 1, 4 | shared registry identity and unchanged hash validation | `work/closure-identity-performance/task-5/` |
 | 6. Frozen p95 comparison | pending | unresolved | 2–5 | same workload/environment, Group Chat p95 ≤20% | `work/closure-identity-performance/task-6/` |
 | 7. CI/evidence/status hygiene | pending | unresolved | 4, 6 | deterministic gate remains green; compact evidence | `work/closure-identity-performance/task-7/` |
 | 8. Final verification | pending | unresolved | 1–7 | fresh full proof and acceptance disposition | `work/closure-identity-performance/final/` |
@@ -288,18 +288,18 @@ contracts and evidence are still verified independently.
   or change capability policy outside the named runtime boundary.
 
 **Steps:**
-- [ ] Add one private, deterministic effective-ID assembly path at the workflow
+- [x] Add one private, deterministic effective-ID assembly path at the workflow
   dispatch boundary; preserve declaration order and remove duplicates.
-- [ ] Resolve the effective IDs once for each participant with the run-scoped
+- [x] Resolve the effective IDs once for each participant with the run-scoped
   registry and store the result in the stage context keyed by participant ID.
-- [ ] Make `AgentFactory.create` consume the participant-specific selection;
+- [x] Make `AgentFactory.create` consume the participant-specific selection;
   only resolve from `ParticipantConfig.skill_ids` when no canonical selection
   was supplied for a standalone caller.
-- [ ] Compute required capabilities from every effective participant skill plus
+- [x] Compute required capabilities from every effective participant skill plus
   explicit participant capabilities before hosted capability binding.
-- [ ] Ensure native MAF and fallback Analyst/Reviewer executor paths use the same
+- [x] Ensure native MAF and fallback Analyst/Reviewer executor paths use the same
   participant-specific selection.
-- [ ] Add a mixed-skill regression with distinct stage and participant skills,
+- [x] Add a mixed-skill regression with distinct stage and participant skills,
   asserting both instruction sections and both skill-derived capabilities are
   present only for the intended participant.
 
@@ -355,19 +355,19 @@ contracts and evidence are still verified independently.
   to add a second persistence identity format.
 
 **Steps:**
-- [ ] Pass the Task 1 participant skill plan into `_stage_fingerprints` and make
+- [x] Pass the Task 1 participant skill plan into `_stage_fingerprints` and make
   each participant's ordered `(skill_id, version, content_sha256)` records part
   of the canonical semantic payload.
-- [ ] Flatten the resolved content hashes in the same stable order and use that
+- [x] Flatten the resolved content hashes in the same stable order and use that
   tuple for `StageReceipt.skill_hashes` and `reusable_for`; retain the version
   records in the semantic fingerprint so a version-only change invalidates reuse.
-- [ ] Keep the existing input, execution-policy, capability, model, authorization,
+- [x] Keep the existing input, execution-policy, capability, model, authorization,
   and canonical-provenance checks unchanged.
-- [ ] Add separate tests where only a participant skill is added/removed/reordered,
+- [x] Add separate tests where only a participant skill is added/removed/reordered,
   only a skill version changes while content/hash stays constant, and only a
   content hash changes; prove each old receipt is rejected and an identical plan
   still reuses.
-- [ ] Confirm receipt serialization remains deterministic and no raw skill content
+- [x] Confirm receipt serialization remains deterministic and no raw skill content
   or secrets are written to durable evidence.
 
 **Verification:**
@@ -433,17 +433,17 @@ contracts and evidence are still verified independently.
   provider invocation, or threshold changes.
 
 **Steps:**
-- [ ] Derive one validated positive effective limit using the stage declaration
+- [x] Derive one validated positive effective limit using the stage declaration
   and optional `run_context["max_rounds"]`; use `4` only when the stage omits a
   limit, and treat an unset run-level ceiling as unbounded.
-- [ ] Pass that value into native `GroupChatBuilder`, account for stream-observed
+- [x] Pass that value into native `GroupChatBuilder`, account for stream-observed
   rounds once, and reject a stage with no remaining allowance before constructing
   or invoking another participant.
-- [ ] Apply the same value to fallback Group Chat behavior. Keep
+- [x] Apply the same value to fallback Group Chat behavior. Keep
   `run_challenge_recommendation` as the deterministic domain helper; runtime
   fallback stabilization is limited to the existing analyst/reviewer exchange
   and does not introduce a second consensus algorithm.
-- [ ] Add direct tests using the installed native builder with a local fake client
+- [x] Add direct tests using the installed native builder with a local fake client
   and observed round/model-call counts; cover fallback limits `1`, `2`, and `4`,
   invalid/exhausted limits, an unset run-level ceiling, differing stage limits,
   and a multi-stage run with `run_context["max_rounds"]` where the second stage
@@ -512,16 +512,16 @@ contracts and evidence are still verified independently.
   external writes, or claiming provider quality from structural/reference checks.
 
 **Steps:**
-- [ ] Make the env file optional and merge approved process environment values
+- [x] Make the env file optional and merge approved process environment values
   with file values using an explicit precedence rule; retain the existing config
   file as the provider/model/base URL source.
-- [ ] Add a report status for unexpected evaluator failure and classify only
+- [x] Add a report status for unexpected evaluator failure and classify only
   known setup/transport/dependency boundaries as `BLOCKED_EXTERNAL`.
-- [ ] Preserve structural report output when provider mode is blocked or failed;
+- [x] Preserve structural report output when provider mode is blocked or failed;
   keep provider and human metric classes explicit and independent.
-- [ ] Add tests for missing optional env file with inherited settings, absent
+- [x] Add tests for missing optional env file with inherited settings, absent
   provider configuration, provider boundary failure, and an injected code defect.
-- [ ] Define the approved input-pack classifications in
+- [x] Define the approved input-pack classifications in
   `run_full_pipeline_exercise.py`: absent root, absent validator, or zero
   participant workbooks produce `BLOCKED_INPUT`; one through four participant
   workbooks produce `BLOCKED_INPUT` as an incomplete pack; exactly five
@@ -529,9 +529,9 @@ contracts and evidence are still verified independently.
   five is also `BLOCKED_INPUT` as an unexpected pack shape. When the complete
   pack exists, preserve any real pipeline failure as `FAILED` and preserve the
   existing five-participant acceptance count.
-- [ ] Make `main` exit `0` for `VERIFIED` and `BLOCKED_INPUT`, and nonzero for
+- [x] Make `main` exit `0` for `VERIFIED` and `BLOCKED_INPUT`, and nonzero for
   `FAILED`; write the same status/report shape for every branch.
-- [ ] Add these five input-shape cases to `tests/test_evaluation_contract.py` and
+- [x] Add these five input-shape cases to `tests/test_evaluation_contract.py` and
   keep validator isolation and the existing participant acceptance checks intact.
 
 **Verification:**
@@ -591,13 +591,13 @@ contracts and evidence are still verified independently.
   cache outside `SkillRegistry`.
 
 **Steps:**
-- [ ] Thread the existing context registry through native stage and review
+- [x] Thread the existing context registry through native stage and review
   execution instead of constructing a replacement at each nested call.
-- [ ] Use one registry for each evaluator run and pass it through structural and
+- [x] Use one registry for each evaluator run and pass it through structural and
   provider paths where the caller already owns the run context; do not construct
   the second registry currently created independently by `run_structural` and
   `run_provider`.
-- [ ] Add identity/counting tests proving repeated resolution reuses the same
+- [x] Add identity/counting tests proving repeated resolution reuses the same
   registry/cache result and content hash mismatch still raises.
 
 **Verification:**

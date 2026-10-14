@@ -1,6 +1,6 @@
 from copy import deepcopy
 
-from evaluation.probes.compare_optimization_receipts import compare
+from evaluation.probes.compare_optimization_receipts import compare, compare_repeats, validate_stability
 from foresight_os.runtime.metrics import RunMetrics
 
 
@@ -118,3 +118,26 @@ def test_comparator_rejects_new_calls_for_reused_stage():
 
     assert not result["accepted"]
     assert result["reused_stage_new_calls"] == ["stage-1"]
+
+
+def test_repeat_comparator_requires_stable_group_chat_p95_and_metadata():
+    baseline = _receipt()
+    baseline_repeat = deepcopy(baseline)
+    release = deepcopy(baseline)
+    release_repeat = deepcopy(baseline)
+    release["maf_patterns"]["CHALLENGE_RECOMMENDATION"]["latency"]["wall_time_ms_p95"] = 12
+    release_repeat["maf_patterns"]["CHALLENGE_RECOMMENDATION"]["latency"]["wall_time_ms_p95"] = 12
+    assert validate_stability([baseline, baseline_repeat], [release, release_repeat])["accepted"]
+    assert compare_repeats([baseline, baseline_repeat], [release, release_repeat])["accepted"]
+
+    unstable = deepcopy(baseline_repeat)
+    unstable["maf_patterns"]["CHALLENGE_RECOMMENDATION"]["latency"]["wall_time_ms_p95"] = 12
+    unstable_result = validate_stability([baseline, unstable], [release, release_repeat])
+    assert not unstable_result["accepted"]
+    assert any("group_chat_p95" in error for error in unstable_result["errors"])
+
+    mismatched = deepcopy(baseline_repeat)
+    mismatched["workload"]["fixture_sha256"] = "different"
+    mismatch_result = validate_stability([baseline, mismatched], [release, release_repeat])
+    assert not mismatch_result["accepted"]
+    assert any("workload" in error for error in mismatch_result["errors"])

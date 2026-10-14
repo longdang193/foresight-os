@@ -43,7 +43,11 @@ class AgentFactory:
         config = ParticipantConfig.from_mapping(participant_config)
         context = dict(run_context or {})
         skill_registry = context.get("skill_registry")
-        selected_skills = tuple(context.get("selected_skills", ()))
+        selected_by_participant = context.get("selected_skills_by_participant", {})
+        if config.id in selected_by_participant:
+            selected_skills = tuple(selected_by_participant[config.id])
+        else:
+            selected_skills = tuple(context.get("selected_skills", ()))
         if config.skill_ids and skill_registry is None:
             raise RuntimeError(f"participant {config.id} requires a skill registry")
         if skill_registry is not None and config.skill_ids and not selected_skills:

@@ -87,7 +87,10 @@ async def execute_review_skills(
 ) -> tuple[ChallengeObjection, ...]:
     """Run selected review skills through the canonical ReviewerExecutor seam."""
     skill_ids = tuple(str(item) for item in getattr(policy, "required_skill_ids", ()))
-    registry = SkillRegistry()
+    context = dict(run_context or {})
+    if "skill_registry" not in context:
+        context["skill_registry"] = SkillRegistry()
+    registry = context["skill_registry"]
     skills = registry.resolve(skill_ids)
     participant = ParticipantConfig(
         "reviewer",
@@ -96,8 +99,7 @@ async def execute_review_skills(
         skill_ids=skill_ids,
         structured_output={"type": "json", "items": "ChallengeObjection"},
     )
-    context = dict(run_context or {})
-    context.update({"skill_registry": registry, "selected_skills": skills})
+    context.update({"selected_skills": skills})
     reviewer = executor or ReviewerExecutor(client, factory, participant, context)
     output = await reviewer.execute(_review_prompt(evidence, records, list(calculations or ())))
     objections = parse_review_objections(output, records[-1].id if records else "review")
@@ -119,7 +121,10 @@ async def review_reasoning_with_skills(
     factory: AgentFactory | None = None,
     run_context: Mapping[str, Any] | None = None,
 ) -> ReviewResult:
-    deterministic = review_reasoning(evidence, records, calculations=calculations, policy=policy)
+    context = dict(run_context or {})
+    if "skill_registry" not in context:
+        context["skill_registry"] = SkillRegistry()
+    deterministic = review_reasoning(evidence, records, calculations=calculations, policy=policy, run_context=context)
     skill_objections = await execute_review_skills(
         evidence,
         records,
@@ -128,7 +133,7 @@ async def review_reasoning_with_skills(
         client=client,
         executor=executor,
         factory=factory,
-        run_context=run_context,
+        run_context=context,
     )
     if not skill_objections:
         return deterministic
@@ -152,6 +157,7 @@ def review_reasoning(
     *,
     calculations: list[CalculationRecord] | None = None,
     policy: object | None = None,
+    run_context: Mapping[str, Any] | None = None,
 ) -> ReviewResult:
     evidence_ids = {item.id for item in evidence}
     issues = []
@@ -184,7 +190,10 @@ def review_reasoning(
     skill_hashes: tuple[str, ...] = ()
     if skill_ids:
         try:
-            resolved_skills = SkillRegistry().resolve(skill_ids)
+            registry = (run_context or {}).get("skill_registry") if run_context is not None else None
+            if registry is None:
+                registry = SkillRegistry()
+            resolved_skills = registry.resolve(skill_ids)
         except (ValueError, RuntimeError) as error:
             issues.append(f"required review skills unavailable: {error}")
         else:

@@ -51,6 +51,23 @@ def _limited_recipe(**limits):
     )
 
 
+def _group_chat_recipe(**limits):
+    base = make_recipe(RecipeName.CHALLENGE_RECOMMENDATION)
+    stage = RecipeStage("chat", ExecutionPattern.GROUP_CHAT, tuple(base.roles), "prompt", "typed-result", limits)
+    return ExecutionRecipe(
+        base.name,
+        base.pattern,
+        base.roles,
+        base.max_agent_steps,
+        base.max_correction_rounds,
+        base.max_total_agent_calls,
+        base.completion,
+        base.escalation,
+        base.partial_result,
+        stages=(stage,),
+    )
+
+
 def test_run_recipe_returns_typed_metrics_and_real_executor_calls():
     result = asyncio.run(run_recipe_async(make_recipe(RecipeName.ANALYZE_REVIEW), "analyse", FakeClient(), "run-test"))
 
@@ -67,6 +84,47 @@ def test_budget_failure_is_rejected_before_dispatch_and_keeps_metrics():
 
     assert caught.value.metrics.failure_class == FailureClass.BUDGET.value
     assert caught.value.metrics.settled
+    assert caught.value.metrics.model_calls == 0
+
+
+@pytest.mark.parametrize(("limit", "expected_outputs", "expected_rounds"), ((1, 1, 1), (2, 2, 2), (4, 2, 2)))
+def test_fallback_group_chat_honors_stage_round_limit(limit, expected_outputs, expected_rounds):
+    result = asyncio.run(run_recipe_async(_group_chat_recipe(max_rounds=limit), "analyse", None, f"group-{limit}"))
+
+    assert len(result.outputs) == expected_outputs
+    assert result.metrics.chat_rounds == expected_rounds
+
+
+def test_group_chat_rejects_non_positive_round_limit():
+    with pytest.raises(Exception) as caught:
+        asyncio.run(run_recipe_async(_group_chat_recipe(max_rounds=0), "analyse", None, "group-invalid"))
+
+    assert "positive integer" in str(caught.value)
+
+
+def test_group_chat_run_limit_is_cumulative_across_stages():
+    base = make_recipe(RecipeName.CHALLENGE_RECOMMENDATION)
+    stages = (
+        RecipeStage("first", ExecutionPattern.GROUP_CHAT, tuple(base.roles), "prompt", "typed-result", {"max_rounds": 1}),
+        RecipeStage("second", ExecutionPattern.GROUP_CHAT, tuple(base.roles), "prompt", "typed-result", {"max_rounds": 4}),
+    )
+    recipe = ExecutionRecipe(
+        base.name,
+        base.pattern,
+        base.roles,
+        base.max_agent_steps,
+        base.max_correction_rounds,
+        base.max_total_agent_calls,
+        base.completion,
+        base.escalation,
+        base.partial_result,
+        stages=stages,
+    )
+
+    with pytest.raises(BudgetExceededError) as caught:
+        asyncio.run(run_recipe_async(recipe, "analyse", None, "group-run-limit", {"max_rounds": 1}))
+
+    assert caught.value.metrics.chat_rounds == 1
     assert caught.value.metrics.model_calls == 0
 
 

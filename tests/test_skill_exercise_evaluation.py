@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 
@@ -6,6 +7,7 @@ from evaluation.probes.run_skill_exercise_evaluation import run_structural
 
 
 ROOT = Path(__file__).parents[1]
+CASE = ROOT / "evaluation" / "cases" / "case-001"
 FIXTURE_ROOT = ROOT / "evaluation" / "skills"
 EXPECTED_SKILL_FIXTURE_KEYS = {
     "skill_id",
@@ -15,7 +17,7 @@ EXPECTED_SKILL_FIXTURE_KEYS = {
     "expected_observable_properties",
 }
 EXPECTED_METRIC_CLASSES = {"deterministic_reference", "provider_runtime", "human_rubric"}
-ALLOWED_STATUSES = {"VERIFIED", "BLOCKED_INPUT", "BLOCKED_EXTERNAL", "NOT_RUN", "not_measured"}
+ALLOWED_STATUSES = {"VERIFIED", "BLOCKED_INPUT", "BLOCKED_EXTERNAL", "FAILED", "NOT_RUN", "not_measured"}
 
 
 def test_each_skill_fixture_has_three_positive_cases_and_one_near_miss():
@@ -64,3 +66,22 @@ def test_structural_report_preserves_metric_boundaries_and_optional_input_status
     assert report["metric_classes"]["provider_runtime"]["status"] == "NOT_RUN"
     assert report["metric_classes"]["human_rubric"]["status"] == "not_measured"
     assert report["metric_classes"]["human_rubric"]["correction_effort"] is None
+
+
+def test_provider_case_classification_keeps_code_failures_distinct_from_transport_blocks(monkeypatch):
+    import evaluation.probes.run_skill_exercise_evaluation as evaluation_probe
+
+    async def fail_with_connection(*args, **kwargs):
+        raise ConnectionError("provider unavailable")
+
+    async def fail_with_code_defect(*args, **kwargs):
+        raise AssertionError("injected evaluator defect")
+
+    registry = SkillRegistry()
+    monkeypatch.setattr(evaluation_probe, "run_recipe_async", fail_with_connection)
+    blocked = asyncio.run(evaluation_probe._run_provider_cases([CASE], ("source-appraisal",), registry, object()))
+    monkeypatch.setattr(evaluation_probe, "run_recipe_async", fail_with_code_defect)
+    failed = asyncio.run(evaluation_probe._run_provider_cases([CASE], ("source-appraisal",), registry, object()))
+
+    assert blocked[0]["status"] == "BLOCKED_EXTERNAL"
+    assert failed[0]["status"] == "FAILED"

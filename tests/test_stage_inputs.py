@@ -2,6 +2,7 @@ import asyncio
 
 from foresight_os.controller.policy import select_recipe
 from foresight_os.controller.recipes import ExecutionPattern, RecipeStage, StageInput
+from foresight_os.controller.skills import ResolvedSkill, SkillManifest
 from foresight_os.domain.models import WorkBrief, WorkStage
 from foresight_os.runtime.workflow import _stage_cache_key, _stage_fingerprints, run_recipe_async
 
@@ -64,3 +65,53 @@ def test_semantic_and_policy_fingerprints_are_distinct():
     assert base_fingerprints[0] == policy_fingerprints[0]
     assert base_fingerprints[1] != policy_fingerprints[1]
     assert _stage_cache_key(base, StageInput("question", "2030", "assess", "result"), ()) == _stage_cache_key(changed_policy, StageInput("question", "2030", "assess", "result"), ())
+
+
+def test_stage_fingerprint_includes_each_participant_skill_identity_and_order():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.DIRECT,
+        (
+            {"id": "analyst", "purpose": "analyze", "skill_ids": ("analyst-skill",)},
+            {"id": "reviewer", "purpose": "review", "skill_ids": ("review-skill",)},
+        ),
+        "prompt",
+        "typed-result",
+        {},
+        skill_ids=("stage-skill",),
+    )
+    input_value = StageInput("question", "2030", "assess", "result")
+
+    def resolved(skill_id: str, version: str = "1.0.0", digest: str | None = None) -> ResolvedSkill:
+        manifest = SkillManifest(skill_id, version, f"{skill_id}.md", digest or f"hash-{skill_id}", (), "result", "test")
+        return ResolvedSkill(manifest, skill_id)
+
+    base = {
+        "analyst": (resolved("stage-skill"), resolved("analyst-skill")),
+        "reviewer": (resolved("stage-skill"), resolved("review-skill")),
+    }
+    base_fingerprint = _stage_fingerprints(stage, input_value, stage.skill_ids, base)[0]
+    assert base_fingerprint != _stage_fingerprints(
+        stage,
+        input_value,
+        stage.skill_ids,
+        {**base, "analyst": (resolved("stage-skill"), resolved("other-skill"))},
+    )[0]
+    assert base_fingerprint != _stage_fingerprints(
+        stage,
+        input_value,
+        stage.skill_ids,
+        {"analyst": base["analyst"], "reviewer": (resolved("review-skill"), resolved("stage-skill"))},
+    )[0]
+    assert base_fingerprint != _stage_fingerprints(
+        stage,
+        input_value,
+        stage.skill_ids,
+        {**base, "analyst": (resolved("stage-skill", version="2.0.0"), resolved("analyst-skill"))},
+    )[0]
+    assert base_fingerprint != _stage_fingerprints(
+        stage,
+        input_value,
+        stage.skill_ids,
+        {**base, "analyst": (resolved("stage-skill", digest="changed"), resolved("analyst-skill"))},
+    )[0]

@@ -199,3 +199,41 @@ def test_selected_review_skills_produce_validated_typed_objections():
     assert review.skill_versions == (registry.manifest("red-team-claim").version,)
     assert review.skill_hashes
     assert review.objections[-1].kind == "UNSUPPORTED_ASSUMPTION"
+
+
+def test_review_uses_one_caller_owned_skill_registry(monkeypatch):
+    class FakeExecutor:
+        async def execute(self, prompt):
+            return {"objections": []}
+
+    policy = type(
+        "Policy",
+        (),
+        {
+            "policy_id": "policy-1",
+            "version": "1",
+            "required_skill_ids": ("red-team-claim",),
+            "acceptable_outcomes": ("ACCEPTED",),
+            "blocking_objection_kinds": (),
+        },
+    )()
+    registry = SkillRegistry()
+    import foresight_os.analysis.reviewer as reviewer_module
+
+    def unexpected_registry():
+        raise AssertionError("review should use the supplied registry")
+
+    monkeypatch.setattr(reviewer_module, "SkillRegistry", unexpected_registry)
+    state = make_state()
+    review = asyncio.run(
+        review_reasoning_with_skills(
+            state.evidence,
+            state.claims,
+            policy=policy,
+            executor=FakeExecutor(),
+            run_context={"skill_registry": registry},
+        )
+    )
+
+    assert review.skill_ids == ("red-team-claim",)
+    assert review.skill_hashes == (registry.resolve(("red-team-claim",))[0].content_sha256,)
