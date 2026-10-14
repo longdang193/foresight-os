@@ -123,7 +123,7 @@ procedures, inventories, or private governance.
 - Execution worktree:
   `C:\Users\HOANG PHI LONG DANG\.codex\worktrees\documentation-consolidation\foresight-OS`.
 - Approved-plan SHA-256: `51C092597C5724DC5721F4381B717A8D073CA7858E652F9A1F40CC98F57232DB`.
-- Initial plan checkpoint commit: `PENDING_FIRST_CHECKPOINT_COMMIT`.
+- Initial plan checkpoint commit: `740579dc16fee13f61151d1c295bac37e817958f`.
 
 ## Acceptance Criteria
 
