@@ -6,6 +6,8 @@ import sys
 import pytest
 
 from foresight_os.domain.models import AnalysisState, Invalidation, ResearchNeed, ResearchNeedKind, Revision, WorkBrief, WorkStage
+from foresight_os.controller.policy import select_recipe
+from foresight_os.controller.recipes import ExecutionPattern
 from foresight_os.domain.validation import ValidationError
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.persistence.ids import deterministic_id
@@ -39,6 +41,27 @@ def test_typed_brief_stages_round_trip_and_preserve_routing_inputs(tmp_path: Pat
     )
     store.save_brief(brief)
     assert store.load_brief() == brief
+
+
+def test_stage_execution_intent_preserves_pattern_selection_after_round_trip(tmp_path: Path):
+    store = AnalysisStore(tmp_path / "stage-intent")
+    brief = WorkBrief(
+        "stage-intent",
+        "What should we do?",
+        ["scope"],
+        ["answer"],
+        [],
+        [],
+        "inspect",
+        "retrieve",
+        stages=[WorkStage("stage-1", "collect", execution_pattern_override=ExecutionPattern.CONCURRENT.value)],
+    )
+
+    store.save_brief(brief)
+
+    loaded_recipe = select_recipe(store.load_brief())
+
+    assert loaded_recipe.stages[0].pattern is ExecutionPattern.CONCURRENT
 
 
 def test_malformed_analysis_does_not_replace_existing_file(tmp_path: Path):

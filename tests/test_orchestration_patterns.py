@@ -6,6 +6,7 @@ from agent_framework.orchestrations import HandoffBuilder
 
 from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, RecipeName, RecipeStage, make_recipe
 from foresight_os.controller.budgets import BudgetState
+from foresight_os.persistence.ids import canonical_json_hash
 from foresight_os.runtime.workflow import _close_agents, _run_native_stage, run_recipe_async
 from foresight_os.runtime.metrics import RunMetrics
 
@@ -79,6 +80,25 @@ def test_composed_native_stages_pass_outputs_and_settle_metrics():
     assert result.metrics.branches == 2
     assert result.metrics.chat_rounds == 4
     assert result.metrics.cleanup_complete
+
+
+def test_admitted_native_execution_validates_the_approved_recipe_snapshot():
+    recipe = _recipe((ExecutionPattern.SEQUENTIAL,))
+
+    result = asyncio.run(
+        run_recipe_async(
+            recipe,
+            "hello",
+            FakeChatClient(),
+            "approved-native",
+            {
+                "execution_admitted": True,
+                "approved_recipe_fingerprint": canonical_json_hash(recipe.to_dict()),
+            },
+        )
+    )
+
+    assert result.outputs
 
 
 def test_handoff_metrics_report_observed_transfer_not_recipe_shape():

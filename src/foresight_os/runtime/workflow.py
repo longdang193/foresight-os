@@ -106,7 +106,7 @@ async def _run_native_stage(
     context = dict(run_context or {})
     if context.get("execution_admitted"):
         expected_recipe_fingerprint = context.get("approved_recipe_fingerprint")
-        actual_recipe_fingerprint = canonical_json_hash(recipe.to_dict())
+        actual_recipe_fingerprint = context.get("recipe_fingerprint")
         if expected_recipe_fingerprint and expected_recipe_fingerprint != actual_recipe_fingerprint:
             raise ValidationError("approved recipe snapshot is immutable and cannot be changed at runtime")
     context.setdefault("skill_registry", SkillRegistry())
@@ -339,6 +339,7 @@ async def run_recipe_async(
     outputs: list[object] = []
     metrics.cleanup_complete = True
     context = dict(run_context or {})
+    context["recipe_fingerprint"] = canonical_json_hash(recipe.to_dict())
     run_max_rounds = None
     if "max_rounds" in context and context["max_rounds"] is not None:
         run_max_rounds = _positive_limit(context["max_rounds"], label="max_rounds")

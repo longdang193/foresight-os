@@ -96,6 +96,15 @@ def _patterns_from_override(override) -> tuple[ExecutionPattern, ...]:
     return selected
 
 
+def _stage_pattern_override(stage: object):
+    legacy_override = getattr(stage, "execution_pattern_override", None)
+    if legacy_override is not None:
+        return legacy_override
+    intent = getattr(stage, "execution_intent", None)
+    required_patterns = getattr(intent, "required_patterns", ())
+    return required_patterns or None
+
+
 def _recipe_for_patterns(
     patterns: tuple[ExecutionPattern, ...],
     source: str,
@@ -152,12 +161,14 @@ def _recipe_for_patterns(
     stage_count = len(work_stages) or len(patterns)
     if work_stages and source == "explicit_override" and len(patterns) not in (1, len(work_stages)):
         raise ValueError("pattern list must contain one pattern or exactly one pattern per WorkStage")
-    stage_patterns = [
-        _patterns_from_override(getattr(work_stages[index - 1], "execution_pattern_override"))[0]
-        if index <= len(work_stages) and getattr(work_stages[index - 1], "execution_pattern_override", None) is not None
-        else (patterns[index - 1] if index <= len(patterns) else patterns[-1])
-        for index in range(1, stage_count + 1)
-    ]
+    stage_patterns = []
+    for index in range(1, stage_count + 1):
+        stage_override = _stage_pattern_override(work_stages[index - 1]) if index <= len(work_stages) else None
+        stage_patterns.append(
+            _patterns_from_override(stage_override)[0]
+            if stage_override is not None
+            else (patterns[index - 1] if index <= len(patterns) else patterns[-1])
+        )
 
     def review_capabilities(stage: object) -> tuple[str, ...]:
         capabilities, _ = stage_capabilities(stage)
