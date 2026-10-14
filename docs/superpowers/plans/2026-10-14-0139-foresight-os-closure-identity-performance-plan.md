@@ -2,7 +2,7 @@
 layer: change
 artifact_type: plan
 contract_version: "1"
-status: active
+status: completed
 template_id: implementation-plan
 name: foresight-os-closure-identity-performance
 targets:
@@ -172,9 +172,24 @@ contracts and evidence are still verified independently.
 | 3. Group Chat round/budget contract | completed | unresolved | 1 | native/fallback declared-versus-observed round proof | `work/closure-identity-performance/task-3/` |
 | 4. Evaluator/provider boundary repair | completed | unresolved | 1 | structural pass plus classified provider outcomes | `work/closure-identity-performance/task-4/` |
 | 5. Process-scoped registry reuse | completed | unresolved | 1, 4 | shared registry identity and unchanged hash validation | `work/closure-identity-performance/task-5/` |
-| 6. Frozen p95 comparison | pending | unresolved | 2–5 | same workload/environment, Group Chat p95 ≤20% | `work/closure-identity-performance/task-6/` |
-| 7. CI/evidence/status hygiene | pending | unresolved | 4, 6 | deterministic gate remains green; compact evidence | `work/closure-identity-performance/task-7/` |
-| 8. Final verification | pending | unresolved | 1–7 | fresh full proof and acceptance disposition | `work/closure-identity-performance/final/` |
+| 6. Frozen p95 comparison | completed | unresolved | 2–5 | repeat stability and both ordinal comparisons pass in repeat-4 | `work/closure-identity-performance/task-6/repeat-4/` |
+| 7. CI/evidence/status hygiene | completed | unresolved | 4, 6 | deterministic gate remains green; compact evidence | `work/closure-identity-performance/task-7/` |
+| 8. Final verification | completed | unresolved | 1–7 | fresh full proof and acceptance disposition | `work/closure-identity-performance/final/` |
+
+## Current Execution Ledger
+
+- Plan status is `completed`; Tasks 0–5 are implemented and their focused
+  verification passed.
+- The original Task 6 receipts remain preserved with their stability failure:
+  baseline drift `61.458%`, candidate drift `32.162%`, and ordinal run-1
+  `CHALLENGE_RECOMMENDATION` regression `46.722%`.
+- A fresh `repeat-4` protocol corrected the baseline receipt schema and used the
+  same relative fixture identity. Stability passed and both ordinal comparisons
+  passed: Group Chat p95 deltas `0.006%` and `2.023%`, overall p95 deltas
+  `0.124%` and `-2.331%`, with the unchanged `20%` gate.
+- Tasks 7 and 8 completed with fresh local verification and durable evidence.
+  No threshold relaxation, provider authentication, Canva mutation, push, PR,
+  or merge is claimed by this plan.
 
 ## Task Breakdown
 
@@ -218,17 +233,17 @@ contracts and evidence are still verified independently.
   any request to clean the current checkout.
 
 **Steps:**
-- [ ] Fetch `origin/main` and verify it resolves to the recorded merge commit.
-- [ ] Create the task worktree from `origin/main` without copying current
+- [x] Fetch `origin/main` and verify it resolves to the recorded merge commit.
+- [x] Create the task worktree from `origin/main` without copying current
   untracked outputs.
-- [ ] Record the source findings above and confirm PR #9 assets are present:
+- [x] Record the source findings above and confirm PR #9 assets are present:
   nine skill manifests/fixtures, the evaluator, and the frozen optimization
   comparator.
-- [ ] Add this plan to the execution branch as the first tracked coordination
+- [x] Add this plan to the execution branch as the first tracked coordination
   artifact, create the authorized checkpoint that preserves its front matter and
   task ledger, then change `status` from `proposed` to `active` before activating
   Task 0. The lead remains the sole coordination-state writer.
-- [ ] Record the two historical plans as delivered implementation records only
+- [x] Record the two historical plans as delivered implementation records only
   after verifying their own completion contracts and PR-bound evidence; do not
   use this plan to retroactively erase their blockers.
 
@@ -654,7 +669,7 @@ contracts and evidence are still verified independently.
   acceptance without a repeatable protocol.
 
 **Steps:**
-- [ ] Create these exact sibling detached worktrees before measurement:
+- [x] Create these exact sibling detached worktrees before measurement:
   `C:\Users\HOANG PHI LONG DANG\.codex\worktrees\closure-identity-baseline\foresight-OS`
   at `origin/main`, and
   `C:\Users\HOANG PHI LONG DANG\.codex\worktrees\closure-identity-candidate\foresight-OS`
@@ -663,26 +678,26 @@ contracts and evidence are still verified independently.
   `tests/fixtures/analyst_multisheet.xlsx`, the same Python executable and
   installed dependency set, and separate output directories. The `--mode` flag
   labels a receipt only; it does not select a revision.
-- [ ] Record `git rev-parse HEAD`, `python --version`, `python -m pip freeze`,
+- [x] Record `git rev-parse HEAD`, `python --version`, `python -m pip freeze`,
   fixture SHA, warm-up count, measured-run count, platform, and the resolved
   `foresight_os.__file__` path beside each receipt. Assert that the resolved
   package path is under the worktree being measured; do not import candidate
   source into the baseline worktree.
-- [ ] Repeat the full probe twice at each pinned SHA, preserving four distinct
+- [x] Repeat the full probe twice at each pinned SHA, preserving four distinct
   receipts: `baseline/run-1/receipt.json`, `baseline/run-2/receipt.json`,
   `candidate/run-1/receipt.json`, and `candidate/run-2/receipt.json`. Run the
   comparator's `validate_stability` path and accept the protocol only when the
   two Group Chat p95 values at each SHA differ by no more than `10%` and the
   per-pattern workload/fixture/environment metadata matches exactly; otherwise
   retain the performance blocker.
-- [ ] Compare ordinally paired receipts (`baseline/run-1` to `candidate/run-1`
+- [x] Compare ordinally paired receipts (`baseline/run-1` to `candidate/run-1`
   and `baseline/run-2` to `candidate/run-2`); both comparisons must pass. Use
   the saved baseline receipts from the baseline worktree and the saved candidate
   receipts from the candidate worktree; never regenerate the baseline from the
   final candidate worktree during final verification.
-- [ ] Compare receipts and inspect Group Chat p95, overall p95, peak allocation,
+- [x] Compare receipts and inspect Group Chat p95, overall p95, peak allocation,
   RSS, per-finding economics, and 100-run soak results.
-- [ ] If the comparator still fails, record the exact metric and keep the plan
+- [x] If the comparator still fails, record the exact metric and keep the plan
   active; do not relax the threshold or claim closure.
 
 **Verification:**
@@ -765,16 +780,16 @@ contracts and evidence are still verified independently.
   secrets/provider payloads, or modifying Canva/publication behavior.
 
 **Steps:**
-- [ ] Keep `pytest`, compile, contract/controller matrices, toolbelt/disposable
+- [x] Keep `pytest`, compile, contract/controller matrices, toolbelt/disposable
   MCP, wheel smoke, and whitespace checks in the cheap deterministic PR job.
-- [ ] Keep the current `.github/workflows/ci.yml` deterministic PR job unchanged
+- [x] Keep the current `.github/workflows/ci.yml` deterministic PR job unchanged
   in required checks, and add the named `scheduled-evidence` workflow with
   explicit local-only commands. Keep `run_provider` false by default, require
   the protected `provider-evidence` environment for the manual provider job,
   and do not add a connected Canva/rendered smoke job to this PR.
-- [ ] Create one compact accepted receipt for the PR with sanitized facts and
+- [x] Create one compact accepted receipt for the PR with sanitized facts and
   references to disposable raw outputs.
-- [ ] Reconcile historical plan status text and this plan's active acceptance
+- [x] Reconcile historical plan status text and this plan's completed acceptance
   boundary; do not mark this plan completed from a checked box alone.
 
 **Verification:**
@@ -830,13 +845,13 @@ contracts and evidence are still verified independently.
   frozen p95 gate, unclassified provider result, or missing required evidence.
 
 **Steps:**
-- [ ] Run the focused tests for skills, reuse, Group Chat, evaluator, MAF
+- [x] Run the focused tests for skills, reuse, Group Chat, evaluator, MAF
   boundaries, and optimization measurement.
-- [ ] Run `python -m pytest -q`, compile, contract/controller matrices, and the
+- [x] Run `python -m pytest -q`, compile, contract/controller matrices, and the
   clean-wheel smoke from the final worktree.
-- [ ] Review the p95 comparison and provider/full-pipeline evidence; record
+- [x] Review the p95 comparison and provider/full-pipeline evidence; record
   exact blocked boundaries without fabricating success.
-- [ ] Run `skill-verification-before-completion`; set this plan to `completed`
+- [x] Run `skill-verification-before-completion`; set this plan to `completed`
   only if it returns `verified` for all mandatory outcomes, otherwise leave it
   `active` with the exact failed or blocked acceptance gate.
 

@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "plan": "foresight-os-closure-identity-performance",
+  "implementation_commit": "74f0bf7",
+  "status": "VERIFIED_LOCAL_WITH_BLOCKED_EXTERNAL_BOUNDARIES",
+  "checks": {
+    "pytest": "passed",
+    "compileall": "passed",
+    "contract_matrix": "passed",
+    "controller_matrix": "passed",
+    "structural_skill_evaluation": "VERIFIED",
+    "clean_wheel_smoke": "passed",
+    "release_optimization_probe": "VERIFIED",
+    "frozen_optimization_comparison": "passed"
+  },
+  "optimization": {
+    "comparison": "work/closure-identity-performance/task-6/repeat-4/comparison.json",
+    "stability": "passed",
+    "ordinal_pairs": 2,
+    "group_chat_p95_delta_pct": [0.006, 2.023],
+    "overall_p95_delta_pct": [0.124, -2.331],
+    "thresholds_changed": false
+  },
+  "skills": {
+    "structural_cases": 5,
+    "status": "VERIFIED",
+    "extended_exercise_pack": "BLOCKED_INPUT"
+  },
+  "provider": {
+    "status": "BLOCKED_EXTERNAL",
+    "reason": "provider authentication and live calls remain opt-in"
+  },
+  "canva": {
+    "status": "BLOCKED_EXTERNAL",
+    "mutation_or_publication": false
+  },
+  "raw_outputs": [
+    "work/closure-identity-performance/final/",
+    "work/closure-identity-performance/task-6/repeat-4/"
+  ]
+}

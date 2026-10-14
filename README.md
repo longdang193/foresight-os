@@ -146,6 +146,16 @@ Provider-backed search requires explicit environment configuration; unavailable
 external providers remain `BLOCKED_EXTERNAL` and are reported separately from
 implementation verification.
 
+The `scheduled-evidence` workflow repeats the structural skill evaluation,
+clean-wheel smoke, and release optimization measurement on a weekly schedule or
+manual dispatch. Provider-backed evaluation is a separate opt-in job guarded by
+the protected `provider-evidence` environment and is disabled by default.
+
+The `scheduled-evidence` workflow repeats the structural skill evaluation,
+clean-wheel smoke, and release optimization measurement on a weekly schedule or
+manual dispatch. Provider-backed evaluation is a separate opt-in job guarded by
+the protected `provider-evidence` environment and is disabled by default.
+
 ## External Signal MCP Integrations
 
 Foresight exposes three hosted, read-only signal providers as MAF-agent tools

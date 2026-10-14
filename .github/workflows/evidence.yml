@@ -1,0 +1,71 @@
+name: scheduled-evidence
+
+on:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      run_provider:
+        description: "Run provider-backed evaluation in the protected environment"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  scheduled-evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install package and build tools
+        run: python -m pip install --upgrade pip build pytest && python -m pip install .
+      - name: Run structural skill evaluation
+        run: |
+          python evaluation/probes/run_skill_exercise_evaluation.py \
+            --mode structural \
+            --exercise-root evaluation/cases \
+            --skill-fixture-root evaluation/skills \
+            --output-root "$RUNNER_TEMP/foresight-structural"
+      - name: Run clean-wheel smoke
+        run: python evaluation/probes/run_clean_wheel_smoke.py --output-root "$RUNNER_TEMP/foresight-clean-wheel"
+      - name: Run release optimization measurement
+        run: |
+          python evaluation/probes/run_optimization_probe.py \
+            --mode release \
+            --fixture tests/fixtures/analyst_multisheet.xlsx \
+            --output "$RUNNER_TEMP/foresight-optimization/release.json"
+      - name: Upload scheduled evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: scheduled-evidence
+          path: |
+            ${{ runner.temp }}/foresight-structural
+            ${{ runner.temp }}/foresight-clean-wheel
+            ${{ runner.temp }}/foresight-optimization
+
+  provider-evidence:
+    if: ${{ inputs.run_provider == true }}
+    runs-on: ubuntu-latest
+    environment: provider-evidence
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install package and build tools
+        run: python -m pip install --upgrade pip build pytest && python -m pip install .
+      - name: Run provider-backed skill evaluation
+        run: |
+          python evaluation/probes/run_skill_exercise_evaluation.py \
+            --mode provider \
+            --exercise-root evaluation/cases \
+            --skill-fixture-root evaluation/skills \
+            --extended-exercise-root data/exercise \
+            --output-root "$RUNNER_TEMP/foresight-provider"
+      - name: Upload provider evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: provider-evidence
+          path: ${{ runner.temp }}/foresight-provider
