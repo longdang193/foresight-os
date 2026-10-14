@@ -37,35 +37,6 @@ the HTML as a file; download it and open it locally for the interactive viewer.
 | Honest boundaries | Missing inputs, failed checks, unavailable providers, and unresolved issues remain visible statuses. |
 | Durable outputs | Reports and optional presentations are linked to accepted revisions rather than detached model responses. |
 
-## See it in action: Technology Radar
-
-The checked-in Technology Radar fixture asks: **Which emerging technologies
-should the company prioritize?** The accepted local workflow uses a 24–36 month
-horizon and produces this conditional posture:
-
-![ForesightOS Technology Radar showing SiC Power Electronics in Invest, AI Engineering Copilots and Zonal Architecture in Experiment, and L4 Autonomous Logistics and Solid-State Batteries in Monitor.](docs/assets/technology-radar-flagship.svg)
-
-*Source-derived snapshot from the accepted local workflow. Workbook SHA-256:
-`e1e7f1a5ae232adaea8f97be835ccb6438319c08e35463a1f23f9dfe1e92f674`.*
-
-- **Invest:** SiC Power Electronics.
-- **Experiment:** AI Engineering Copilots and Zonal Architecture.
-- **Monitor:** L4 Autonomous Logistics and Solid-State Batteries.
-- **Counterhypothesis:** media volume, patents, and syndicated announcements
-  may run ahead of repeatable commercial deployment.
-- **Review signposts:** independent OEM design wins, platforms entering SOP,
-  measured productivity studies, automotive-qualified battery pilots, and
-  regulator-approved commercial L4 routes.
-
-Run the same provider-free workflow from the repository root:
-
-```powershell
-python -c "from pathlib import Path; from foresight_os.analysis.technology_radar import run_technology_radar_workflow; from foresight_os.domain.challenge import derive_finding_views; from foresight_os.persistence.analysis_store import AnalysisStore; r=run_technology_radar_workflow(AnalysisStore(Path('.tmp-tests/readme-showcase/radar-case')), Path('tests/fixtures/exercise/04_Technology_Radar.xlsx'), human_decision='ACCEPT'); report=r.report_path.read_text(encoding='utf-8') if r.report_path else ''; assert r.status == 'accepted' and r.report_path and r.report_path.exists() and all(item.accepted for item in derive_finding_views(r.analysis)) and all(section in report for section in ['Signal quality', 'Competing hypotheses', 'Alternative futures', 'Action category', 'Signposts']); print(f'{r.status}: {r.report_path}')"
-```
-
-The command requires no provider authentication and writes only to the existing
-ignored `.tmp-tests/readme-showcase/` directory.
-
 ## Five-minute local quickstart
 
 Requirements: Python 3.11 or newer and the project dependencies.
