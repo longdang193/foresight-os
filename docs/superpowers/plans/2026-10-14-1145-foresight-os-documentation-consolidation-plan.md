@@ -157,8 +157,8 @@ not rewritten into onboarding pages.
 
 | Task | Status | Executor | Outcome | Dependencies | Accepted proof | Blocker | Next action |
 |---|---|---|---|---|---|---|---|
-| 0. Establish documentation baseline | active | Codex | Source-backed inventory of README claims, docs owners, commands, variables, skills, evidence, and stale wording | None | bootstrap checkpoint recorded; source inventory pending | none | inspect sources and reconcile owners |
-| 1. Author architecture and skills pages | proposed | unresolved | Canonical runtime/analytical architecture and skill model pages | Task 0 | pending | none | write two pages after baseline |
+| 0. Establish documentation baseline | completed | Codex | Source-backed inventory of README claims, docs owners, commands, variables, skills, evidence, and stale wording | None | CLI, runtime, skill, evaluation, environment, artifact, and test sources inspected; ownership map reconciled | none | author architecture and skills pages |
+| 1. Author architecture and skills pages | active | Codex | Canonical runtime/analytical architecture and skill model pages | Task 0 | pending | none | write two pages after baseline |
 | 2. Author evidence and configuration pages | proposed | unresolved | Canonical evidence vocabulary, evaluation tiers, performance boundary, and configuration behavior | Task 0 | pending | none | write two pages after baseline |
 | 3. Author getting-started and extending pages | proposed | unresolved | One runnable user workflow and one bounded contributor extension workflow | Tasks 1–2 | pending | none | write pages with verified CSV quickstart |
 | 4. Add documentation navigation | proposed | unresolved | `docs/README.md` links users to the six canonical content pages without duplicating content | Tasks 1–3 | pending | none | write navigation after content pages |
@@ -632,3 +632,4 @@ docs: consolidate user documentation and simplify README
 ### Coordination Log
 
 - Bootstrap: branch `codex/documentation-consolidation`; base `origin/main` at `391e92b`; initial worktree HEAD `391e92b`; workspace `C:\Users\HOANG PHI LONG DANG\.codex\worktrees\documentation-consolidation\foresight-OS`.
+- Task 0 baseline: inspected `pyproject.toml`, `src/foresight_os/cli.py`, vertical-slice and recovery paths, controller skill registry, packaged manifest, runtime capabilities/provider configuration, evaluation contracts, artifact boundaries, and related tests. No runtime changes are authorized.
