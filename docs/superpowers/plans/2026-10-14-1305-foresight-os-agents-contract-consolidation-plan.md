@@ -128,6 +128,8 @@ procedures, inventories, or private governance.
   generator or alternate canonical source exists; all filename/generator
   references are intentional records in this plan; and separate `--follow`
   history checks resolve to the same original starter-kit commit.
+- Task 1 accepted: `AGENTS.md` is now a 70-line ForesightOS-specific contract
+  with all nine required sections and no generic handbook terms.
 
 ## Acceptance Criteria
 
@@ -161,8 +163,8 @@ procedures, inventories, or private governance.
 | Task | Status | Executor | Outcome | Dependencies | Accepted proof | Blocker | Next action |
 |---|---|---|---|---|---|---|---|
 | 0. Establish contract provenance and baseline | completed | lead | Confirm `AGENTS.md` ownership, adapter-file references, and current line/content baseline | None | verified | none | rewrite canonical contract |
-| 1. Rewrite the ForesightOS project contract | active | lead | Compact repo-specific `AGENTS.md` with nine required sections and no generic governance | Task 0 | pending | none | write canonical contract |
-| 2. Remove duplicate adapter files and stale references | proposed | unresolved | Delete `CLAUDE.md` and `GEMINI.md`; reconcile any tracked consumers | Tasks 0–1 | pending | none | delete files after canonical contract is accepted |
+| 1. Rewrite the ForesightOS project contract | completed | lead | Compact repo-specific `AGENTS.md` with nine required sections and no generic governance | Task 0 | verified | none | delete duplicate adapters |
+| 2. Remove duplicate adapter files and stale references | active | lead | Delete `CLAUDE.md` and `GEMINI.md`; reconcile any tracked consumers | Tasks 0–1 | pending | none | delete files and reclassify references |
 | 3. Verify contract, deletion, and scope | proposed | unresolved | Fresh proof that only the approved instruction surfaces changed | Tasks 1–2 | pending | none | run focused and broad checks |
 
 ### Task 0: Establish contract provenance and baseline
