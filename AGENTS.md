@@ -1,226 +1,89 @@
-<!--
-CONSUME-ONLY STARTER KIT FILE
+# ForesightOS Project Contract
 
-Origin: project-OS-starter.
-Factory adapter and runtime tooling are not included in this starter kit.
-Downstream projects own direct edits to this file.
--->
+This file defines repository-specific behavior. Implementation and tests under `src/foresight_os/` and `tests/` are authoritative when prose disagrees.
 
-# Project Agent Instructions
+## Project Purpose
 
-This file is repo-wide instruction layer. More specific directory instructions override it.
+- Turn a decision question and bounded source material into traceable claims, implications, recommendations, and local artifacts.
+- Preserve review, revision, invalidation, provenance, uncertainty, and counterevidence state.
+- Keep the provider-free local CSV/XLSX analysis path usable without authentication.
+- Use [README.md](README.md) and [docs/architecture.md](docs/architecture.md) as orientation, not replacement runtime specifications.
+- Make each recommendation traceable to evidence, assumptions, calculations, and a reassessment trigger.
 
-## Core Rules
+## Foresight Process
 
-- Plan plus Git owns workflow truth. CoS owns assignment, continuation,
-  escalation, and acceptance. The shared attempt contract owns admission,
-  budget, settlement, lifecycle, and eligibility. Worker wrappers own
-  execution facts; transport layers own delivery and diagnostics.
+- Start with a validated `WorkBrief` containing question, objective, horizon, constraints, stages, participants, and research needs.
+- Resolve an `ExecutionRecipe`; direct, sequential, concurrent, handoff, and group-chat patterns are execution choices.
+- Keep every `RecipeStage` explicit about inputs, outputs, participants, skills, capabilities, dependencies, limits, and expected results.
+- Verify skill manifest hashes, output contracts, capability fingerprints, unavailable decisions, and run scope before execution.
+- Record stage inputs, policy, provenance, result references, and commit status in receipts before reuse.
+- Separate observations, assumptions, interpretations, recommendations, uncertainty, and monitoring triggers.
+- Require review before acceptance; changed evidence or scope creates invalidation and a new revision rather than silent mutation.
+- Derive reports and presentations from committed analytical state.
+- Keep execution-pattern selection separate from the foresight process stages.
 
-- Keep changes aligned with owning code, documentation, and configuration layers.
-- Read scoped `AGENTS.md` files before modifying files under their directories.
-- Treat source code and tests as authoritative when documentation or analysis tools disagree.
-- Update tests and documentation when behavior or contracts change.
-- Never expose private governance, credentials, agent memory, or internal tooling through public publication.
-- For generated agent surfaces, edit canonical sources, then run required sync and verification commands.
+## Architecture Invariants
 
-## Project OS Installation
+- `AnalysisState` is the single durable owner for evidence, claims, implications, recommendations, calculations, relationships, artifacts, revisions, reviews, and invalidation metadata.
+- `AnalysisStore` validates and writes state atomically; pending mutations stay separate until accepted.
+- `StageReceipt` reuse requires matching fingerprints, committed results, and complete provenance.
+- `FindingView` is accepted only when its current review is valid and no unresolved objection or missing input remains.
+- NetworkX projections are derived query views, not a second analytical store.
+- `PresentationSpec` is revision-bound, hash-checked, and either current or explicitly provisional.
+- Preserve source locators, formula inputs, units, hashes, and invalidation reasons through calculations and artifacts.
+- Keep optional adapters from changing the local analytical contract.
 
-- Shared Project OS runtime docs and approved reusable scripts live at `~/.agents/project-os`.
-- Shared reusable skills live at `~/.agents/skills`.
-- Resolve `docs/operating_system/...` and approved `scripts/...` references from the shared Project OS installation when those paths are absent in the project.
-- Keep project-specific `docs/intent/`, `docs/superpowers/`, `repo_config/`, code, tests, and scripts in this repository.
+## Canonical Owners
 
-## Subagent Routing
+- Work briefs, domain records, revisions, and invalidation belong under `src/foresight_os/domain/`.
+- Recipe selection, skill resolution, and capability policy belong to their existing controller and runtime modules.
+- The packaged skill registry is `src/foresight_os/controller/skills.py`; each procedure owns `src/foresight_os/skills/<skill-id>/SKILL.md`.
+- Persistence and stage receipts belong to `src/foresight_os/persistence/analysis_store.py`.
+- Review and finding validity belong to `src/foresight_os/domain/challenge.py`.
+- Presentation compilation and delivery boundaries belong to `src/foresight_os/artifacts/presentation.py`.
+- Maintained guidance belongs in `README.md` and `docs/`; historical decisions and evidence remain in `docs/intent/` and `docs/superpowers/`.
 
-Discover profiles from `agents/*.toml`. Positive `rank` values identify ranked
-profiles; specialized and unranked profiles may be added without entering rank
-ordering.
+## Change Rules
 
-Profiles with positive `rank` form an ordered capability relation. Profiles
-without `rank` are unranked and explicit-only; they are not lower or higher
-than ranked profiles. Profile identity, rank, and model come from the registry;
-specialized profiles may use another name and model.
-In validator-executor setups, select the executor and validator profiles
-independently based on their respective bounded task contracts. A validator may
-use a lower, equal, or higher profile than the executor when that profile can
-reliably complete the validation task. Select the lowest profile that can
-reliably complete each contract.
+- Extend an existing owner before adding a parallel registry, store, schema, receipt, or evidence format.
+- Preserve single-source-of-truth behavior and symmetric create/delete, forward/reverse, and valid/invalid cases.
+- Keep provider, renderer, and destination concerns at explicit boundaries; they must not invent analytical truth.
+- Preserve accepted behavior, provenance, failure statuses, and invalidation semantics when refactoring.
+- Update focused tests and owning documentation when contracts change.
+- Keep credentials, authorization headers, raw provider payloads, and customer data out of source, state, receipts, fixtures, and public documentation.
 
-Template profile and task function are separate. Task function is open-ended and
-defined by current task contract; it may include debugging, research, plan
-review, design exploration, plan writing, implementation, validation,
-orchestration, or another required function. Never maintain a fixed mapping from
-functions to profiles.
+## Verification Requirements
 
-When spawning a subagent:
+- Prove the changed owner with focused tests before relying on broad tests.
+- Run `python -m pytest -q` and `python -m compileall -q src tests evaluation` for repository changes.
+- Verify deterministic fixtures, hashes, persistence, invalidation, and receipt reuse when affected.
+- Test important success and failure paths, including missing inputs, unavailable capabilities, malformed responses, and stale reviews.
+- Label structural proof separately from model quality or human judgment; use `VERIFIED`, `FAILED`, `BLOCKED_INPUT`, `BLOCKED_EXTERNAL`, and `not_measured` truthfully.
+- Add representative boundary or performance evidence when a material claim depends on it.
+- Inspect the final diff and documentation links; do not claim external delivery without a durable receipt and required approval.
 
-- Select the template through the platform's agent-type selector; task names only label work.
-- Use a fresh-context fork when selecting a different agent type.
-- Never override the template's model or reasoning effort.
-- Do not select unnamed or other agent types.
-- Ordinary lead-controller delegation follows task `Authority` and the
-  applicable delegation, review, or parallel-execution skill. Runtime Grant
-  child-agent authority applies to nested delegation by MAIN AGENTS assigned
-  through CoS.
+## Documentation Ownership
 
-These generic subagent rules do not govern MAIN AGENT lane ownership. CoS
-assigns top-level MAIN AGENTS through the repository-owned Herdr launcher.
-MAIN AGENTS own assigned lanes and may spawn Native Codex or DeepAgents
-sub-agents when needed inside their assigned lane only when their Runtime Grant
-includes `delegation.child_agents: allow`. Sub-agents remain subordinate to
-their parent lane and must not spawn peer MAIN AGENTS or activate CoS.
+- Put onboarding and stable architecture guidance in `README.md` and `docs/`.
+- Link new behavior to the maintained guide instead of copying a second specification into this file.
+- Keep skill procedures beside their packaged skill and keep manifests, schemas, and tests aligned with owning code.
+- Keep plans and evidence source-specific; do not rewrite historical records to make current guidance appear cleaner.
+- Run the repository Markdown-link checker when documentation paths change.
 
-Select profile from required reasoning depth, ambiguity, scope, risk, and cost.
-Use lowest profile that can reliably complete current task contract. If scope or
-risk grows beyond selected profile, stop and delegate again using suitable
-profile. Function name alone never determines profile.
+## External Boundaries
 
-## Native Personal-Local Work
+- Web, Power BI, MCP, Canva, and other providers are optional; local analysis remains independently verifiable where supported.
+- Missing credentials, unavailable providers, failed calls, and missing approved inputs remain explicit blocked or failed outcomes.
+- Sanitize provider results before durable evidence and keep secrets out of persisted state and receipts.
+- External mutation requires the existing human-approval boundary, an adapter, and a matching durable delivery receipt.
+- A failed destination must not mark analytical state as delivered.
+- Rendering and presentation output may summarize committed findings but cannot add unsupported claims, calculations, or fields.
 
-Ordinary trusted one-user work follows `native-personal-local` in
-`docs/operating_system/procedures/personal-local-worktree-procedure.md`:
-native Git plus selected local executor: Codex or DeepAgents. Executor and
-profile selection are independent. Codex is safe default when plan omits executor
-or delegated benefit is unclear. Follow
-`docs/operating_system/planning/planning-dispatch.md` for advisory selection.
-Reuse a clean checkout for small reversible work; use a native Git worktree only
-when existing worktree guidance selects isolation.
-Git owns workspace identity, change evidence, and authorized branch disposition.
-For DeepAgents, use user-local `dcode-project`; it derives ignored profile views
-from `agents/*.toml` and local provider endpoint and credentials. Do not track
-`.deepagents/`, invent provider fallback, runtime state, or cleanup commands.
-This repository authors skills under `.agents/skills`; consumer projects use
-only shared skills from `~/.agents/skills` and do not copy local skills. It does
-not auto-load `.agents/rules`; those are generated platform-adapter views. Codex remains approval, Git, verification, and
-acceptance controller. DeepAgents MCP is opt-in only through Herdr selection.
-Herdr forwards explicit `--mcp-select` to `dcode-project`, which validates
-selection against approved Codex `[mcp_servers]`; no selection keeps `--no-mcp`.
-`codex.mcp.handoff.v1` remains validated facts and provenance, not tool access.
-For launcher details, file-root conventions, and runtime-specific
-restrictions, read
-`docs/operating_system/procedures/personal-local-worktree-procedure.md`.
-Do not duplicate rules in `.deepagents/AGENTS.md`.
-Name a discovered profile in bounded DeepAgents `task`
-delegation; do not use `dcode --agent` or `dcode -r` for project coordination.
-Use `skill-deepagents-executing-plans` when an approved Git-tracked plan is
-executed through DeepAgents with bounded delegated work.
+## Maintenance Bias
 
-Git-tracked coordinated work follows
-`docs/operating_system/rules/git-tracked-coordination-rule.md`: Git owns
-workspace and repository state; the active plan owns workflow state; one lead
-controller updates coordination state; runtime thread or session state is never
-the recovery source.
-
-Context Cleaner is optional session-local maintenance, not a project-task
-transition. Within a reliably bound Host session, the active agent may request
-removal of exclusively owned completed internal work when reusable findings and
-required evidence are durable and no active or dependent work requires the
-removed content. Project OS owns standing permission and retention; the active
-agent decides whether cleaning is worthwhile; the Host adapter owns session and
-history interpretation plus supported mutation; the Cleaner implementation owns
-selection, scheduling, recovery, and receipts. Current instructions, user
-constraints, unresolved work, shared dependencies, and evidence awaiting review
-remain protected. Cleaning never expands authority, budgets, delegation rights,
-or external-action permissions. Missing capability, reliable binding, trusted
-attribution, retention proof, or supported mutation preserves context and
-ordinary work. Follow the personal-local procedure for execution and do not
-create project records solely for cleaning.
-
-## Project Design Rules
-
-### Use SSOT
-
-Each fact, rule, setting, or policy should have one main source.
-
-Do not store the same information in several places. Other parts of the project should read from the main source instead of copying it.
-
-### Build Reusable Components
-
-Do not create a new solution for every similar case.
-
-Create shared components, functions, and rules that can be reused in different parts of the project.
-
-### Follow the Principle of Permanence
-
-Extend systems in a way that preserves as many existing properties, rules, contracts, and valid behaviors as possible.
-
-Example:
-
-If a component initially supports light mode and is later extended to support dark mode, dark-mode support should not require a separate component or change the component’s existing behavior. The same component contract should remain valid, while theme-specific values are supplied through configuration.
-
-### Maintain Symmetry
-
-Similar or opposite cases should use the same structure and logic.
-
-Examples:
-
-- light mode and dark mode
-- day mode and night mode
-- enable and disable
-- import and export
-- create and delete
-- forward and reverse
-
-Do not build two separate systems when one shared system can support both cases.
-
-Represent the difference through:
-
-- configuration
-- parameters
-- themes
-- data
-- shared strategies
-
-Example:
-
-Light mode and dark mode should use the same UI components. Only the theme values should change.
-
-### Avoid Unnecessary Special Cases
-
-Before adding separate logic, ask:
-
-> Is this case truly different, or can the existing general solution handle it?
-
-Prefer one consistent system that works for all equivalent cases.
-
-## Agent Memory
-
-Use configured MCP Memory Server only when current work can benefit from reusable project knowledge and active executor exposes it. Fetch memory for shared workflows, known invariants, recurring failures, resumed work, or high-risk changes. For DeepAgents, Codex controller performs required memory calls and passes only validated handoff facts. Store only verified, reusable lessons; never store transient progress, guesses, secrets, personal data, or facts already obvious from authoritative sources.
-
-Memory informs work but never overrides explicit instructions, source code, tests, ADRs, or current governance. If memory tools are unavailable, continue source-first without recreating repository-file memory.
-
-Detailed policy: `docs/operating_system/rules/agent-memory-rule.md`.
-
-## Backend Work
-
-For every material backend behavior change, use `skill-backend-verification` whether or not a frontend exists. Prove behavior through direct boundary tests, important success and failure paths, final state or side effects, and fresh automated output. Add contract, real-dependency, representative-operation trace, or performance evidence only when applicable. Frontend and browser evidence never substitute for backend proof.
-
-## Frontend Work
-
-For material frontend or accessibility implementation, follow `docs/operating_system/rules/frontend-ui-rule.md`. For material visual or UX judgment, follow the explicitly selected applicable design skill. Explicitly selected `impeccable` satisfies its overlapping visual/UX-design scope; do not invoke overlapping design skills for another opinion by default. Existing project design-system sources remain canonical. Reuse existing components and design tokens, prefer semantic native controls, and verify affected states, keyboard access, focus, contrast, responsive behavior, reduced motion, and supported themes.
-
-When work crosses frontend behavior and backend contracts or routes, use `skill-full-stack-integration`. Matching `*.integration.md` notes own temporary contract-to-UI mapping, unresolved mismatches, and acceptance evidence, not transport schemas. Canonical schemas, generated clients, backend routes, and tests establish current behavior. Report conflicts and affected owners before implementation.
-
-When browser-interaction capability is available, use it for repeatable user
-flows, accessibility snapshots, viewport checks, and screenshots. Browser
-evidence does not replace committed regression tests. Resolve capability through
-`docs/operating_system/tooling/runtime-tool-resolution.md`.
-
-Skip skill for copy-only edits, mechanical selector changes, or isolated nonvisual logic. If unavailable, follow existing product design system and `docs/operating_system/rules/frontend-ui-rule.md`; do not block safe local fix.
-
-## Runtime Capability Resolution
-
-Project OS owns capability requirements, authority and data boundaries, evidence
-requirements, fallback, and stop conditions. Active executor resolves required
-capabilities to currently available tools within existing permissions.
-
-Prefer native or configured capabilities. Discover tools only for unmet
-capabilities. Resolve one primary provider per capability question, smoke-check
-unfamiliar providers, and never downgrade mandatory evidence to source
-inspection. Source, tests, contracts, and runtime systems remain authoritative.
-
-Do not install, connect, authenticate, or widen data access without approval.
-Do not assume provider names, MCP availability, permission settings, or result
-shapes across executors. Read `docs/operating_system/tooling/runtime-tool-resolution.md`
-when runtime capability selection is material.
+- Prefer the smallest reversible change that preserves existing contracts.
+- Inspect the canonical owner and adjacent tests before creating new structure.
+- Remove duplicate instruction or documentation surfaces when they add no behavior and have no active consumer.
+- Favor shared configuration and strategies over special cases.
+- Measure performance claims with reproducible evidence rather than intuition.
+- When source, tests, and prose conflict, fix the prose or investigate the implementation; do not silently weaken the authoritative contract.
