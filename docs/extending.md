@@ -13,6 +13,21 @@ Extensions should add one bounded owner to the existing system. Preserve the
 single analysis state, skill registry, capability resolver, and evidence
 receipt boundaries instead of introducing parallel stores or registries.
 
+## Add a host-facing strategic procedure
+
+Use `.agents/skills/<procedure-id>/SKILL.md` for repository-local host routing
+and strategic intake procedures. Keep the packaged runtime skill boundary under
+`src/foresight_os/skills/`; do not add a host procedure to
+`src/foresight_os/skills/manifest.json` unless it is also a runtime analytical
+skill with a validated output contract.
+
+Wayfinding procedures may capture decision questions, provisional scope,
+research needs, and caller-supplied method provenance. They must not promote
+unresolved recommendations into required execution topology or capability
+constraints, read or hash their own `.agents/` source, create a second brief
+store, or make a generic `map.md` canonical. The controller resolves execution
+from the validated WorkBrief, and `AnalysisStore` remains the sole brief store.
+
 ## Add a skill
 
 1. Create `src/foresight_os/skills/<skill-id>/SKILL.md` with a focused method,

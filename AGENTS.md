@@ -22,6 +22,17 @@ This file defines repository-specific behavior. Implementation and tests under `
 - Derive reports and presentations from committed analytical state.
 - Keep execution-pattern selection separate from the foresight process stages.
 
+For strategic foresight intake, clarification, and WorkBrief creation or
+refinement, use the repository-local host procedure
+`.agents/skills/foresight-wayfinding/SKILL.md`.
+
+`.agents/skills/` is the repository-local host-procedure boundary.
+`src/foresight_os/skills/` remains the packaged participant/runtime
+analytical-skill boundary. Do not substitute generic Wayfinding,
+specification-drafting, or software implementation-planning procedures for
+strategic intake. Foresight Wayfinding ends when the WorkBrief and execution
+proposal are ready for human review.
+
 ## Architecture Invariants
 
 - `AnalysisState` is the single durable owner for evidence, claims, implications, recommendations, calculations, relationships, artifacts, revisions, reviews, and invalidation metadata.

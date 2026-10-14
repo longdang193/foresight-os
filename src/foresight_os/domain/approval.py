@@ -1,3 +1,4 @@
+from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -68,9 +69,21 @@ class ApprovalProjection:
             "adaptation_envelope": self.adaptation_envelope,
         }
 
+    @staticmethod
+    def material_projection(value: dict[str, Any]) -> dict[str, Any]:
+        material = deepcopy(value)
+        brief = dict(material.get("brief", {}))
+        brief.pop("producer", None)
+        material["brief"] = brief
+        return material
+
+    @classmethod
+    def fingerprint_for_dict(cls, value: dict[str, Any]) -> str:
+        return canonical_json_hash(cls.material_projection(value))
+
     @property
     def fingerprint(self) -> str:
-        return canonical_json_hash(self.to_dict())
+        return self.fingerprint_for_dict(self.to_dict())
 
     @classmethod
     def from_values(

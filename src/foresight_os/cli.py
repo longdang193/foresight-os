@@ -6,6 +6,7 @@ from pathlib import Path
 from filelock import FileLock
 
 from foresight_os.artifacts.approval import build_approval_package, render_approval_json, render_approval_markdown
+from foresight_os.artifacts.brief import render_work_brief_markdown
 from foresight_os.artifacts.report import write_report
 from foresight_os.controller.proposal import build_execution_recipe
 from foresight_os.controller.proposal import classify_reuse
@@ -29,6 +30,9 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--workbook", type=Path, required=True)
     analyze.add_argument("--work-dir", type=Path, required=True)
     analyze.add_argument("--accept", action="store_true")
+
+    brief = subparsers.add_parser("brief")
+    brief.add_argument("--work-dir", type=Path, required=True)
 
     propose = subparsers.add_parser("propose")
     propose.add_argument("--work-dir", type=Path, required=True)
@@ -86,6 +90,9 @@ def main(argv: list[str] | None = None) -> int:
         outcome = run_vertical_slice(args.workbook, args.work_dir, args.accept)
         print(json.dumps({"accepted": outcome.accepted, "status": outcome.status}))
         return 0 if outcome.accepted else 2
+    if args.command == "brief":
+        print(render_work_brief_markdown(AnalysisStore(args.work_dir).load_brief()), end="")
+        return 0
     if args.command == "propose":
         store = AnalysisStore(args.work_dir)
         if store.brief_path.exists():

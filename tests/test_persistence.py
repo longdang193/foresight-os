@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from foresight_os.domain.models import AnalysisState, Invalidation, ResearchNeed, ResearchNeedKind, Revision, WorkBrief, WorkStage
+from foresight_os.domain.models import AnalysisState, Invalidation, MethodProvenance, ResearchNeed, ResearchNeedKind, Revision, WorkBrief, WorkStage
 from foresight_os.controller.policy import select_recipe
 from foresight_os.controller.recipes import ExecutionPattern
 from foresight_os.domain.validation import ValidationError
@@ -26,6 +26,60 @@ def test_brief_round_trips_through_brief_md(tmp_path: Path):
     assert store.load_brief() == brief
 
 
+def test_saved_brief_contains_generated_human_view_without_changing_round_trip(tmp_path: Path):
+    store = AnalysisStore(tmp_path / "human-brief")
+    brief = WorkBrief(
+        "human-brief",
+        "Which option should we choose?",
+        ["included scope"],
+        ["recommendation"],
+        ["one assumption"],
+        ["one unknown"],
+        "Assess alternatives.",
+        "Inspect the source.",
+        stages=[WorkStage("source-audit", "Reconcile source definitions", expected_result="source dictionary")],
+    )
+
+    store.save_brief(brief)
+    saved = store.brief_path.read_text(encoding="utf-8")
+
+    assert saved.startswith("---\n")
+    assert "# Work Brief" in saved
+    assert "Generated from the canonical WorkBrief fields." in saved
+    assert "## Decision" in saved
+    assert "## Assumptions" in saved
+    assert "## Proposed investigation" in saved
+    assert store.load_brief() == brief
+
+    frontmatter, _, body = saved[4:].partition("\n---\n")
+    store.brief_path.write_text(f"---\n{frontmatter}\n---\n{body}\nManual body edit\n", encoding="utf-8")
+    assert store.load_brief() == brief
+
+
+def test_generated_brief_body_does_not_render_untrusted_preference_payloads(tmp_path: Path):
+    store = AnalysisStore(tmp_path / "safe-human-brief")
+    brief = WorkBrief(
+        "safe-human-brief",
+        "Question",
+        ["scope"],
+        ["answer"],
+        [],
+        [],
+        "direction",
+        "next step",
+        user_preferences={
+            "credential": "secret-token",
+            "raw_provider_payload": {"authorization": "Bearer secret-token"},
+        },
+    )
+
+    store.save_brief(brief)
+    body = store.brief_path.read_text(encoding="utf-8").split("\n---\n", 1)[1]
+
+    assert "secret-token" not in body
+    assert "raw_provider_payload" not in body
+
+
 def test_typed_brief_stages_round_trip_and_preserve_routing_inputs(tmp_path: Path):
     store = AnalysisStore(tmp_path / "typed-brief")
     brief = WorkBrief(
@@ -41,6 +95,26 @@ def test_typed_brief_stages_round_trip_and_preserve_routing_inputs(tmp_path: Pat
     )
     store.save_brief(brief)
     assert store.load_brief() == brief
+
+
+def test_method_provenance_round_trips_without_becoming_execution_intent(tmp_path: Path):
+    store = AnalysisStore(tmp_path / "provenance")
+    brief = WorkBrief(
+        "provenance",
+        "What should we do?",
+        ["scope"],
+        ["answer"],
+        [],
+        [],
+        "inspect",
+        "retrieve",
+        producer=MethodProvenance("foresight-wayfinding", ".agents/skills/foresight-wayfinding/SKILL.md", "1", "abc123"),
+    )
+
+    store.save_brief(brief)
+
+    assert store.load_brief() == brief
+    assert store.load_brief().execution_intent is None
 
 
 def test_stage_execution_intent_preserves_pattern_selection_after_round_trip(tmp_path: Path):

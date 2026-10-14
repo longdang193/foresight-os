@@ -26,6 +26,17 @@
     "horizon": { "type": "string" },
     "consequence_level": { "type": "string" },
     "user_preferences": { "type": "object", "additionalProperties": true },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "source", "contract_version"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "source": { "type": "string", "minLength": 1 },
+        "contract_version": { "type": "string", "minLength": 1 },
+        "content_sha256": { "type": "string", "minLength": 1 }
+      }
+    },
     "execution_intent": {
       "type": "object",
       "additionalProperties": false,

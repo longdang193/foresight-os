@@ -22,6 +22,17 @@ The exact command surface is discoverable with:
 python -m foresight_os.cli --help
 ```
 
+To review a persisted WorkBrief without exposing its YAML front matter or
+creating another file, use the generated human view:
+
+```text
+python -m foresight_os.cli brief --work-dir work/proposal
+```
+
+Edit the structured brief through its canonical intake path; the Markdown body
+in `brief.md` is derived output and manual body edits do not change execution
+semantics.
+
 ## Propose and approve an execution plan
 
 The canonical local flow persists the brief and exact recipe before approval:

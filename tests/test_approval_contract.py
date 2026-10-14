@@ -1,8 +1,10 @@
+from dataclasses import replace
+
 import pytest
 
 from foresight_os.controller.recipes import RecipeName, make_recipe
 from foresight_os.domain.approval import AdaptationEnvelope, ApprovalProjection, ApprovalRecord, ApprovalStatus
-from foresight_os.domain.models import WorkBrief
+from foresight_os.domain.models import ExecutionIntent, MethodProvenance, WorkBrief
 from foresight_os.domain.validation import ValidationError, validate_approval_record, validate_execution_recipe
 
 
@@ -34,3 +36,28 @@ def test_approval_projection_excludes_secret_fields():
     projection = ApprovalProjection.from_values({**brief().to_dict(), "api_token": "secret"}, make_recipe(RecipeName.DIRECT), AdaptationEnvelope())
     assert projection.to_dict()["brief"]["api_token"] == "[excluded]"
     assert "secret" not in projection.fingerprint
+
+
+def test_producer_metadata_is_supplementary_and_excluded_from_material_fingerprint():
+    recipe = make_recipe(RecipeName.DIRECT)
+    plain = ApprovalProjection.from_values(brief(), recipe, AdaptationEnvelope())
+    produced = ApprovalProjection.from_values(
+        replace(brief(), producer=MethodProvenance("foresight-wayfinding", ".agents/skills/foresight-wayfinding/SKILL.md", "1", "changed")),
+        recipe,
+        AdaptationEnvelope(),
+    )
+
+    assert produced.to_dict()["brief"]["producer"]["id"] == "foresight-wayfinding"
+    assert produced.fingerprint == plain.fingerprint
+
+
+def test_material_brief_changes_still_change_approval_fingerprint():
+    recipe = make_recipe(RecipeName.DIRECT)
+    plain = ApprovalProjection.from_values(brief(), recipe, AdaptationEnvelope())
+    changed = ApprovalProjection.from_values(
+        replace(brief(), scope=["different"], execution_intent=ExecutionIntent(required_patterns=("sequential",))),
+        recipe,
+        AdaptationEnvelope(),
+    )
+
+    assert changed.fingerprint != plain.fingerprint

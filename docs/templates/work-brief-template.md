@@ -1,5 +1,9 @@
 # Work Brief Template
 
+The YAML front matter is the canonical WorkBrief contract. The Markdown body in a
+persisted `brief.md` is generated from that contract; revise the structured fields
+instead of treating the body as input.
+
 ```yaml
 investigation_id: example-investigation
 decision_question: What decision should be made?

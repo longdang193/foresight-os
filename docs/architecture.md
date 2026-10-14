@@ -8,7 +8,7 @@ that a report can be traced back to the evidence and revision that produced it.
 
 ```text
 WorkBrief
-  -> typed ExecutionIntent
+  -> typed human intent and research needs
   -> controller policy and complete ExecutionRecipe
   -> derived ApprovalPackage and durable ApprovalRecord
   -> shared execution gate
@@ -24,10 +24,22 @@ WorkBrief
 
 `WorkBrief` records the decision question, objective, horizon, constraints,
 stages, participants, and research needs. Validation happens before the brief
-is used by the controller. The persisted brief is stored as `brief.md` in the
-work directory. New briefs store uncommitted user preferences and typed
-required/preferred execution intent; legacy pattern overrides are translated at
-load time and are not re-emitted.
+is used by the controller. The persisted `brief.md` keeps YAML front matter as
+the canonical structured contract and appends a generated Markdown review view;
+the body is not an input source. The `brief` CLI command renders that view
+without creating another state file.
+
+New briefs may include caller-supplied method provenance and typed required or
+preferred execution intent. Provenance is descriptive, not authorization, and
+is excluded from approval material fingerprints. Required topology or
+capability constraints are retained only when explicitly supplied; research
+needs remain the preferred input for later controller capability resolution.
+Legacy pattern overrides are translated at load time and are not re-emitted.
+
+Strategic Wayfinding is a host-facing procedure under
+`.agents/skills/foresight-wayfinding/`. Packaged runtime analytical skills stay
+under `src/foresight_os/skills/` and are selected by the controller; the host
+procedure is not a second packaged skill or manifest entry.
 
 ### 2. Controller and recipe
 

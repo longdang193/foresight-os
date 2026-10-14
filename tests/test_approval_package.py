@@ -7,6 +7,7 @@ import yaml
 from foresight_os.artifacts.approval import build_approval_package, render_approval_markdown
 from foresight_os.controller.proposal import apply_execution_overrides, build_execution_recipe
 from foresight_os.domain.approval import AdaptationEnvelope
+from foresight_os.domain.models import MethodProvenance
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.persistence.analysis_store import StageReceipt
 from foresight_os.persistence.ids import canonical_json_hash
@@ -99,6 +100,70 @@ def test_detailed_approval_renders_material_execution_controls():
     assert "Provider: `local`" in rendered
     assert "Model: `approved-model`" in rendered
     assert 'Reasoning controls: {"temperature": 0.1}' in rendered
+
+
+def test_approval_markdown_renders_captured_context_and_policies_only():
+    brief = create_work_brief(
+        "Question",
+        assumptions=["Assumption one"],
+        open_dependencies=["Dependency one"],
+        producer=MethodProvenance("foresight-wayfinding", ".agents/skills/foresight-wayfinding/SKILL.md"),
+    )
+    recipe = build_execution_recipe(brief).recipe
+    recipe = apply_execution_overrides(recipe, {
+        "max_agent_steps": 7,
+        "max_correction_rounds": 2,
+        "max_total_agent_calls": 9,
+        "review_policy": "human review",
+        "adaptation_policy": ["run fresh"],
+        "stages": [{
+            "stage_id": "stage-1",
+            "skill_ids": ["analysis"],
+            "capabilities": ["structured-data"],
+            "access_scope": ["workbook"],
+            "review_checks": ["check totals"],
+            "completion_rule": "typed result",
+            "escalation_rule": "ask human",
+            "partial_result_rule": "preserve draft",
+            "adaptation_policy": ["retry"],
+        }],
+    }).recipe
+
+    rendered = render_approval_markdown(
+        build_approval_package(
+            brief,
+            recipe,
+            AdaptationEnvelope(
+                allowed_operations=("retry",),
+                max_retries=1,
+                max_concurrency_reduction=1,
+                compatible_participant_substitution=True,
+                dependency_safe_topology_reduction=True,
+                evidence_reuse=False,
+            ),
+        ),
+        detailed=True,
+    )
+
+    for expected in (
+        "Assumption one",
+        "Dependency one",
+        "Producer: `foresight-wayfinding`",
+        "Skills: analysis",
+        "Capabilities: structured-data",
+        "Access scope: workbook",
+        "Review checks: check totals",
+        "Maximum agent steps: 7",
+        "Maximum correction rounds: 2",
+        "Maximum total agent calls: 9",
+        "Review policy: human review",
+        "Adaptation policy: run fresh",
+        "Maximum concurrency reduction: 1",
+        "Compatible participant substitution: True",
+        "Dependency-safe topology reduction: True",
+        "Evidence reuse: False",
+    ):
+        assert expected in rendered
 
 
 def test_work_brief_template_validates_against_canonical_contract():

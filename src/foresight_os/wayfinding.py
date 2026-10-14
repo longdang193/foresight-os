@@ -1,6 +1,6 @@
 from dataclasses import replace
 
-from foresight_os.domain.models import ExecutionIntent, ResearchNeed, ResearchNeedKind, WorkBrief, WorkStage
+from foresight_os.domain.models import ExecutionIntent, MethodProvenance, ResearchNeed, ResearchNeedKind, WorkBrief, WorkStage
 
 
 def create_work_brief(
@@ -15,6 +15,7 @@ def create_work_brief(
     stages: list[WorkStage] | None = None,
     consequence_level: str = "standard",
     user_preferences: dict[str, object] | None = None,
+    producer: MethodProvenance | None = None,
 ) -> WorkBrief:
     resolved_scope = list(scope or [])
     resolved_deliverables = list(desired_deliverables or ["analysis", "executive report"])
@@ -33,6 +34,7 @@ def create_work_brief(
         horizon=horizon,
         consequence_level=consequence_level,
         user_preferences=dict(user_preferences or {}),
+        producer=producer,
     )
 
 
