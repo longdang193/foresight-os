@@ -2,6 +2,7 @@ import importlib.util
 import asyncio
 import importlib.metadata
 import json
+import os
 import time
 import tomllib
 import tempfile
@@ -46,15 +47,17 @@ class LiveProviderProbe:
 
 def load_provider_settings(env_file: Path, config_file: Path) -> ProviderSettings:
     assignments: dict[str, str] = {}
-    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        name, value = line.split("=", 1)
-        name = name.removeprefix("export ").strip()
-        value = value.strip().strip('"').strip("'")
-        if value:
-            assignments[name] = value
+    if env_file.exists():
+        for raw_line in env_file.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            name, value = line.split("=", 1)
+            name = name.removeprefix("export ").strip()
+            value = value.strip().strip('"').strip("'")
+            if value:
+                assignments[name] = value
+    assignments.update({name: value for name, value in os.environ.items() if value})
 
     config = tomllib.loads(config_file.read_text(encoding="utf-8"))
     provider_name = config.get("model_provider")

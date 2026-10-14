@@ -17,7 +17,7 @@ from foresight_os.runtime.workflow import run_recipe_async
 
 ROOT = Path(__file__).parents[2]
 METRIC_CLASSES = ("deterministic_reference", "provider_runtime", "human_rubric")
-ALLOWED_STATUSES = {"VERIFIED", "BLOCKED_INPUT", "BLOCKED_EXTERNAL", "NOT_RUN", "not_measured"}
+ALLOWED_STATUSES = {"VERIFIED", "BLOCKED_INPUT", "BLOCKED_EXTERNAL", "FAILED", "NOT_RUN", "not_measured"}
 FIXTURE_KEYS = {
     "skill_id",
     "version",
@@ -25,6 +25,32 @@ FIXTURE_KEYS = {
     "near_miss",
     "expected_observable_properties",
 }
+
+
+def _sanitize_error(error: BaseException) -> str:
+    return f"{type(error).__name__}: message redacted"
+
+
+def _provider_error_status(error: BaseException) -> str:
+    if isinstance(error, (FileNotFoundError, ImportError, ConnectionError, TimeoutError, OSError)):
+        return "BLOCKED_EXTERNAL"
+    module = type(error).__module__.lower()
+    name = type(error).__name__.lower()
+    if module.startswith(("httpx", "openai", "agent_framework")) and any(
+        marker in name for marker in ("connection", "connect", "timeout", "transport", "api")
+    ):
+        return "BLOCKED_EXTERNAL"
+    return "FAILED"
+
+
+def _combine_status(base_status: str, provider_status: str) -> str:
+    if "FAILED" in {base_status, provider_status}:
+        return "FAILED"
+    if base_status == "BLOCKED_INPUT":
+        return base_status
+    if provider_status in {"BLOCKED_EXTERNAL", "BLOCKED_INPUT"}:
+        return provider_status
+    return base_status
 
 
 def _load_skill_fixtures(registry: SkillRegistry, fixture_root: Path) -> dict[str, dict[str, Any]]:
@@ -130,6 +156,8 @@ def _base_report(registry: SkillRegistry, fixtures: dict[str, dict[str, Any]], c
 
 
 def validate_report_contract(report: dict[str, Any]) -> None:
+    if report.get("status") not in ALLOWED_STATUSES:
+        raise ValueError("evaluation report has invalid top-level status")
     metric_classes = report.get("metric_classes", {})
     if set(metric_classes) != set(METRIC_CLASSES):
         raise ValueError("evaluation report must separate all metric classes")
@@ -148,8 +176,10 @@ def run_structural(
     fixture_root: Path,
     output_root: Path,
     extended_exercise_root: Path | None = None,
+    registry: SkillRegistry | None = None,
 ) -> dict[str, Any]:
-    registry = SkillRegistry()
+    if registry is None:
+        registry = SkillRegistry()
     fixtures = _load_skill_fixtures(registry, fixture_root)
     cases = []
     for case_dir in sorted(exercise_root.glob("case-*")):
@@ -203,11 +233,12 @@ async def _run_provider_cases(
                 "metrics": asdict(result.metrics),
             })
         except Exception as error:
+            status = _provider_error_status(error)
             reports.append({
                 "case_id": case_dir.name,
-                "status": "BLOCKED_EXTERNAL",
+                "status": status,
                 "error_type": type(error).__name__,
-                "error": str(error),
+                "error": _sanitize_error(error),
             })
     return reports
 
@@ -220,23 +251,24 @@ def run_provider(
     config_file: Path,
     extended_exercise_root: Path | None = None,
 ) -> dict[str, Any]:
-    report = run_structural(exercise_root, fixture_root, output_root, extended_exercise_root)
     registry = SkillRegistry()
+    report = run_structural(exercise_root, fixture_root, output_root, extended_exercise_root, registry)
     fixtures = _load_skill_fixtures(registry, fixture_root)
     case_dirs = [path for path in sorted(exercise_root.glob("case-*")) if (path / "reference.json").is_file()]
     try:
         settings = load_provider_settings(env_file, config_file)
         from agent_framework.openai import OpenAIChatClient
-    except (FileNotFoundError, ImportError, ValueError) as error:
-        report["status"] = "BLOCKED_EXTERNAL"
+    except Exception as error:
+        status = _provider_error_status(error) if not isinstance(error, ValueError) else "BLOCKED_EXTERNAL"
+        report["status"] = _combine_status(report["status"], status)
         report["metric_classes"]["provider_runtime"] = {
-            "status": "BLOCKED_EXTERNAL",
+            "status": status,
             "runs": [],
             "boundary": type(error).__name__,
-            "message": str(error),
+            "message": _sanitize_error(error),
             "human_correction": None,
         }
-        report["provider"] = {"status": "BLOCKED_EXTERNAL"}
+        report["provider"] = {"status": status}
         validate_report_contract(report)
         _write_report(report, output_root)
         return report
@@ -248,8 +280,13 @@ def run_provider(
         close = getattr(client, "close", None)
         if close is not None:
             asyncio.run(close())
-    provider_status = "VERIFIED" if all(item["status"] == "VERIFIED" for item in runs) else "BLOCKED_EXTERNAL"
-    report["status"] = provider_status if report["status"] == "VERIFIED" else report["status"]
+    if any(item["status"] == "FAILED" for item in runs):
+        provider_status = "FAILED"
+    elif any(item["status"] == "BLOCKED_EXTERNAL" for item in runs):
+        provider_status = "BLOCKED_EXTERNAL"
+    else:
+        provider_status = "VERIFIED"
+    report["status"] = _combine_status(report["status"], provider_status)
     report["provider"] = {"provider": settings.provider, "model": settings.model, "base_url": settings.base_url}
     report["metric_classes"]["provider_runtime"] = {
         "status": provider_status,
@@ -301,7 +338,7 @@ def main(argv: list[str] | None = None) -> int:
             args.extended_exercise_root,
         )
     print(json.dumps(report, indent=2, sort_keys=True))
-    return 0
+    return 1 if report.get("status") == "FAILED" else 0
 
 
 if __name__ == "__main__":

@@ -89,3 +89,30 @@ def test_candidate_score_fails_closed_without_recipe_output():
     score = _score_candidate({"metrics": {"pattern": "sequential"}}, reference)
 
     assert not score["quality_passed"]
+
+
+def test_full_pipeline_input_pack_classification(tmp_path: Path):
+    from evaluation.probes.run_full_pipeline_exercise import run
+
+    missing = run(tmp_path / "missing", tmp_path / "missing-output")
+    assert missing["status"] == "BLOCKED_INPUT"
+    assert missing["input_reason"] == "approved exercise root is absent"
+
+    for count in (0, 1, 4, 6):
+        root = tmp_path / f"pack-{count}"
+        root.mkdir()
+        (root / "06_ForesightOS_Validator_Key.xlsx").write_bytes(b"validator")
+        for index in range(count):
+            (root / f"participant-{index}.xlsx").write_bytes(b"participant")
+        report = run(root, tmp_path / f"output-{count}")
+        assert report["status"] == "BLOCKED_INPUT"
+        assert report["participant_count"] == count
+
+    complete = tmp_path / "pack-complete"
+    complete.mkdir()
+    (complete / "06_ForesightOS_Validator_Key.xlsx").write_bytes(b"validator")
+    for index in range(5):
+        (complete / f"participant-{index}.xlsx").write_bytes(b"participant")
+    report = run(complete, tmp_path / "output-complete")
+    assert report["status"] == "FAILED"
+    assert report["input_status"] == "VERIFIED"

@@ -52,6 +52,26 @@ CanonicalResultCommitter = Callable[
 ]
 
 
+def _positive_limit(value: object, *, default: int | None = None, label: str) -> int:
+    if value is None:
+        if default is None:
+            raise ValidationError(f"{label} must be a positive integer")
+        return default
+    if isinstance(value, bool):
+        raise ValidationError(f"{label} must be a positive integer")
+    try:
+        limit = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValidationError(f"{label} must be a positive integer") from exc
+    if limit < 1:
+        raise ValidationError(f"{label} must be a positive integer")
+    return limit
+
+
+def _round_available(budget: BudgetState) -> bool:
+    return budget.max_rounds is None or budget.rounds < budget.max_rounds
+
+
 async def _close_agents(agents: list[object]) -> list[BaseException]:
     errors: list[BaseException] = []
     for agent in agents:
@@ -84,6 +104,7 @@ async def _run_native_stage(
     context = dict(run_context or {})
     context.setdefault("skill_registry", SkillRegistry())
     context["handoff"] = pattern == ExecutionPattern.HANDOFF
+    max_rounds = _positive_limit(context.get("max_rounds"), default=4, label="max_rounds")
     for index, role in enumerate(roles or [{"purpose": "participant"}], 1):
         participant = ParticipantConfig.from_mapping(role, f"participant-{index}")
         agent = factory.create(participant, context)
@@ -111,7 +132,7 @@ async def _run_native_stage(
         workflow = GroupChatBuilder(
             participants=agents,
             selection_func=select_speaker,
-            max_rounds=4,
+            max_rounds=max_rounds,
             output_from="all",
         ).build()
     else:
@@ -132,7 +153,11 @@ async def _run_native_stage(
                 if type(data).__name__ == "GroupChatRequestSentEvent":
                     observed_rounds.add(getattr(data, "round_index", len(observed_rounds)))
         result = await stream.get_final_response()
-        metrics.chat_rounds += len(observed_rounds)
+        if pattern == ExecutionPattern.GROUP_CHAT and observed_rounds:
+            budget = context.get("budget")
+            if budget is not None and not budget.reserve(rounds=len(observed_rounds)):
+                raise BudgetExceededError("maximum group chat rounds exceeded")
+            metrics.chat_rounds += len(observed_rounds)
     outputs = result.get_outputs()
     return list(outputs) if outputs else [result]
 
@@ -155,12 +180,51 @@ def _stage_input_payload(stage_input: object) -> dict[str, object]:
     return {"decision_question": stage_input}
 
 
+def _effective_skill_ids(stage_skill_ids: tuple[str, ...], participant_skill_ids: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys((*stage_skill_ids, *participant_skill_ids)))
+
+
+def _stage_participants(stage: Any) -> tuple[ParticipantConfig, ...]:
+    return tuple(
+        ParticipantConfig.from_mapping(item, f"participant-{index}")
+        for index, item in enumerate(getattr(stage, "participants", ()), 1)
+    )
+
+
 def _stage_fingerprints(
     stage: Any,
     stage_input: object,
     skill_ids: tuple[str, ...],
+    selected_skills_by_participant: Mapping[str, tuple[object, ...]] | None = None,
 ) -> tuple[str, str]:
-    participants = tuple(ParticipantConfig.from_mapping(item).id for item in getattr(stage, "participants", ()))
+    participant_configs = tuple(_stage_participants(stage))
+    participants = tuple(participant.id for participant in participant_configs)
+    if selected_skills_by_participant is None:
+        skill_plan = tuple(
+            {
+                "participant_id": participant.id,
+                "skills": tuple(
+                    {"skill_id": skill_id}
+                    for skill_id in _effective_skill_ids(tuple(skill_ids), participant.skill_ids)
+                ),
+            }
+            for participant in participant_configs
+        )
+    else:
+        skill_plan = tuple(
+            {
+                "participant_id": participant.id,
+                "skills": tuple(
+                    {
+                        "skill_id": getattr(skill, "skill_id", ""),
+                        "version": getattr(skill, "version", ""),
+                        "content_sha256": getattr(skill, "content_sha256", ""),
+                    }
+                    for skill in selected_skills_by_participant.get(participant.id, ())
+                ),
+            }
+            for participant in participant_configs
+        )
     input_payload = _stage_input_payload(stage_input)
     dependency_outputs = input_payload.get("dependency_outputs", {})
     semantic_payload = {
@@ -170,7 +234,7 @@ def _stage_fingerprints(
         "expected_result": getattr(stage, "expected_result", ""),
         "research_needs": getattr(stage, "research_needs", ()),
         "specialist_ids": participants,
-        "skill_ids": tuple(skill_ids),
+        "skill_plan": skill_plan,
         "decision_question": input_payload.get("decision_question", ""),
         "horizon": input_payload.get("horizon", ""),
         "relevant_constraints": input_payload.get("relevant_constraints", ()),
@@ -186,8 +250,13 @@ def _stage_fingerprints(
     )
 
 
-def _stage_cache_key(stage: Any, current: object, skill_ids: tuple[str, ...]) -> str:
-    return _stage_fingerprints(stage, current, skill_ids)[0]
+def _stage_cache_key(
+    stage: Any,
+    current: object,
+    skill_ids: tuple[str, ...],
+    selected_skills_by_participant: Mapping[str, tuple[object, ...]] | None = None,
+) -> str:
+    return _stage_fingerprints(stage, current, skill_ids, selected_skills_by_participant)[0]
 
 
 def _committed_cache_output(entry: Any, canonical_records: dict[str, object] | None = None) -> tuple[bool, object]:
@@ -262,9 +331,12 @@ async def run_recipe_async(
     metrics = RunMetrics(run_id or f"run-{uuid4().hex}", recipe.name.value, recipe.pattern)
     outputs: list[object] = []
     metrics.cleanup_complete = True
-    budget = BudgetState(recipe.max_agent_steps, recipe.max_correction_rounds, recipe.max_total_agent_calls)
-    factory = AgentFactory(client) if client is not None else None
     context = dict(run_context or {})
+    run_max_rounds = None
+    if "max_rounds" in context and context["max_rounds"] is not None:
+        run_max_rounds = _positive_limit(context["max_rounds"], label="max_rounds")
+    budget = BudgetState(recipe.max_agent_steps, recipe.max_correction_rounds, recipe.max_total_agent_calls, max_rounds=run_max_rounds)
+    factory = AgentFactory(client) if client is not None else None
     context.setdefault("skill_registry", SkillRegistry())
     receipt_store = context.get("analysis_store") or context.get("stage_receipt_store")
     if isinstance(receipt_store, AnalysisStore):
@@ -298,15 +370,22 @@ async def run_recipe_async(
     context["budget"] = budget
     context.setdefault("capability_resolver", CapabilityResolver())
     required_capabilities: set[str] = set()
+    selected_skills_by_stage: dict[str, dict[str, tuple[object, ...]]] = {}
     for stage in recipe.stages or ():
-        selected_skills = context["skill_registry"].resolve(tuple(getattr(stage, "skill_ids", ())))
-        required_capabilities.update(context["skill_registry"].required_capabilities(selected_skills))
-        for participant in getattr(stage, "participants", ()):
-            required_capabilities.update(ParticipantConfig.from_mapping(participant).capability_ids)
+        stage_skill_ids = tuple(getattr(stage, "skill_ids", ()))
+        stage_plan: dict[str, tuple[object, ...]] = {}
+        for participant in _stage_participants(stage):
+            effective_ids = _effective_skill_ids(stage_skill_ids, participant.skill_ids)
+            selected_skills = context["skill_registry"].resolve(effective_ids)
+            stage_plan[participant.id] = selected_skills
+            required_capabilities.update(context["skill_registry"].required_capabilities(selected_skills))
+            required_capabilities.update(participant.capability_ids)
+        selected_skills_by_stage[getattr(stage, "stage_id", "stage")] = stage_plan
     if not recipe.stages:
         for participant in recipe.roles:
             required_capabilities.update(ParticipantConfig.from_mapping(participant).capability_ids)
     context["required_capabilities"] = tuple(sorted(required_capabilities))
+    context["selected_skills_by_stage"] = selected_skills_by_stage
     local_bindings = context.setdefault("local_capabilities", {})
     for name, binding in bind_local_toolbelt().items():
         local_bindings.setdefault(name, binding)
@@ -362,23 +441,27 @@ async def run_recipe_async(
     async def dispatch_stage(stage: Any, stage_input: object) -> tuple[list[object], object]:
         pattern = ExecutionPattern(stage.pattern)
         stage_skill_ids = tuple(getattr(stage, "skill_ids", ()))
-        selected_skills = context["skill_registry"].resolve(stage_skill_ids)
+        participants = list(_stage_participants(stage))
+        selected_skills_by_participant = dict(
+            context.get("selected_skills_by_stage", {}).get(getattr(stage, "stage_id", ""), {})
+        )
+        selected_skills = tuple(
+            skill
+            for participant in participants
+            for skill in selected_skills_by_participant.get(participant.id, ())
+        )
         stage_skill_hashes = tuple(skill.content_sha256 for skill in selected_skills)
         context.setdefault("skill_hashes_by_stage", {})[getattr(stage, "stage_id", "")] = stage_skill_hashes
         stage_context = dict(context)
         stage_context["selected_skills"] = selected_skills
-        participants = [
-            replace(
-                ParticipantConfig.from_mapping(participant, f"participant-{index}"),
-                skill_ids=tuple(dict.fromkeys((
-                    *stage_skill_ids,
-                    *ParticipantConfig.from_mapping(participant, f"participant-{index}").skill_ids,
-                ))),
-            )
-            for index, participant in enumerate(stage.participants, 1)
-        ]
-        cache_key = _stage_cache_key(stage, stage_input, stage_skill_ids)
-        semantic_fingerprint, execution_policy_fingerprint = _stage_fingerprints(stage, stage_input, stage_skill_ids)
+        stage_context["selected_skills_by_participant"] = selected_skills_by_participant
+        cache_key = _stage_cache_key(stage, stage_input, stage_skill_ids, selected_skills_by_participant)
+        semantic_fingerprint, execution_policy_fingerprint = _stage_fingerprints(
+            stage,
+            stage_input,
+            stage_skill_ids,
+            selected_skills_by_participant,
+        )
         stage_context["stage_fingerprints"] = (semantic_fingerprint, execution_policy_fingerprint)
         cache_entry = context.get("stage_cache", {}).get(cache_key)
         receipt = context.get("stage_receipts", {}).get(getattr(stage, "stage_id", ""))
@@ -410,11 +493,18 @@ async def run_recipe_async(
         metrics.reassessed_stages += 1
         limits = dict(getattr(stage, "limits", {}) or {})
         max_timeout = limits.get("max_timeout_seconds", limits.get("timeout_seconds"))
-        for field_name in ("max_agent_steps", "max_total_agent_calls", "max_branches", "max_handoffs", "max_rounds", "max_tool_calls"):
+        for field_name in ("max_agent_steps", "max_total_agent_calls", "max_branches", "max_handoffs", "max_tool_calls"):
             value = limits.get(field_name)
             if value is not None:
                 existing_budget = getattr(budget, field_name)
                 setattr(budget, field_name, min(existing_budget, int(value)) if existing_budget is not None else int(value))
+        if pattern == ExecutionPattern.GROUP_CHAT:
+            declared_rounds = _positive_limit(limits.get("max_rounds"), default=4, label="stage max_rounds")
+            if not _round_available(budget):
+                raise BudgetExceededError("maximum group chat rounds exhausted before dispatch")
+            remaining_rounds = None if budget.max_rounds is None else budget.max_rounds - budget.rounds
+            effective_rounds = declared_rounds if remaining_rounds is None else min(declared_rounds, remaining_rounds)
+            stage_context["max_rounds"] = effective_rounds
         if limits.get("max_agent_steps") is not None and budget.agent_steps + 1 > int(limits["max_agent_steps"]):
             raise BudgetExceededError("maximum agent steps exceeded before dispatch")
         if limits.get("max_total_agent_calls") is not None and budget.total_agent_calls + 1 > int(limits["max_total_agent_calls"]):
@@ -455,10 +545,14 @@ async def run_recipe_async(
                 return list(results), aggregate
             elif pattern == ExecutionPattern.GROUP_CHAT:
                 stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(str(stage_input))]
+                if not budget.reserve(rounds=1):
+                    raise BudgetExceededError("maximum group chat rounds exceeded")
                 metrics.chat_rounds += 1
-                if len(participants) > 1:
+                if len(participants) > 1 and effective_rounds > 1 and _round_available(budget):
                     reviewer = participants[1] if len(participants) > 1 else {"purpose": "review"}
                     stage_outputs.append(await ReviewerExecutor(client, factory, ParticipantConfig.from_mapping(reviewer, "reviewer"), stage_context).execute(f"Challenge this proposal:\n{stage_outputs[-1]}"))
+                    if not budget.reserve(rounds=1):
+                        raise BudgetExceededError("maximum group chat rounds exceeded")
                     metrics.chat_rounds += 1
             else:
                 stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(str(stage_input))]

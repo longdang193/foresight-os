@@ -1,6 +1,6 @@
 from copy import deepcopy
 
-from evaluation.probes.compare_optimization_receipts import compare
+from evaluation.probes.compare_optimization_receipts import compare, compare_repeats, validate_stability
 from foresight_os.runtime.metrics import RunMetrics
 
 
@@ -29,6 +29,11 @@ def _receipt() -> dict:
     }
     return {
         "schema_version": 2,
+        "revision": {
+            "commit": "commit",
+            "repo_root": "repo",
+            "package_path": "repo/src/foresight_os/__init__.py",
+        },
         "accepted_finding_count": 2,
         "economics": economics,
         "stage_metrics": [
@@ -93,6 +98,10 @@ def test_comparator_rejects_missing_or_zero_denominator_without_raising():
     release["accepted_finding_count"] = 0
     assert not compare(baseline, release)["accepted"]
 
+    release = deepcopy(baseline)
+    del release["revision"]
+    assert not compare(baseline, release)["accepted"]
+
 
 def test_comparator_rejects_workload_pattern_and_resource_regressions():
     baseline = _receipt()
@@ -118,3 +127,48 @@ def test_comparator_rejects_new_calls_for_reused_stage():
 
     assert not result["accepted"]
     assert result["reused_stage_new_calls"] == ["stage-1"]
+
+
+def test_repeat_comparator_requires_stable_group_chat_p95_and_metadata():
+    baseline = _receipt()
+    baseline_repeat = deepcopy(baseline)
+    release = deepcopy(baseline)
+    release_repeat = deepcopy(baseline)
+    release["revision"]["commit"] = "release-commit"
+    release_repeat["revision"]["commit"] = "release-commit"
+    release["maf_patterns"]["CHALLENGE_RECOMMENDATION"]["latency"]["wall_time_ms_p95"] = 12
+    release_repeat["maf_patterns"]["CHALLENGE_RECOMMENDATION"]["latency"]["wall_time_ms_p95"] = 12
+    assert validate_stability([baseline, baseline_repeat], [release, release_repeat])["accepted"]
+    assert compare_repeats([baseline, baseline_repeat], [release, release_repeat])["accepted"]
+
+    unstable = deepcopy(baseline_repeat)
+    unstable["maf_patterns"]["CHALLENGE_RECOMMENDATION"]["latency"]["wall_time_ms_p95"] = 12
+    unstable_result = validate_stability([baseline, unstable], [release, release_repeat])
+    assert not unstable_result["accepted"]
+    assert any("group_chat_p95" in error for error in unstable_result["errors"])
+
+    mismatched = deepcopy(baseline_repeat)
+    mismatched["workload"]["fixture_sha256"] = "different"
+    mismatch_result = validate_stability([baseline, mismatched], [release, release_repeat])
+    assert not mismatch_result["accepted"]
+    assert any("workload" in error for error in mismatch_result["errors"])
+
+    mismatched_revision = deepcopy(release_repeat)
+    mismatched_revision["revision"]["commit"] = "other-commit"
+    revision_result = validate_stability([baseline, baseline_repeat], [release, mismatched_revision])
+    assert not revision_result["accepted"]
+    assert any("revision" in error for error in revision_result["errors"])
+
+    identical_revision = compare_repeats([baseline, baseline_repeat], [baseline, baseline_repeat])
+    assert not identical_revision["accepted"]
+    assert "baseline/release revision is identical" in identical_revision["stability"]["errors"]
+
+    same_commit_different_paths = deepcopy(baseline)
+    same_commit_different_paths["revision"]["repo_root"] = "another-repo"
+    same_commit_different_paths["revision"]["package_path"] = "another-repo/src/foresight_os/__init__.py"
+    same_commit_result = compare_repeats(
+        [baseline, baseline_repeat],
+        [same_commit_different_paths, deepcopy(same_commit_different_paths)],
+    )
+    assert not same_commit_result["accepted"]
+    assert "baseline/release revision is identical" in same_commit_result["stability"]["errors"]

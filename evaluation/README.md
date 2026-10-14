@@ -135,6 +135,20 @@ Probe reports retain endpoint hosts, source identity, timestamps, typed
 metadata, metrics, and cleanup status only. Tokens, prompts, headers, and raw
 external payloads are not durable evidence.
 
+The repository's `scheduled-evidence` workflow runs the structural skill
+evaluation, clean-wheel smoke, and release optimization probe on a weekly
+schedule or manual dispatch. Its `run_provider` input defaults to `false`; the
+provider-backed evaluation is a separate manual job using the protected
+`provider-evidence` environment. Missing provider configuration remains
+`BLOCKED_EXTERNAL` rather than becoming a passing result.
+
+The repository's `scheduled-evidence` workflow runs the structural skill
+evaluation, clean-wheel smoke, and release optimization probe on a weekly
+schedule or manual dispatch. Its `run_provider` input defaults to `false`; the
+provider-backed evaluation is a separate manual job using the protected
+`provider-evidence` environment. Missing provider configuration remains
+`BLOCKED_EXTERNAL` rather than becoming a passing result.
+
 ## Optimization pass evidence
 
 `run_optimization_probe.py` is the release-level measurement entry point. It compares cold/warm XLSX reads and all five native MAF patterns, proves a credential-free native Streamable HTTP MCP discovery path, records separate model/local/MCP/external economics, token counters, accepted-finding-normalized values, per-pattern latency components, portable RSS/resource snapshots, and runs a 100-run resource soak. Baseline and release receipts share the schema owned by `optimization_measurement.py`; missing required evidence, workload/schema mismatches, zero denominators, resource growth, or threshold regressions fail comparison closed.

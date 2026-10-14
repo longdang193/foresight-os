@@ -102,10 +102,47 @@ def _run_case(source: Path, workbook: Path, scope: ParticipantScope, output_root
 
 def run(exercise_root: Path, output_root: Path) -> dict[str, Any]:
     output_root.mkdir(parents=True, exist_ok=True)
+    expected_participant_count = 5
+    if not exercise_root.is_dir():
+        report = {
+            "status": "BLOCKED_INPUT",
+            "input_status": "BLOCKED_INPUT",
+            "input_reason": "approved exercise root is absent",
+            "expected_participant_count": expected_participant_count,
+            "participant_count": 0,
+            "validator_denied": False,
+            "cases": [],
+        }
+        report["passed"] = False
+        (output_root / "full-pipeline-report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return report
     participant_root = output_root / "participant-inputs"
     participant_root.mkdir(parents=True, exist_ok=True)
     validator = exercise_root / "06_ForesightOS_Validator_Key.xlsx"
     participants = sorted(item for item in exercise_root.glob("*.xlsx") if item.name != validator.name)
+    if not validator.is_file():
+        reason = "approved validator workbook is absent"
+    elif len(participants) == 0:
+        reason = "approved participant workbook pack is empty"
+    elif len(participants) < expected_participant_count:
+        reason = "approved participant workbook pack is incomplete"
+    elif len(participants) > expected_participant_count:
+        reason = "approved participant workbook pack has an unexpected shape"
+    else:
+        reason = None
+    if reason is not None:
+        report = {
+            "status": "BLOCKED_INPUT",
+            "input_status": "BLOCKED_INPUT",
+            "input_reason": reason,
+            "expected_participant_count": expected_participant_count,
+            "participant_count": len(participants),
+            "validator_denied": False,
+            "cases": [],
+        }
+        report["passed"] = False
+        (output_root / "full-pipeline-report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return report
     copied: list[Path] = []
     source_by_name: dict[str, Path] = {}
     for source in participants:
@@ -121,6 +158,8 @@ def run(exercise_root: Path, output_root: Path) -> dict[str, Any]:
     except PermissionError:
         validator_denied = True
     report = {
+        "status": "VERIFIED" if pipeline_passes({"expected_participant_count": expected_participant_count, "cases": cases, "validator_denied": validator_denied}) else "FAILED",
+        "input_status": "VERIFIED",
         "expected_participant_count": 5,
         "participant_count": len(cases),
         "validator_denied": validator_denied,
@@ -139,7 +178,7 @@ def main() -> int:
     args = parser.parse_args()
     report = run(args.exercise_root, args.output_root)
     print(json.dumps(report, indent=2, sort_keys=True))
-    return 0 if report["passed"] else 1
+    return 0 if report["status"] in {"VERIFIED", "BLOCKED_INPUT"} else 1
 
 
 if __name__ == "__main__":

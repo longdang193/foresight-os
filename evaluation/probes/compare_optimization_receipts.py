@@ -36,6 +36,7 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
     missing: list[str] = []
     required = (
         "schema_version",
+        "revision",
         "accepted_finding_count",
         "economics",
         "stage_metrics",
@@ -50,6 +51,10 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
     missing.extend(key for key in required if key not in receipt)
     if receipt.get("schema_version") != SCHEMA_VERSION:
         missing.append(f"schema_version={SCHEMA_VERSION}")
+    revision = receipt.get("revision", {})
+    for field in ("commit", "repo_root", "package_path"):
+        if not isinstance(revision.get(field), str) or not revision[field].strip():
+            missing.append(f"revision.{field}")
     accepted_count = receipt.get("accepted_finding_count")
     if not isinstance(accepted_count, int) or accepted_count <= 0:
         missing.append("accepted_finding_count>0")
@@ -120,6 +125,53 @@ def _pct(release: float, baseline: float) -> float:
     return round((release / baseline - 1) * 100, 3)
 
 
+def validate_stability(baseline_repeat: list[dict], release_repeat: list[dict]) -> dict:
+    errors: list[str] = []
+    if len(baseline_repeat) != 2 or len(release_repeat) != 2:
+        errors.append("exactly two receipts are required per revision")
+    for label, receipts in (("baseline", baseline_repeat), ("release", release_repeat)):
+        if len(receipts) != 2:
+            continue
+        first, second = receipts
+        if first.get("workload") != second.get("workload"):
+            errors.append(f"{label}.workload differs between repeats")
+        if first.get("environment") != second.get("environment"):
+            errors.append(f"{label}.environment differs between repeats")
+        if first.get("revision") != second.get("revision"):
+            errors.append(f"{label}.revision differs between repeats")
+        try:
+            drift = abs(_pct(
+                float(second["maf_patterns"]["CHALLENGE_RECOMMENDATION"]["latency"]["wall_time_ms_p95"]),
+                float(first["maf_patterns"]["CHALLENGE_RECOMMENDATION"]["latency"]["wall_time_ms_p95"]),
+            ))
+        except (KeyError, TypeError, ValueError, ZeroDivisionError):
+            errors.append(f"{label}.group_chat_p95 is unavailable")
+        else:
+            if drift > 10:
+                errors.append(f"{label}.group_chat_p95 drift exceeds 10%: {drift}")
+    if len(baseline_repeat) == 2 and len(release_repeat) == 2:
+        if baseline_repeat[0].get("workload") != release_repeat[0].get("workload"):
+            errors.append("baseline/release workload differs")
+        if baseline_repeat[0].get("environment") != release_repeat[0].get("environment"):
+            errors.append("baseline/release environment differs")
+        if (
+            baseline_repeat[0].get("revision", {}).get("commit")
+            == release_repeat[0].get("revision", {}).get("commit")
+        ):
+            errors.append("baseline/release revision is identical")
+    return {"accepted": not errors, "errors": errors}
+
+
+def compare_repeats(baseline_repeat: list[dict], release_repeat: list[dict]) -> dict:
+    stability = validate_stability(baseline_repeat, release_repeat)
+    comparisons = [compare(baseline, release) for baseline, release in zip(baseline_repeat, release_repeat, strict=False)]
+    return {
+        "accepted": stability["accepted"] and len(comparisons) == 2 and all(item.get("accepted") is True for item in comparisons),
+        "stability": stability,
+        "comparisons": comparisons,
+    }
+
+
 def compare(baseline: dict, release: dict) -> dict:
     missing_baseline = _validate_measurement_receipt(baseline)
     missing_release = _validate_measurement_receipt(release)
@@ -180,11 +232,23 @@ def compare(baseline: dict, release: dict) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--baseline", type=Path, required=True)
-    parser.add_argument("--release", type=Path, required=True)
+    parser.add_argument("--baseline", type=Path)
+    parser.add_argument("--release", type=Path)
+    parser.add_argument("--baseline-repeat", type=Path, nargs=2)
+    parser.add_argument("--release-repeat", type=Path, nargs=2)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    result = compare(json.loads(args.baseline.read_text(encoding="utf-8")), json.loads(args.release.read_text(encoding="utf-8")))
+    if args.baseline_repeat or args.release_repeat:
+        if not args.baseline_repeat or not args.release_repeat:
+            parser.error("--baseline-repeat and --release-repeat must be supplied together")
+        result = compare_repeats(
+            [json.loads(path.read_text(encoding="utf-8")) for path in args.baseline_repeat],
+            [json.loads(path.read_text(encoding="utf-8")) for path in args.release_repeat],
+        )
+    else:
+        if not args.baseline or not args.release:
+            parser.error("--baseline and --release are required without repeat inputs")
+        result = compare(json.loads(args.baseline.read_text(encoding="utf-8")), json.loads(args.release.read_text(encoding="utf-8")))
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")

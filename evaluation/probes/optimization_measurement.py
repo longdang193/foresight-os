@@ -4,6 +4,8 @@ import hashlib
 import json
 import os
 import platform
+import subprocess
+import sys
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -17,6 +19,42 @@ from foresight_os.runtime.local_toolbelt import AnalysisOperation, SheetSelectio
 
 
 SCHEMA_VERSION = 2
+
+
+def _revision_metadata() -> dict[str, str]:
+    import foresight_os
+
+    repo_root = Path(__file__).parents[2].resolve()
+    package_path = Path(foresight_os.__file__).resolve()
+    if repo_root not in package_path.parents:
+        raise RuntimeError(f"resolved foresight_os package is outside measured worktree: {package_path}")
+    revision = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return {
+        "commit": revision,
+        "repo_root": str(repo_root),
+        "package_path": str(package_path),
+    }
+
+
+def _environment_metadata() -> dict[str, object]:
+    freeze = subprocess.run(
+        [sys.executable, "-m", "pip", "freeze"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    return {
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+        "executable": str(Path(sys.executable).resolve()),
+        "pip_freeze": freeze,
+    }
 
 
 def process_rss_bytes() -> int | None:
@@ -176,8 +214,9 @@ def build_receipt(
         "schema_version": SCHEMA_VERSION,
         "mode": mode,
         "status": "VERIFIED" if native_mcp.get("status") == "VERIFIED" else "FAILED",
-        "environment": {"python": platform.python_version(), "platform": platform.platform()},
-        "workload": {"fixture": str(fixture), "fixture_sha256": hashlib.sha256(fixture.read_bytes()).hexdigest(), "warmups": 2, "measured_runs": 10, "patterns": sorted(patterns)},
+        "environment": _environment_metadata(),
+        "revision": _revision_metadata(),
+        "workload": {"fixture": fixture.name, "fixture_sha256": hashlib.sha256(fixture.read_bytes()).hexdigest(), "warmups": 2, "measured_runs": 10, "patterns": sorted(patterns)},
         "acceptance": thresholds,
         "accepted_finding_count": accepted_count,
         "economics": economics,
