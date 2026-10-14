@@ -96,7 +96,7 @@ def test_sanitize_error_redacts_bearer_and_json_credentials():
 
     assert "abc.def" not in sanitized
     assert "secret-value" not in sanitized
-    assert "[REDACTED]" in sanitized
+    assert sanitized == "RuntimeError: message redacted"
 
 
 def test_evaluator_cli_fails_for_failed_report(monkeypatch, tmp_path):

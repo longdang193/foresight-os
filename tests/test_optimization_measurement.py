@@ -134,6 +134,8 @@ def test_repeat_comparator_requires_stable_group_chat_p95_and_metadata():
     baseline_repeat = deepcopy(baseline)
     release = deepcopy(baseline)
     release_repeat = deepcopy(baseline)
+    release["revision"]["commit"] = "release-commit"
+    release_repeat["revision"]["commit"] = "release-commit"
     release["maf_patterns"]["CHALLENGE_RECOMMENDATION"]["latency"]["wall_time_ms_p95"] = 12
     release_repeat["maf_patterns"]["CHALLENGE_RECOMMENDATION"]["latency"]["wall_time_ms_p95"] = 12
     assert validate_stability([baseline, baseline_repeat], [release, release_repeat])["accepted"]
@@ -150,3 +152,13 @@ def test_repeat_comparator_requires_stable_group_chat_p95_and_metadata():
     mismatch_result = validate_stability([baseline, mismatched], [release, release_repeat])
     assert not mismatch_result["accepted"]
     assert any("workload" in error for error in mismatch_result["errors"])
+
+    mismatched_revision = deepcopy(release_repeat)
+    mismatched_revision["revision"]["commit"] = "other-commit"
+    revision_result = validate_stability([baseline, baseline_repeat], [release, mismatched_revision])
+    assert not revision_result["accepted"]
+    assert any("revision" in error for error in revision_result["errors"])
+
+    identical_revision = compare_repeats([baseline, baseline_repeat], [baseline, baseline_repeat])
+    assert not identical_revision["accepted"]
+    assert "baseline/release revision is identical" in identical_revision["stability"]["errors"]

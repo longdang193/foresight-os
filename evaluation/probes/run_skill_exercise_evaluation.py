@@ -3,7 +3,6 @@
 import argparse
 import asyncio
 import json
-import re
 import time
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -29,14 +28,7 @@ FIXTURE_KEYS = {
 
 
 def _sanitize_error(error: BaseException) -> str:
-    message = str(error)
-    message = re.sub(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [REDACTED]", message)
-    message = re.sub(
-        r"(?i)([\"']?(?:api[_-]?key|token|password|secret|authorization)[\"']?\s*[=:]\s*)(\"[^\"]*\"|'[^']*'|[^\s,;}\]]+)",
-        r"\1[REDACTED]",
-        message,
-    )
-    return message[:300]
+    return f"{type(error).__name__}: message redacted"
 
 
 def _provider_error_status(error: BaseException) -> str:

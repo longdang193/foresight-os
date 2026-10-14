@@ -137,6 +137,8 @@ def validate_stability(baseline_repeat: list[dict], release_repeat: list[dict]) 
             errors.append(f"{label}.workload differs between repeats")
         if first.get("environment") != second.get("environment"):
             errors.append(f"{label}.environment differs between repeats")
+        if first.get("revision") != second.get("revision"):
+            errors.append(f"{label}.revision differs between repeats")
         try:
             drift = abs(_pct(
                 float(second["maf_patterns"]["CHALLENGE_RECOMMENDATION"]["latency"]["wall_time_ms_p95"]),
@@ -152,6 +154,8 @@ def validate_stability(baseline_repeat: list[dict], release_repeat: list[dict]) 
             errors.append("baseline/release workload differs")
         if baseline_repeat[0].get("environment") != release_repeat[0].get("environment"):
             errors.append("baseline/release environment differs")
+        if baseline_repeat[0].get("revision") == release_repeat[0].get("revision"):
+            errors.append("baseline/release revision is identical")
     return {"accepted": not errors, "errors": errors}
 
 
