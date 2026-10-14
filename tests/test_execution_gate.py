@@ -62,6 +62,7 @@ def test_admitted_execution_passes_immutable_context(monkeypatch, tmp_path):
     assert result.run_id == "run-1"
     assert seen["execution_admitted"] is True
     assert seen["approved_recipe_fingerprint"] == canonical_json_hash(store.load_recipe().to_dict())
+    assert seen["fallback_on_stale_reuse"] == "stop"
 
 
 def test_superseded_approval_blocks_dispatch(tmp_path):

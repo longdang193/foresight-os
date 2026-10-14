@@ -14,6 +14,9 @@ class ParticipantConfig:
     skill_ids: tuple[str, ...] = ()
     handoff_targets: tuple[str, ...] = ()
     data_scope: tuple[str, ...] = ()
+    provider: str = "local"
+    model: str = "unspecified"
+    reasoning_controls: dict[str, str | int | float | bool] = field(default_factory=dict)
     limits: dict[str, int | str] = field(default_factory=dict)
     structured_output: bool | dict[str, Any] = False
 
@@ -30,6 +33,9 @@ class ParticipantConfig:
             skill_ids=tuple(str(item) for item in value.get("skill_ids", ())),
             handoff_targets=tuple(str(item) for item in value.get("handoff_targets", ())),
             data_scope=tuple(str(item) for item in value.get("data_scope", ())),
+            provider=str(value.get("provider", "local")),
+            model=str(value.get("model", "unspecified")),
+            reasoning_controls=dict(value.get("reasoning_controls", {})),
             limits=dict(value.get("limits", {})),
             structured_output=value.get("structured_output", False),
         )
@@ -41,6 +47,8 @@ class AgentFactory:
 
     def create(self, participant_config: ParticipantConfig | Mapping[str, Any], run_context: Mapping[str, Any] | None = None) -> Any:
         config = ParticipantConfig.from_mapping(participant_config)
+        if config.provider not in {"", "local"}:
+            raise RuntimeError(f"participant {config.id} provider '{config.provider}' is not configured")
         context = dict(run_context or {})
         skill_registry = context.get("skill_registry")
         selected_by_participant = context.get("selected_skills_by_participant", {})
@@ -65,6 +73,10 @@ class AgentFactory:
         profile_options = context.get("profile_options", {})
         if config.profile in profile_options:
             kwargs["default_options"] = dict(profile_options[config.profile])
+        if config.model != "unspecified":
+            kwargs.setdefault("default_options", {})["model"] = config.model
+        if config.reasoning_controls:
+            kwargs.setdefault("default_options", {}).update(config.reasoning_controls)
         if config.structured_output and isinstance(config.structured_output, dict):
             kwargs.setdefault("default_options", {})["response_format"] = config.structured_output
         tools = context.get("tools_by_participant", {}).get(config.id)

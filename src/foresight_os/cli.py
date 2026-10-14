@@ -117,7 +117,11 @@ def main(argv: list[str] | None = None) -> int:
             compatible_participant_substitution=True,
             dependency_safe_topology_reduction=True,
         ), reuse_candidates=tuple(
-            {"stage_id": stage_id, **classify_reuse(receipt, reusable=receipt.reusable())}
+            {"stage_id": stage_id, **classify_reuse(
+                receipt,
+                reusable=False,
+                reason="runtime fingerprint comparison is required before reuse",
+            )}
             for stage_id, receipt in store.load_stage_receipts().items()
         ))
         rendered = render_approval_json(package) if args.format == "json" else render_approval_markdown(package, detailed=args.detailed)

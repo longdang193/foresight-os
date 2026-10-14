@@ -1,10 +1,12 @@
 import asyncio
 
+import pytest
+
 from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, RecipeName, RecipeStage, StageInput, make_recipe
 from foresight_os.persistence.analysis_store import StageReceipt
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.controller.proposal import classify_reuse
-from foresight_os.runtime.workflow import CanonicalStageResult, _canonical_result_hash, _stage_cache_key, run_recipe_async
+from foresight_os.runtime.workflow import CanonicalStageResult, StaleReuseError, _canonical_result_hash, _stage_cache_key, run_recipe_async
 
 
 def test_stage_receipt_reuse_revalidates_semantic_scope_and_provenance():
@@ -160,3 +162,31 @@ def test_run_fresh_reassesses_selected_stage_and_descendants():
     )
     result = asyncio.run(run_recipe_async(recipe, "start", run_context={"run_fresh_stages": ("first",)}))
     assert result.metrics.reassessed_stages == 2
+
+
+def test_approved_stop_fallback_blocks_stale_receipt_before_provider_work():
+    base = make_recipe(RecipeName.DIRECT)
+    stage = RecipeStage("first", ExecutionPattern.DIRECT, ({"id": "first"},), "prompt", "typed-result", {})
+    recipe = ExecutionRecipe(
+        base.name, base.pattern, base.roles, base.max_agent_steps, base.max_correction_rounds,
+        base.max_total_agent_calls, base.completion, base.escalation, base.partial_result,
+        stages=(stage,),
+    )
+    output = {"stage": "old"}
+    receipt = StageReceipt(
+        "first",
+        "stale-input",
+        result_references=("claim-1",),
+        result_hashes=(_canonical_result_hash(output),),
+        status="committed",
+        committed=True,
+        provenance_complete=True,
+    )
+
+    with pytest.raises(StaleReuseError, match="stale stage receipt"):
+        asyncio.run(run_recipe_async(recipe, "start", run_context={
+            "stage_receipts": {"first": receipt},
+            "canonical_outputs": {"first": output},
+            "canonical_records": {"claim-1": output},
+            "fallback_on_stale_reuse": "stop",
+        }))

@@ -313,7 +313,7 @@ def select_recipe(brief: WorkBrief, task_shape: TaskShape | None = None, overrid
     override = override if override is not None else brief.execution_pattern_override
     if override is not None:
         selected = _patterns_from_override(override)
-        if isinstance(override, (list, tuple)) and brief.stages and len(selected) != len(brief.stages):
+        if isinstance(override, (list, tuple)) and len(selected) > 1 and brief.stages and len(selected) != len(brief.stages):
             raise ValueError("global pattern list must map positionally to every WorkStage")
         if task_shape is not None and task_shape.review_required and ExecutionPattern.SEQUENTIAL not in selected:
             if selected == (ExecutionPattern.DIRECT,):

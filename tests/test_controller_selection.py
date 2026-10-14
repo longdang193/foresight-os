@@ -2,7 +2,7 @@ from foresight_os.controller.budgets import BudgetState
 from foresight_os.controller.policy import probe_pattern_status, select_recipe
 from foresight_os.controller.recipes import ExecutionPattern, RecipeName
 from foresight_os.controller.task_shape import TaskShape
-from foresight_os.domain.models import ResearchNeed, ResearchNeedKind, WorkStage
+from foresight_os.domain.models import ExecutionIntent, ResearchNeed, ResearchNeedKind, WorkBrief, WorkStage
 from foresight_os.wayfinding import create_work_brief
 
 
@@ -81,3 +81,22 @@ def test_work_stages_assign_capabilities_and_handoff_routes_explicitly():
     assert recipe.stages[0].stage_id == "assess-capacity"
     assert recipe.stages[1].participants[0]["capability_ids"] == ("web_search", "page_retrieval")
     assert recipe.stages[0].participants[0]["handoff_targets"] == ("participant-2",)
+
+
+def test_single_required_pattern_broadcasts_to_all_persisted_stages():
+    brief = WorkBrief(
+        "broadcast",
+        "review",
+        [],
+        ["answer"],
+        [],
+        [],
+        "assess",
+        "execute",
+        stages=[WorkStage("first", "first"), WorkStage("second", "second")],
+        execution_intent=ExecutionIntent(required_patterns=("concurrent",)),
+    )
+
+    recipe = select_recipe(brief)
+
+    assert [stage.pattern for stage in recipe.stages] == [ExecutionPattern.CONCURRENT, ExecutionPattern.CONCURRENT]

@@ -75,7 +75,10 @@ class ExecutionGate:
                 run_id=run_id or f"run-{brief.investigation_id}",
                 recipe_fingerprint=recipe_fingerprint,
                 approval_fingerprint=approval.projection_fingerprint,
-                run_decisions=dict(approval.run_decisions),
+                run_decisions={
+                    **dict(approval.run_decisions),
+                    "fallback_on_stale_reuse": envelope.fallback_on_stale_reuse,
+                },
                 recipe=recipe,
             )
 
@@ -98,6 +101,7 @@ class ExecutionGate:
             "approved_recipe_fingerprint": admission.recipe_fingerprint,
             "approval_projection_fingerprint": admission.approval_fingerprint,
             "run_fresh_stages": tuple(admission.run_decisions.get("run_fresh_stages", ())),
+            "fallback_on_stale_reuse": admission.run_decisions.get("fallback_on_stale_reuse", "run_fresh"),
             "analysis_store": self.store,
         })
         return await run_recipe_async(admission.recipe, prompt, client, admission.run_id, context)

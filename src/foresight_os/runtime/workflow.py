@@ -54,6 +54,10 @@ CanonicalResultCommitter = Callable[
 ]
 
 
+class StaleReuseError(RuntimeError):
+    """Raised when approved execution refuses to refresh a stale stage receipt."""
+
+
 def _positive_limit(value: object, *, default: int | None = None, label: str) -> int:
     if value is None:
         if default is None:
@@ -192,10 +196,23 @@ def _effective_skill_ids(stage_skill_ids: tuple[str, ...], participant_skill_ids
 
 
 def _stage_participants(stage: Any) -> tuple[ParticipantConfig, ...]:
-    return tuple(
-        ParticipantConfig.from_mapping(item, f"participant-{index}")
-        for index, item in enumerate(getattr(stage, "participants", ()), 1)
-    )
+    stage_capabilities = tuple(str(item) for item in getattr(stage, "capabilities", ()))
+    stage_scope = tuple(str(item) for item in getattr(stage, "access_scope", ()))
+    stage_provider = str(getattr(stage, "provider", "local"))
+    stage_model = str(getattr(stage, "model", "unspecified"))
+    stage_reasoning_controls = dict(getattr(stage, "reasoning_controls", {}) or {})
+    participants = []
+    for index, item in enumerate(getattr(stage, "participants", ()), 1):
+        participant = ParticipantConfig.from_mapping(item, f"participant-{index}")
+        participants.append(replace(
+            participant,
+            capability_ids=tuple(dict.fromkeys((*stage_capabilities, *participant.capability_ids))),
+            data_scope=tuple(dict.fromkeys((*stage_scope, *participant.data_scope))),
+            provider=stage_provider,
+            model=stage_model if stage_model != "unspecified" else participant.model,
+            reasoning_controls={**participant.reasoning_controls, **stage_reasoning_controls},
+        ))
+    return tuple(participants)
 
 
 def _stage_fingerprints(
@@ -250,7 +267,14 @@ def _stage_fingerprints(
             for stage_id, output in dict(dependency_outputs).items()
         },
     }
-    policy_payload = {"limits": getattr(stage, "limits", {})}
+    policy_payload = {
+        "limits": getattr(stage, "limits", {}),
+        "capabilities": getattr(stage, "capabilities", ()),
+        "access_scope": getattr(stage, "access_scope", ()),
+        "provider": getattr(stage, "provider", "local"),
+        "model": getattr(stage, "model", "unspecified"),
+        "reasoning_controls": getattr(stage, "reasoning_controls", {}),
+    }
     return (
         hashlib.sha256(json.dumps(semantic_payload, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")).hexdigest(),
         hashlib.sha256(json.dumps(policy_payload, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")).hexdigest(),
@@ -492,8 +516,11 @@ async def run_recipe_async(
             cache_entry = None
         if getattr(stage, "stage_id", "") in set(context.get("invalidated_stage_ids", ())):
             receipt = None
+        fallback_on_stale_reuse = context.get("fallback_on_stale_reuse")
+        if receipt is not None and fallback_on_stale_reuse == "stop" and canonical_output is None:
+            raise StaleReuseError(f"stale stage receipt for {getattr(stage, 'stage_id', 'stage')}: canonical output is unavailable")
         if receipt is not None and canonical_output is not None and hasattr(receipt, "reusable_for"):
-            if receipt.reusable_for(
+            receipt_matches = receipt.reusable_for(
                 input_fingerprint=cache_key,
                 execution_policy_fingerprint=execution_policy_fingerprint,
                 skill_hashes=tuple(context.get("skill_hashes_by_stage", {}).get(getattr(stage, "stage_id", ""), ())),
@@ -504,7 +531,10 @@ async def run_recipe_async(
                 receipt.result_references,
                 receipt.result_hashes,
                 context.get("canonical_records"),
-            ):
+            )
+            if not receipt_matches and fallback_on_stale_reuse == "stop":
+                raise StaleReuseError(f"stale stage receipt for {getattr(stage, 'stage_id', 'stage')}: fingerprints or provenance do not match")
+            if receipt_matches:
                 cache_entry = {"status": "committed", "provenance_complete": True, "result_references": receipt.result_references, "result_hashes": receipt.result_hashes, "output": canonical_output}
         if cache_entry is not None:
             cache_valid, cached_output = _committed_cache_output(cache_entry, context.get("canonical_records"))

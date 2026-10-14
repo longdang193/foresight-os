@@ -26,3 +26,23 @@ def test_human_override_is_applied_exactly_or_reported():
     updated = apply_execution_overrides(result.recipe, {"max_agent_steps": 7})
     assert updated.accepted
     assert updated.recipe.max_agent_steps == 7
+
+
+def test_stage_control_overrides_are_retained_for_runtime_enforcement():
+    result = build_execution_recipe(create_work_brief("Question"))
+
+    updated = apply_execution_overrides(result.recipe, {"stages": [{
+        "stage_id": "stage-1",
+        "capabilities": ["missing-capability"],
+        "access_scope": ["private:data"],
+        "model": "approved-model",
+        "reasoning_controls": {"temperature": 0.1},
+        "provider": "local",
+    }]})
+
+    assert updated.accepted
+    stage = updated.recipe.stages[0]
+    assert stage.capabilities == ("missing-capability",)
+    assert stage.access_scope == ("private:data",)
+    assert stage.model == "approved-model"
+    assert stage.reasoning_controls == {"temperature": 0.1}

@@ -8,6 +8,8 @@ from foresight_os.artifacts.approval import build_approval_package, render_appro
 from foresight_os.controller.proposal import apply_execution_overrides, build_execution_recipe
 from foresight_os.domain.approval import AdaptationEnvelope
 from foresight_os.persistence.analysis_store import AnalysisStore
+from foresight_os.persistence.analysis_store import StageReceipt
+from foresight_os.persistence.ids import canonical_json_hash
 from foresight_os.wayfinding import create_work_brief
 from foresight_os.cli import main
 from foresight_os.domain.validation import validate_work_brief
@@ -59,6 +61,28 @@ def test_propose_rerenders_persisted_recipe_without_dropping_revision(tmp_path, 
 
     assert package["projection"]["recipe"]["max_total_agent_calls"] == 4
     assert store.load_recipe().max_total_agent_calls == 4
+
+
+def test_propose_does_not_call_a_receipt_matching_without_current_fingerprints(tmp_path, capsys):
+    work_dir = tmp_path / "reuse-proposal"
+    assert main(["propose", "--work-dir", str(work_dir), "--question", "Question", "--investigation-id", "reuse", "--format", "json"]) == 0
+    capsys.readouterr()
+    store = AnalysisStore(work_dir)
+    store.save_stage_receipt(StageReceipt(
+        "stage-1",
+        "old-input",
+        result_references=("claim-1",),
+        result_hashes=(canonical_json_hash({"value": "old"}),),
+        status="committed",
+        committed=True,
+        provenance_complete=True,
+    ))
+
+    assert main(["propose", "--work-dir", str(work_dir), "--format", "json"]) == 0
+    package = json.loads(capsys.readouterr().out)
+
+    assert package["reuse_candidates"][0]["status"] == "fresh"
+    assert "runtime fingerprint comparison" in package["reuse_candidates"][0]["reason"]
 
 
 def test_work_brief_template_validates_against_canonical_contract():
