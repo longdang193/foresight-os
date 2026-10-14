@@ -14,6 +14,8 @@ from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, S
 from foresight_os.runtime.executors import AnalystExecutor, ReviewerExecutor
 from foresight_os.controller.budgets import BudgetState
 from foresight_os.domain.validation import ValidationError
+from foresight_os.domain.challenge import derive_finding_views
+from foresight_os.domain.models import RevisionStatus
 from foresight_os.runtime.metrics import (
     BudgetExceededError,
     CleanupError,
@@ -33,19 +35,7 @@ from foresight_os.runtime.page_retrieval import PageRetrievalCapability, bind_pa
 from foresight_os.runtime.local_toolbelt import bind_local_toolbelt
 from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
 from foresight_os.controller.skills import SkillRegistry
-
-
-@dataclass(frozen=True)
-class CanonicalStageResult:
-    result_references: tuple[str, ...]
-    result_hashes: tuple[str, ...]
-    output: object
-
-    def __post_init__(self) -> None:
-        if not self.result_references or len(self.result_references) != len(self.result_hashes):
-            raise ValueError("canonical stage results require matching non-empty references and hashes")
-        if len(self.result_references) == 1 and self.result_hashes[0] != _canonical_result_hash(self.output):
-            raise ValueError("canonical stage result hash does not match its output")
+from foresight_os.analysis.result_committer import ANALYSIS_STAGE_RESULT_CONTRACT, CanonicalStageResult, analysis_stage_result_schema
 
 
 CanonicalResultCommitter = Callable[
@@ -364,6 +354,7 @@ async def run_recipe_async(
 ) -> RunResult:
     started = time.perf_counter()
     metrics = RunMetrics(run_id or f"run-{uuid4().hex}", recipe.name.value, recipe.pattern)
+    metrics.runtime_status = "RUNNING"
     outputs: list[object] = []
     metrics.cleanup_complete = True
     context = dict(run_context or {})
@@ -380,6 +371,11 @@ async def run_recipe_async(
     context.setdefault("canonical_records", {})
     context.setdefault("canonical_outputs", {})
     context.setdefault("stage_receipts", {})
+    if isinstance(receipt_store, AnalysisStore) and not context["canonical_records"]:
+        try:
+            context["canonical_records"].update(receipt_store.load_analysis().canonical_records())
+        except FileNotFoundError:
+            pass
     changed_record_ids = tuple(str(item) for item in context.get("changed_record_ids", context.get("changed_ids", ())))
     relation_index = context.get("relation_index")
     if changed_record_ids and relation_index is not None:
@@ -484,6 +480,8 @@ async def run_recipe_async(
     def settle_failure(error: BaseException) -> None:
         metrics.record_failure(classify(error), error)
         metrics.settled = True
+        metrics.runtime_status = "PARTIAL" if (context.get("canonical_records") or outputs) else "FAILED"
+        _refresh_execution_status(context, metrics)
         try:
             setattr(error, "run_metrics", metrics)
             setattr(error, "metrics", metrics)
@@ -515,6 +513,9 @@ async def run_recipe_async(
             selected_skills_by_participant,
         )
         stage_context["stage_fingerprints"] = (semantic_fingerprint, execution_policy_fingerprint)
+        stage_context["result_contract"] = str(getattr(stage, "result_contract", ANALYSIS_STAGE_RESULT_CONTRACT))
+        stage_context["require_structured_output"] = bool(context.get("require_structured_output", False))
+        stage_context["structured_output_schema"] = analysis_stage_result_schema()
         cache_entry = context.get("stage_cache", {}).get(cache_key)
         receipt = context.get("stage_receipts", {}).get(getattr(stage, "stage_id", ""))
         canonical_output = context.get("canonical_outputs", {}).get(getattr(stage, "stage_id", ""))
@@ -646,7 +647,9 @@ async def run_recipe_async(
             return stage_outputs, current
         if not isinstance(canonical, CanonicalStageResult):
             raise ValidationError("canonical result committer must return CanonicalStageResult or None")
-        if len(canonical.result_references) == 1:
+        if canonical.canonical_records:
+            context["canonical_records"].update(canonical.canonical_records)
+        elif len(canonical.result_references) == 1:
             context["canonical_records"][canonical.result_references[0]] = canonical.output
         context["canonical_outputs"][getattr(stage, "stage_id", "")] = canonical.output
         committed_receipt = StageReceipt(
@@ -670,6 +673,51 @@ async def run_recipe_async(
         if isinstance(receipt_store, AnalysisStore):
             receipt_store.save_stage_receipt(committed_receipt)
         return stage_outputs, canonical.output
+
+    def _refresh_execution_status(run_context: dict[str, Any], run_metrics: RunMetrics) -> None:
+        committer_configured = run_context.get("canonical_result_committer") is not None
+        store = run_context.get("analysis_store") or run_context.get("stage_receipt_store")
+        state = None
+        if isinstance(store, AnalysisStore):
+            try:
+                state = store.load_analysis()
+            except FileNotFoundError:
+                state = None
+        if not committer_configured:
+            run_metrics.persistence_status = "NOT_STARTED"
+            run_metrics.analysis_status = "NOT_STARTED"
+            run_metrics.deliverable_status = {}
+            return
+        if state is None:
+            run_metrics.persistence_status = "FAILED" if run_metrics.failure_class else "NOT_STARTED"
+            run_metrics.analysis_status = "NOT_STARTED"
+            run_metrics.deliverable_status = {}
+            return
+        run_metrics.persistence_status = "PARTIAL" if run_metrics.failure_class else "PERSISTED"
+        if not state.canonical_records():
+            run_metrics.analysis_status = "NOT_STARTED"
+        elif state.revision_status == RevisionStatus.ACCEPTED:
+            views = derive_finding_views(state)
+            run_metrics.analysis_status = "ACCEPTED" if not views or all(view.accepted for view in views) else "PENDING_REVIEW"
+        else:
+            run_metrics.analysis_status = "PENDING_REVIEW"
+        try:
+            brief = store.load_brief()
+        except (FileNotFoundError, ValueError):
+            run_metrics.deliverable_status = {}
+            return
+        artifacts = tuple(state.artifacts)
+        statuses: dict[str, str] = {}
+        for requested in brief.desired_deliverables:
+            normalized = str(requested).strip().lower()
+            matched = any(
+                normalized == str(artifact.kind).strip().lower()
+                or normalized in str(artifact.path).strip().lower()
+                or str(artifact.kind).strip().lower() in normalized
+                for artifact in artifacts
+            )
+            statuses[str(requested)] = "PERSISTED" if matched else "NOT_STARTED"
+        run_metrics.deliverable_status = statuses
 
     primary_error: BaseException | None = None
     try:
@@ -707,6 +755,8 @@ async def run_recipe_async(
             outputs_by_stage[getattr(stage, "stage_id", f"stage-{len(outputs_by_stage) + 1}")] = current
             outputs.extend(stage_outputs)
         metrics.settled = True
+        metrics.runtime_status = "SETTLED"
+        _refresh_execution_status(context, metrics)
         return RunResult(metrics.run_id, tuple(outputs), metrics)
     except BaseException as error:
         primary_error = error

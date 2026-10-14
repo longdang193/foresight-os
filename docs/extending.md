@@ -28,6 +28,14 @@ constraints, read or hash their own `.agents/` source, create a second brief
 store, or make a generic `map.md` canonical. The controller resolves execution
 from the validated WorkBrief, and `AnalysisStore` remains the sole brief store.
 
+Add approved execution behavior to `.agents/skills/foresight-execution/`, not
+to the packaged participant registry. The procedure must use the shared
+execution gate, require a recipe-bound structured result contract and canonical
+result persistence before provider work, keep persisted results provisional
+until review and human acceptance, and report runtime, persistence, analysis,
+and deliverable statuses separately. Infrastructure repair may unblock work but
+must not be reported as completion of the approved analysis.
+
 ## Add a skill
 
 1. Create `src/foresight_os/skills/<skill-id>/SKILL.md` with a focused method,

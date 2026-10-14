@@ -33,6 +33,7 @@
           "participants": { "type": "array" },
           "input_type": { "type": "string" },
           "output_type": { "type": "string" },
+          "result_contract": { "type": "string", "minLength": 1 },
           "limits": { "type": "object", "additionalProperties": { "type": ["integer", "string"] } },
           "skill_ids": { "type": "array", "items": { "type": "string" } },
           "objective": { "type": "string" },

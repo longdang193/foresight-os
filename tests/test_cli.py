@@ -59,3 +59,62 @@ def test_execute_reports_unavailable_capability_without_traceback(tmp_path: Path
     output = capsys.readouterr().out
 
     assert output.strip() == '{"status": "BLOCKED_EXTERNAL", "error": "required capability is unavailable"}'
+
+
+def test_execute_reports_distinct_statuses_without_inferring_completion(tmp_path: Path, capsys, monkeypatch):
+    class Metrics:
+        settled = True
+        runtime_status = "SETTLED"
+        persistence_status = "PERSISTED"
+        analysis_status = "PENDING_REVIEW"
+        deliverable_status = {"executive report": "NOT_STARTED"}
+
+    class Result:
+        run_id = "run-1"
+        outputs = ("output",)
+        metrics = Metrics()
+
+    async def completed(*args, **kwargs):
+        return Result()
+
+    monkeypatch.setattr("foresight_os.cli.build_configured_client", lambda *args: object())
+    monkeypatch.setattr("foresight_os.cli.execute_approved_investigation", completed)
+
+    assert main(["execute", "--work-dir", str(tmp_path), "--prompt", "run"]) == 0
+    output = capsys.readouterr().out
+    assert '"runtime_status": "SETTLED"' in output
+    assert '"analysis_status": "PENDING_REVIEW"' in output
+    assert '"deliverable_status": {"executive report": "NOT_STARTED"}' in output
+    assert '"complete"' not in output
+
+
+def test_execute_builds_configured_client_once(tmp_path: Path, capsys, monkeypatch):
+    calls = 0
+
+    class Metrics:
+        settled = True
+        runtime_status = "SETTLED"
+        persistence_status = "NOT_STARTED"
+        analysis_status = "NOT_STARTED"
+        deliverable_status = {}
+
+    class Result:
+        run_id = "run-once"
+        outputs = ()
+        metrics = Metrics()
+
+    def build_client(*args):
+        nonlocal calls
+        calls += 1
+        return object()
+
+    async def completed(*args, **kwargs):
+        return Result()
+
+    monkeypatch.setattr("foresight_os.cli.build_configured_client", build_client)
+    monkeypatch.setattr("foresight_os.cli.execute_approved_investigation", completed)
+
+    assert main(["execute", "--work-dir", str(tmp_path), "--prompt", "run"]) == 0
+    capsys.readouterr()
+
+    assert calls == 1

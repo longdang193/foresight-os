@@ -79,6 +79,8 @@ class AgentFactory:
             kwargs.setdefault("default_options", {}).update(config.reasoning_controls)
         if config.structured_output and isinstance(config.structured_output, dict):
             kwargs.setdefault("default_options", {})["response_format"] = config.structured_output
+        elif context.get("require_structured_output") and context.get("structured_output_schema"):
+            kwargs.setdefault("default_options", {})["response_format"] = context["structured_output_schema"]
         tools = context.get("tools_by_participant", {}).get(config.id)
         middleware = []
         if tools is None and required_capabilities and context.get("capability_resolver") is not None:

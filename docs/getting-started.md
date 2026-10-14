@@ -61,6 +61,11 @@ make an intentional recipe change. The local CLI is an explicit human
 boundary; it is not an authenticated identity provider and does not perform
 external writes.
 
+Approved execution is not analytical acceptance. A settled runtime can leave
+provisional persisted results pending review, and each requested deliverable is
+reported separately. Do not treat `settled=true` or an output count as proof
+that the investigation is analytically complete.
+
 ## Run the local analysis
 
 Use the repository fixture and an ignored work directory:
