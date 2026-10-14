@@ -85,3 +85,26 @@ def test_provider_case_classification_keeps_code_failures_distinct_from_transpor
 
     assert blocked[0]["status"] == "BLOCKED_EXTERNAL"
     assert failed[0]["status"] == "FAILED"
+
+
+def test_sanitize_error_redacts_bearer_and_json_credentials():
+    import evaluation.probes.run_skill_exercise_evaluation as evaluation_probe
+
+    error = RuntimeError('Authorization: Bearer abc.def; {"apiKey":"secret-value"}')
+
+    sanitized = evaluation_probe._sanitize_error(error)
+
+    assert "abc.def" not in sanitized
+    assert "secret-value" not in sanitized
+    assert "[REDACTED]" in sanitized
+
+
+def test_evaluator_cli_fails_for_failed_report(monkeypatch, tmp_path):
+    import evaluation.probes.run_skill_exercise_evaluation as evaluation_probe
+
+    monkeypatch.setattr(evaluation_probe, "run_provider", lambda *args, **kwargs: {"status": "FAILED"})
+
+    assert evaluation_probe.main(["--mode", "provider", "--output-root", str(tmp_path)]) == 1
+
+    monkeypatch.setattr(evaluation_probe, "run_provider", lambda *args, **kwargs: {"status": "BLOCKED_EXTERNAL"})
+    assert evaluation_probe.main(["--mode", "provider", "--output-root", str(tmp_path)]) == 0

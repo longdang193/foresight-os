@@ -29,10 +29,12 @@ FIXTURE_KEYS = {
 
 
 def _sanitize_error(error: BaseException) -> str:
+    message = str(error)
+    message = re.sub(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [REDACTED]", message)
     message = re.sub(
-        r"(?i)(api[_-]?key|token|password|secret)(\s*[=:]\s*)[^\s,;]+",
-        r"\1\2[REDACTED]",
-        str(error),
+        r"(?i)([\"']?(?:api[_-]?key|token|password|secret|authorization)[\"']?\s*[=:]\s*)(\"[^\"]*\"|'[^']*'|[^\s,;}\]]+)",
+        r"\1[REDACTED]",
+        message,
     )
     return message[:300]
 
@@ -344,7 +346,7 @@ def main(argv: list[str] | None = None) -> int:
             args.extended_exercise_root,
         )
     print(json.dumps(report, indent=2, sort_keys=True))
-    return 0
+    return 1 if report.get("status") == "FAILED" else 0
 
 
 if __name__ == "__main__":

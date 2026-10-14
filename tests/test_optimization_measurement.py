@@ -29,6 +29,11 @@ def _receipt() -> dict:
     }
     return {
         "schema_version": 2,
+        "revision": {
+            "commit": "commit",
+            "repo_root": "repo",
+            "package_path": "repo/src/foresight_os/__init__.py",
+        },
         "accepted_finding_count": 2,
         "economics": economics,
         "stage_metrics": [
@@ -91,6 +96,10 @@ def test_comparator_rejects_missing_or_zero_denominator_without_raising():
 
     release = deepcopy(baseline)
     release["accepted_finding_count"] = 0
+    assert not compare(baseline, release)["accepted"]
+
+    release = deepcopy(baseline)
+    del release["revision"]
     assert not compare(baseline, release)["accepted"]
 
 

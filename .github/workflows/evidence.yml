@@ -31,6 +31,8 @@ jobs:
       - name: Run clean-wheel smoke
         run: python evaluation/probes/run_clean_wheel_smoke.py --output-root "$RUNNER_TEMP/foresight-clean-wheel"
       - name: Run release optimization measurement
+        env:
+          PYTHONPATH: src
         run: |
           python evaluation/probes/run_optimization_probe.py \
             --mode release \

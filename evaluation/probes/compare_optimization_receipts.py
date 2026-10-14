@@ -36,6 +36,7 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
     missing: list[str] = []
     required = (
         "schema_version",
+        "revision",
         "accepted_finding_count",
         "economics",
         "stage_metrics",
@@ -50,6 +51,10 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
     missing.extend(key for key in required if key not in receipt)
     if receipt.get("schema_version") != SCHEMA_VERSION:
         missing.append(f"schema_version={SCHEMA_VERSION}")
+    revision = receipt.get("revision", {})
+    for field in ("commit", "repo_root", "package_path"):
+        if not isinstance(revision.get(field), str) or not revision[field].strip():
+            missing.append(f"revision.{field}")
     accepted_count = receipt.get("accepted_finding_count")
     if not isinstance(accepted_count, int) or accepted_count <= 0:
         missing.append("accepted_finding_count>0")
