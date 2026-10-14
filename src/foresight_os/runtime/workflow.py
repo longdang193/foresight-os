@@ -519,11 +519,13 @@ async def run_recipe_async(
             cache_entry = None
         stage_id = getattr(stage, "stage_id", "")
         fresh_requested_stage = stage_id in fresh_requested
+        invalidated_stage = stage_id in set(context.get("invalidated_stage_ids", ()))
         auto_invalidated_stage = stage_id in set(context.get("auto_invalidated_stage_ids", ()))
         if auto_invalidated_stage and not fresh_requested_stage and receipt is not None and context.get("fallback_on_stale_reuse") == "stop":
             raise StaleReuseError(f"stale stage receipt for {stage_id}: changed evidence invalidated the receipt")
-        if stage_id in set(context.get("invalidated_stage_ids", ())) and not fresh_requested_stage:
+        if invalidated_stage:
             receipt = None
+            cache_entry = None
         fallback_on_stale_reuse = context.get("fallback_on_stale_reuse")
         if receipt is not None and fallback_on_stale_reuse == "stop" and canonical_output is None:
             raise StaleReuseError(f"stale stage receipt for {getattr(stage, 'stage_id', 'stage')}: canonical output is unavailable")

@@ -164,6 +164,65 @@ def test_run_fresh_reassesses_selected_stage_and_descendants():
     assert result.metrics.reassessed_stages == 2
 
 
+def test_run_fresh_does_not_reuse_matching_stage_receipt(tmp_path):
+    base = make_recipe(RecipeName.DIRECT)
+    stage = RecipeStage("first", ExecutionPattern.DIRECT, ({"id": "first"},), "prompt", "typed-result", {})
+    recipe = ExecutionRecipe(
+        base.name, base.pattern, base.roles, base.max_agent_steps, base.max_correction_rounds,
+        base.max_total_agent_calls, base.completion, base.escalation, base.partial_result,
+        stages=(stage,),
+    )
+    store = AnalysisStore(tmp_path / "fresh")
+
+    def commit_result(_stage, output, _context):
+        return CanonicalStageResult(("claim-1",), (_canonical_result_hash(output),), output)
+
+    first = asyncio.run(run_recipe_async(recipe, "start", run_context={
+        "analysis_store": store,
+        "canonical_result_committer": commit_result,
+    }))
+
+    result = asyncio.run(run_recipe_async(recipe, "start", run_context={
+        "analysis_store": store,
+        "canonical_records": {"claim-1": first.outputs[-1]},
+        "run_fresh_stages": ("first",),
+    }))
+
+    assert result.metrics.cache_hits == 0
+    assert result.metrics.reassessed_stages == 1
+
+
+def test_run_fresh_ignores_stale_stop_fallback_for_selected_stage():
+    base = make_recipe(RecipeName.DIRECT)
+    stage = RecipeStage("first", ExecutionPattern.DIRECT, ({"id": "first"},), "prompt", "typed-result", {})
+    recipe = ExecutionRecipe(
+        base.name, base.pattern, base.roles, base.max_agent_steps, base.max_correction_rounds,
+        base.max_total_agent_calls, base.completion, base.escalation, base.partial_result,
+        stages=(stage,),
+    )
+    output = {"stage": "old"}
+    receipt = StageReceipt(
+        "first",
+        "stale-input",
+        result_references=("claim-1",),
+        result_hashes=(_canonical_result_hash(output),),
+        status="committed",
+        committed=True,
+        provenance_complete=True,
+    )
+
+    result = asyncio.run(run_recipe_async(recipe, "start", run_context={
+        "stage_receipts": {"first": receipt},
+        "canonical_outputs": {"first": output},
+        "canonical_records": {"claim-1": output},
+        "run_fresh_stages": ("first",),
+        "fallback_on_stale_reuse": "stop",
+    }))
+
+    assert result.metrics.cache_hits == 0
+    assert result.metrics.reassessed_stages == 1
+
+
 def test_approved_stop_fallback_blocks_stale_receipt_before_provider_work():
     base = make_recipe(RecipeName.DIRECT)
     stage = RecipeStage("first", ExecutionPattern.DIRECT, ({"id": "first"},), "prompt", "typed-result", {})

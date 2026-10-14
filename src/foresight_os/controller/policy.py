@@ -145,6 +145,15 @@ def _recipe_for_patterns(
     required_capabilities = tuple(str(item) for item in getattr(intent, "required_capabilities", ()))
     required_participants = tuple(str(item) for item in getattr(intent, "required_participants", ()) if str(item))
 
+    def stage_requirements(stage: object) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        stage_intent = getattr(stage, "execution_intent", None)
+        stage_capabilities = tuple(str(item) for item in getattr(stage_intent, "required_capabilities", ()))
+        stage_participants = tuple(str(item) for item in getattr(stage_intent, "required_participants", ()) if str(item))
+        return (
+            tuple(dict.fromkeys((*required_capabilities, *stage_capabilities))),
+            tuple(dict.fromkeys((*required_participants, *stage_participants))),
+        )
+
     def stage_capabilities(stage: object) -> tuple[tuple[str, ...], tuple[str, ...]]:
         capabilities: list[str] = []
         unresolved: list[str] = []
@@ -159,7 +168,8 @@ def _recipe_for_patterns(
                 capabilities.extend(matches)
             else:
                 unresolved.append(f"{kind or ResearchNeedKind.UNRESOLVED_CAPABILITY.value}:{query}")
-        return tuple(dict.fromkeys((*capabilities, *required_capabilities))), tuple(unresolved)
+        required_stage_capabilities, _ = stage_requirements(stage)
+        return tuple(dict.fromkeys((*capabilities, *required_stage_capabilities))), tuple(unresolved)
 
     stage_count = len(work_stages) or len(patterns)
     if work_stages and source == "explicit_override" and len(patterns) not in (1, len(work_stages)):
@@ -178,9 +188,10 @@ def _recipe_for_patterns(
         return capabilities
 
     def stage_roles(stage: object, pattern: ExecutionPattern, is_last: bool) -> list[dict[str, object]]:
+        _, required_stage_participants = stage_requirements(stage)
         requested_ids = tuple(dict.fromkeys((
             *(str(item) for item in getattr(stage, "participants", ()) if str(item)),
-            *required_participants,
+            *required_stage_participants,
         )))
         if requested_ids:
             roles = [
@@ -372,6 +383,15 @@ def select_recipe(brief: WorkBrief, task_shape: TaskShape | None = None, overrid
             (ExecutionPattern.SEQUENTIAL,),
             "work_brief",
             "desired deliverables require bounded analysis and review",
+            brief.stages,
+            True,
+            brief,
+        )
+    if intent is not None and (required_capabilities or required_participants):
+        return _recipe_for_patterns(
+            (ExecutionPattern.SEQUENTIAL,),
+            "work_brief",
+            "mandatory execution intent requires bounded analysis and review",
             brief.stages,
             True,
             brief,

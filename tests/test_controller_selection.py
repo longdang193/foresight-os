@@ -122,3 +122,52 @@ def test_required_participants_and_capabilities_are_carried_into_recipe():
 
     assert "nonexistent" in recipe.stages[0].capabilities
     assert any(item["id"] == "named-specialist" for item in recipe.stages[0].participants)
+
+
+def test_stage_execution_intent_is_carried_into_recipe():
+    brief = WorkBrief(
+        "stage-requirements",
+        "review",
+        [],
+        ["answer"],
+        [],
+        [],
+        "assess",
+        "execute",
+        stages=[WorkStage(
+            "first",
+            "first",
+            execution_intent=ExecutionIntent(
+                required_participants=("stage-specialist",),
+                required_capabilities=("stage-capability",),
+            ),
+        )],
+    )
+
+    recipe = select_recipe(brief)
+
+    assert "stage-capability" in recipe.stages[0].capabilities
+    assert any(item["id"] == "stage-specialist" for item in recipe.stages[0].participants)
+
+
+def test_brief_requirements_without_stages_or_deliverables_are_not_dropped():
+    brief = WorkBrief(
+        "brief-requirements",
+        "review",
+        [],
+        [],
+        [],
+        [],
+        "assess",
+        "execute",
+        execution_intent=ExecutionIntent(
+            required_participants=("brief-specialist",),
+            required_capabilities=("brief-capability",),
+        ),
+    )
+
+    recipe = select_recipe(brief)
+
+    assert recipe.stages
+    assert "brief-capability" in recipe.stages[0].capabilities
+    assert any(item["id"] == "brief-specialist" for item in recipe.stages[0].participants)
