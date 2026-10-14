@@ -172,7 +172,7 @@ contracts and evidence are still verified independently.
 | 3. Group Chat round/budget contract | completed | unresolved | 1 | native/fallback declared-versus-observed round proof | `work/closure-identity-performance/task-3/` |
 | 4. Evaluator/provider boundary repair | completed | unresolved | 1 | structural pass plus classified provider outcomes | `work/closure-identity-performance/task-4/` |
 | 5. Process-scoped registry reuse | completed | unresolved | 1, 4 | shared registry identity and unchanged hash validation | `work/closure-identity-performance/task-5/` |
-| 6. Frozen p95 comparison | completed | unresolved | 2–5 | repeat stability and both ordinal comparisons pass in repeat-4 | `work/closure-identity-performance/task-6/repeat-4/` |
+| 6. Frozen p95 comparison | completed | unresolved | 2–5 | repeat stability and both ordinal comparisons pass in repeat-5 with revision provenance | `work/closure-identity-performance/task-6/repeat-5/` |
 | 7. CI/evidence/status hygiene | completed | unresolved | 4, 6 | deterministic gate remains green; compact evidence | `work/closure-identity-performance/task-7/` |
 | 8. Final verification | completed | unresolved | 1–7 | fresh full proof and acceptance disposition | `work/closure-identity-performance/final/` |
 
@@ -183,10 +183,11 @@ contracts and evidence are still verified independently.
 - The original Task 6 receipts remain preserved with their stability failure:
   baseline drift `61.458%`, candidate drift `32.162%`, and ordinal run-1
   `CHALLENGE_RECOMMENDATION` regression `46.722%`.
-- A fresh `repeat-4` protocol corrected the baseline receipt schema and used the
-  same relative fixture identity. Stability passed and both ordinal comparisons
-  passed: Group Chat p95 deltas `0.006%` and `2.023%`, overall p95 deltas
-  `0.124%` and `-2.331%`, with the unchanged `20%` gate.
+- A fresh `repeat-5` protocol corrected the baseline receipt schema, required
+  revision provenance, and used the same relative fixture identity. Stability
+  passed and both ordinal comparisons passed: Group Chat p95 deltas `-0.399%`
+  and `2.279%`, overall p95 deltas `11.563%` and `7.056%`, with the unchanged
+  `20%` gate.
 - Tasks 7 and 8 completed with fresh local verification and durable evidence.
   No threshold relaxation, provider authentication, Canva mutation, push, PR,
   or merge is claimed by this plan.
