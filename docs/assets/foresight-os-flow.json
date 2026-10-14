@@ -1,0 +1,206 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "ForesightOS Strategic Foresight Workflow",
+    "subtitle": "A reviewable decision path with targeted reassessment when evidence changes",
+    "animation": "none",
+    "visual_preset": "signal-flow",
+    "quality_profile": "showcase",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "lanes": [
+    {
+      "id": "journey",
+      "label": "ForesightOS decision path"
+    },
+    {
+      "id": "reassessment",
+      "label": "When evidence changes",
+      "variant": "exception"
+    }
+  ],
+  "mainPath": [
+    "question",
+    "frame",
+    "evidence_analysis",
+    "challenge",
+    "scenarios",
+    "recommendation",
+    "artifact"
+  ],
+  "nodes": [
+    {
+      "id": "question",
+      "lane": "journey",
+      "col": 0,
+      "type": "external",
+      "label": "Strategic Question",
+      "sublabel": "decision to make",
+      "width": 134
+    },
+    {
+      "id": "frame",
+      "lane": "journey",
+      "col": 1,
+      "type": "external",
+      "label": "Frame the Decision",
+      "sublabel": "horizon · scope",
+      "width": 134
+    },
+    {
+      "id": "evidence_analysis",
+      "lane": "journey",
+      "col": 2,
+      "type": "backend",
+      "label": "Evidence & Analysis",
+      "sublabel": "sources · XLSX · checks",
+      "tag": "traceable",
+      "width": 134
+    },
+    {
+      "id": "challenge",
+      "lane": "journey",
+      "col": 3,
+      "type": "security",
+      "label": "Challenge",
+      "sublabel": "assumptions · dissent",
+      "tag": "counterevidence",
+      "width": 134
+    },
+    {
+      "id": "scenarios",
+      "lane": "journey",
+      "col": 4,
+      "type": "backend",
+      "label": "Scenarios & Options",
+      "sublabel": "implications · futures",
+      "width": 134
+    },
+    {
+      "id": "recommendation",
+      "lane": "journey",
+      "col": 5,
+      "type": "cloud",
+      "label": "Recommendation",
+      "sublabel": "action · triggers",
+      "tag": "reviewable",
+      "width": 134
+    },
+    {
+      "id": "artifact",
+      "lane": "journey",
+      "col": 5,
+      "type": "external",
+      "label": "Report / Presentation",
+      "sublabel": "evidence-linked artifact",
+      "yOffset": 78,
+      "width": 145
+    },
+    {
+      "id": "new_evidence",
+      "lane": "reassessment",
+      "col": 2,
+      "type": "messagebus",
+      "label": "New Evidence",
+      "sublabel": "changed source signal",
+      "width": 134
+    },
+    {
+      "id": "affected_findings",
+      "lane": "reassessment",
+      "col": 3,
+      "type": "security",
+      "label": "Affected Findings",
+      "sublabel": "target invalidated work",
+      "width": 134
+    },
+    {
+      "id": "reassess",
+      "lane": "reassessment",
+      "col": 4,
+      "type": "messagebus",
+      "label": "Reassess Affected Work",
+      "sublabel": "selective rerun",
+      "width": 150
+    }
+  ],
+  "edges": [
+    {
+      "id": "question-frame",
+      "from": "question",
+      "to": "frame",
+      "label": "shape",
+      "variant": "emphasis"
+    },
+    {
+      "id": "frame-evidence-analysis",
+      "from": "frame",
+      "to": "evidence_analysis",
+      "label": "source"
+    },
+    {
+      "id": "evidence-analysis-challenge",
+      "from": "evidence_analysis",
+      "to": "challenge",
+      "label": "challenge",
+      "variant": "security"
+    },
+    {
+      "id": "challenge-scenarios",
+      "from": "challenge",
+      "to": "scenarios",
+      "label": "alternatives"
+    },
+    {
+      "id": "scenarios-recommendation",
+      "from": "scenarios",
+      "to": "recommendation",
+      "label": "decide",
+      "variant": "emphasis"
+    },
+    {
+      "id": "recommendation-artifact",
+      "from": "recommendation",
+      "to": "artifact",
+      "label": "communicate",
+      "variant": "emphasis"
+    },
+    {
+      "id": "new-evidence-affected-findings",
+      "from": "new_evidence",
+      "to": "affected_findings",
+      "label": "identify",
+      "variant": "dashed",
+      "role": "branch"
+    },
+    {
+      "id": "affected-findings-reassess",
+      "from": "affected_findings",
+      "to": "reassess",
+      "label": "target",
+      "variant": "dashed",
+      "role": "branch"
+    },
+    {
+      "id": "reassess-evidence-analysis",
+      "from": "reassess",
+      "to": "evidence_analysis",
+      "label": "refresh evidence",
+      "variant": "dashed",
+      "role": "return"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "slate",
+      "title": "Powered by",
+      "items": [
+        "Analytical skills · temporary specialists · deterministic tools",
+        "Adaptive coordination: Direct · Sequential · Concurrent · Handoff · Group Chat"
+      ]
+    }
+  ]
+}
