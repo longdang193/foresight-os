@@ -61,6 +61,19 @@ The CLI also supports `inspect-powerbi` for metadata-only project inspection,
 a changed decision scope. Use each command’s `--help` output for the current
 required arguments.
 
+For the restart-safe human-control flow, first render and inspect a proposal,
+then approve its displayed fingerprint and execute through the shared gate:
+
+```text
+python -m foresight_os.cli propose --work-dir work/proposal --question "What decision should be made?" --format markdown --detailed
+python -m foresight_os.cli approve --work-dir work/proposal --fingerprint <displayed-fingerprint>
+python -m foresight_os.cli execute --work-dir work/proposal --prompt "Answer the approved question"
+```
+
+The exact reviewed recipe is stored as `execution-recipe.json`; the durable
+authorization is stored as `execution-approval.json`. A changed recipe requires
+fresh review and approval.
+
 To continue after changed evidence:
 
 ```text

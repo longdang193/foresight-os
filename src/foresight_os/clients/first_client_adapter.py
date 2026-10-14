@@ -1,9 +1,11 @@
 from pathlib import Path
+import asyncio
 
 from foresight_os.artifacts.report import write_report
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.persistence.invalidation import invalidate_dependencies
 from foresight_os.persistence.recovery import continue_investigation
+from foresight_os.runtime.execution_gate import execute_approved_investigation
 
 
 class LocalClient:
@@ -28,3 +30,6 @@ class LocalClient:
         path = work_dir / "artifacts" / "executive-report.md"
         write_report(path, state)
         return path
+
+    def execute(self, work_dir: Path, prompt: str, client=None, run_id: str | None = None):
+        return asyncio.run(execute_approved_investigation(work_dir, prompt, client, run_id))

@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foresight-os.local/schemas/execution-recipe.schema.json",
+  "title": "Foresight OS Execution Recipe",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "pattern", "roles", "max_agent_steps", "max_correction_rounds", "max_total_agent_calls", "completion", "escalation", "partial_result", "metadata", "purpose", "stages", "rationale", "review_policy", "reuse_policy", "adaptation_policy"],
+  "properties": {
+    "name": { "type": "string" },
+    "pattern": { "type": "string", "minLength": 1 },
+    "roles": { "type": "array", "items": { "type": "object" } },
+    "max_agent_steps": { "type": "integer", "minimum": 0 },
+    "max_correction_rounds": { "type": "integer", "minimum": 0 },
+    "max_total_agent_calls": { "type": "integer", "minimum": 0 },
+    "completion": { "type": "string" },
+    "escalation": { "type": "string" },
+    "partial_result": { "type": "string" },
+    "metadata": { "type": "object", "additionalProperties": { "type": "string" } },
+    "purpose": { "type": "string" },
+    "rationale": { "type": "string" },
+    "review_policy": { "type": "string" },
+    "reuse_policy": { "type": "string" },
+    "adaptation_policy": { "type": "array", "items": { "type": "string" } },
+    "stages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["stage_id", "pattern", "participants", "input_type", "output_type", "limits", "skill_ids", "objective", "dependencies", "expected_result", "research_needs", "decision_question", "horizon", "relevant_constraints", "rationale", "capabilities", "access_scope", "participant_responsibilities", "provider", "model", "reasoning_controls", "review_checks", "completion_rule", "escalation_rule", "partial_result_rule", "reuse_policy", "adaptation_policy"],
+        "properties": {
+          "stage_id": { "type": "string", "minLength": 1 },
+          "pattern": { "type": "string", "enum": ["direct", "sequential", "concurrent", "handoff", "group_chat"] },
+          "participants": { "type": "array" },
+          "input_type": { "type": "string" },
+          "output_type": { "type": "string" },
+          "limits": { "type": "object", "additionalProperties": { "type": ["integer", "string"] } },
+          "skill_ids": { "type": "array", "items": { "type": "string" } },
+          "objective": { "type": "string" },
+          "dependencies": { "type": "array", "items": { "type": "string" } },
+          "expected_result": { "type": "string" },
+          "research_needs": { "type": "array" },
+          "decision_question": { "type": "string" },
+          "horizon": { "type": "string" },
+          "relevant_constraints": { "type": "array", "items": { "type": "string" } },
+          "rationale": { "type": "string" },
+          "capabilities": { "type": "array", "items": { "type": "string" } },
+          "access_scope": { "type": "array", "items": { "type": "string" } },
+          "participant_responsibilities": { "type": "array", "items": { "type": "object" } },
+          "provider": { "type": "string" },
+          "model": { "type": "string" },
+          "reasoning_controls": { "type": "object" },
+          "review_checks": { "type": "array", "items": { "type": "string" } },
+          "completion_rule": { "type": "string" },
+          "escalation_rule": { "type": "string" },
+          "partial_result_rule": { "type": "string" },
+          "reuse_policy": { "type": "string" },
+          "adaptation_policy": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  }
+}

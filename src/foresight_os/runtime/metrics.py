@@ -20,6 +20,10 @@ class BudgetExceededError(RuntimeError):
     """Raised before dispatch when a declared run limit would be exceeded."""
 
 
+class RunCanceledError(RuntimeError):
+    """Raised when run control cancels a run before a new stage starts."""
+
+
 @dataclass(frozen=True)
 class ConcurrentAggregate:
     results: tuple[object, ...]

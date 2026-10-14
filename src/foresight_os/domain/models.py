@@ -191,6 +191,31 @@ class WorkStage:
     skill_ids: list[str] = field(default_factory=list)
     execution_pattern_override: str | list[str] | None = None
     limits: dict[str, int | str] = field(default_factory=dict)
+    execution_intent: "ExecutionIntent | None" = None
+
+
+@dataclass(frozen=True)
+class ExecutionIntent:
+    required_patterns: tuple[str, ...] = ()
+    preferred_patterns: tuple[str, ...] = ()
+    required_participants: tuple[str, ...] = ()
+    preferred_participants: tuple[str, ...] = ()
+    required_capabilities: tuple[str, ...] = ()
+    preferred_capabilities: tuple[str, ...] = ()
+    preferred_reasoning_controls: dict[str, str | int | float | bool] = field(default_factory=dict)
+    source: str = "user"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "required_patterns": list(self.required_patterns),
+            "preferred_patterns": list(self.preferred_patterns),
+            "required_participants": list(self.required_participants),
+            "preferred_participants": list(self.preferred_participants),
+            "required_capabilities": list(self.required_capabilities),
+            "preferred_capabilities": list(self.preferred_capabilities),
+            "preferred_reasoning_controls": dict(self.preferred_reasoning_controls),
+            "source": self.source,
+        }
 
 
 @dataclass(frozen=True)
@@ -207,6 +232,28 @@ class WorkBrief:
     stages: list[WorkStage] = field(default_factory=list)
     horizon: str = "unspecified"
     consequence_level: str = "standard"
+    user_preferences: dict[str, Any] = field(default_factory=dict)
+    execution_intent: ExecutionIntent | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        value = asdict(self)
+        value.pop("execution_pattern_override", None)
+        if self.execution_intent is None:
+            if self.execution_pattern_override is None:
+                value.pop("execution_intent", None)
+            else:
+                patterns = (self.execution_pattern_override,) if isinstance(self.execution_pattern_override, str) else tuple(self.execution_pattern_override)
+                value["execution_intent"] = ExecutionIntent(required_patterns=tuple(str(item) for item in patterns)).to_dict()
+        else:
+            value["execution_intent"] = self.execution_intent.to_dict()
+        for stage_value, stage in zip(value.get("stages", ()), self.stages):
+            stage_value.pop("execution_pattern_override", None)
+            if stage.execution_intent is None:
+                if stage.execution_pattern_override is None:
+                    stage_value.pop("execution_intent", None)
+                else:
+                    patterns = (stage.execution_pattern_override,) if isinstance(stage.execution_pattern_override, str) else tuple(stage.execution_pattern_override)
+                    stage_value["execution_intent"] = ExecutionIntent(required_patterns=tuple(str(item) for item in patterns)).to_dict()
+            else:
+                stage_value["execution_intent"] = stage.execution_intent.to_dict()
+        return value

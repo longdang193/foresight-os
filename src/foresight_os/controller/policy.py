@@ -96,6 +96,15 @@ def _patterns_from_override(override) -> tuple[ExecutionPattern, ...]:
     return selected
 
 
+def _stage_pattern_override(stage: object):
+    legacy_override = getattr(stage, "execution_pattern_override", None)
+    if legacy_override is not None:
+        return legacy_override
+    intent = getattr(stage, "execution_intent", None)
+    required_patterns = getattr(intent, "required_patterns", ())
+    return required_patterns or None
+
+
 def _recipe_for_patterns(
     patterns: tuple[ExecutionPattern, ...],
     source: str,
@@ -132,6 +141,18 @@ def _recipe_for_patterns(
         ResearchNeedKind.VALIDATION.value: ("domain_validation",),
         ResearchNeedKind.ARTIFACT_OUTPUT.value: ("artifact_generation",),
     }
+    intent = getattr(brief, "execution_intent", None)
+    required_capabilities = tuple(str(item) for item in getattr(intent, "required_capabilities", ()))
+    required_participants = tuple(str(item) for item in getattr(intent, "required_participants", ()) if str(item))
+
+    def stage_requirements(stage: object) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        stage_intent = getattr(stage, "execution_intent", None)
+        stage_capabilities = tuple(str(item) for item in getattr(stage_intent, "required_capabilities", ()))
+        stage_participants = tuple(str(item) for item in getattr(stage_intent, "required_participants", ()) if str(item))
+        return (
+            tuple(dict.fromkeys((*required_capabilities, *stage_capabilities))),
+            tuple(dict.fromkeys((*required_participants, *stage_participants))),
+        )
 
     def stage_capabilities(stage: object) -> tuple[tuple[str, ...], tuple[str, ...]]:
         capabilities: list[str] = []
@@ -147,24 +168,31 @@ def _recipe_for_patterns(
                 capabilities.extend(matches)
             else:
                 unresolved.append(f"{kind or ResearchNeedKind.UNRESOLVED_CAPABILITY.value}:{query}")
-        return tuple(dict.fromkeys(capabilities)), tuple(unresolved)
+        required_stage_capabilities, _ = stage_requirements(stage)
+        return tuple(dict.fromkeys((*capabilities, *required_stage_capabilities))), tuple(unresolved)
 
     stage_count = len(work_stages) or len(patterns)
     if work_stages and source == "explicit_override" and len(patterns) not in (1, len(work_stages)):
         raise ValueError("pattern list must contain one pattern or exactly one pattern per WorkStage")
-    stage_patterns = [
-        _patterns_from_override(getattr(work_stages[index - 1], "execution_pattern_override"))[0]
-        if index <= len(work_stages) and getattr(work_stages[index - 1], "execution_pattern_override", None) is not None
-        else (patterns[index - 1] if index <= len(patterns) else patterns[-1])
-        for index in range(1, stage_count + 1)
-    ]
+    stage_patterns = []
+    for index in range(1, stage_count + 1):
+        stage_override = _stage_pattern_override(work_stages[index - 1]) if index <= len(work_stages) else None
+        stage_patterns.append(
+            _patterns_from_override(stage_override)[0]
+            if stage_override is not None
+            else (patterns[index - 1] if index <= len(patterns) else patterns[-1])
+        )
 
     def review_capabilities(stage: object) -> tuple[str, ...]:
         capabilities, _ = stage_capabilities(stage)
         return capabilities
 
     def stage_roles(stage: object, pattern: ExecutionPattern, is_last: bool) -> list[dict[str, object]]:
-        requested_ids = tuple(str(item) for item in getattr(stage, "participants", ()) if str(item))
+        _, required_stage_participants = stage_requirements(stage)
+        requested_ids = tuple(dict.fromkeys((
+            *(str(item) for item in getattr(stage, "participants", ()) if str(item)),
+            *required_stage_participants,
+        )))
         if requested_ids:
             roles = [
                 {
@@ -205,7 +233,7 @@ def _recipe_for_patterns(
             tuple(
                 {
                     **role,
-                    "capability_ids": stage_capabilities(work_stages[index - 1])[0] if index <= len(work_stages) and role.get("purpose") != "review" else (review_capabilities(work_stages[index - 1]) if index <= len(work_stages) and role.get("purpose") == "review" else ()),
+                    "capability_ids": stage_capabilities(work_stages[index - 1])[0] if index <= len(work_stages) and role.get("purpose") != "review" else (review_capabilities(work_stages[index - 1]) if index <= len(work_stages) and role.get("purpose") == "review" else required_capabilities),
                     "unresolved_capabilities": stage_capabilities(work_stages[index - 1])[1] if index <= len(work_stages) and role.get("purpose") != "review" else (),
                 }
                 for role in stage_roles(work_stages[index - 1] if index <= len(work_stages) else object(), stage_patterns[index - 1], index == stage_count)
@@ -237,6 +265,21 @@ def _recipe_for_patterns(
                     ]
                 )
             ) if brief is not None else (),
+            rationale=(
+                f"{source}: {rationale}; selected {stage_patterns[index - 1].value} for "
+                f"stage {getattr(work_stages[index - 1], 'stage_id', f'stage-{index}') if index <= len(work_stages) else f'stage-{index}'}"
+            ),
+            capabilities=stage_capabilities(work_stages[index - 1])[0] if index <= len(work_stages) else required_capabilities,
+            access_scope=("read:local",),
+            participant_responsibilities=tuple(
+                {"participant_id": str(role.get("id", "")), "responsibility": str(role.get("purpose", "execute"))}
+                for role in stage_roles(work_stages[index - 1] if index <= len(work_stages) else object(), stage_patterns[index - 1], index == stage_count)
+            ),
+            review_checks=("independent review" if review_required and index == stage_count else "stage output validation",),
+            completion_rule="stage output matches expected result and required checks pass",
+            escalation_rule="escalate unresolved capability, contradiction, or budget exhaustion",
+            partial_result_rule="preserve completed evidence and mark incomplete stage explicitly",
+            adaptation_policy=("bounded_retry", "reduced_concurrency", "dependency_safe_topology_reduction"),
         )
         for index in range(1, stage_count + 1)
     )
@@ -254,6 +297,8 @@ def _recipe_for_patterns(
             "selection_source": source,
             "selection_rationale": rationale,
             "selected_patterns": ",".join(pattern.value for pattern in patterns),
+            "required_participants": ",".join(required_participants),
+            "required_capabilities": ",".join(required_capabilities),
             "unresolved_capabilities": ";".join(
                 need
                 for stage in work_stages
@@ -273,14 +318,23 @@ def _recipe_for_patterns(
         },
         purpose=base.purpose,
         stages=stages,
+        rationale=rationale,
+        review_policy="required review policy applies at the final stage" if review_required else "stage output validation",
+        reuse_policy="reuse only committed, provenance-complete matching receipts",
+        adaptation_policy=("bounded_retry", "reduced_concurrency", "dependency_safe_topology_reduction"),
     )
 
 
 def select_recipe(brief: WorkBrief, task_shape: TaskShape | None = None, override=None) -> ExecutionRecipe:
+    intent = getattr(brief, "execution_intent", None)
+    required_capabilities = tuple(str(item) for item in getattr(intent, "required_capabilities", ()))
+    required_participants = tuple(str(item) for item in getattr(intent, "required_participants", ()) if str(item))
+    if override is None and intent is not None and intent.required_patterns:
+        override = list(intent.required_patterns)
     override = override if override is not None else brief.execution_pattern_override
     if override is not None:
         selected = _patterns_from_override(override)
-        if isinstance(override, (list, tuple)) and brief.stages and len(selected) != len(brief.stages):
+        if isinstance(override, (list, tuple)) and len(selected) > 1 and brief.stages and len(selected) != len(brief.stages):
             raise ValueError("global pattern list must map positionally to every WorkStage")
         if task_shape is not None and task_shape.review_required and ExecutionPattern.SEQUENTIAL not in selected:
             if selected == (ExecutionPattern.DIRECT,):
@@ -323,7 +377,25 @@ def select_recipe(brief: WorkBrief, task_shape: TaskShape | None = None, overrid
             brief,
         )
     if brief.desired_deliverables:
-        return make_recipe(RecipeName.ANALYZE_REVIEW)
+        if intent is None or not (required_capabilities or required_participants):
+            return make_recipe(RecipeName.ANALYZE_REVIEW)
+        return _recipe_for_patterns(
+            (ExecutionPattern.SEQUENTIAL,),
+            "work_brief",
+            "desired deliverables require bounded analysis and review",
+            brief.stages,
+            True,
+            brief,
+        )
+    if intent is not None and (required_capabilities or required_participants):
+        return _recipe_for_patterns(
+            (ExecutionPattern.SEQUENTIAL,),
+            "work_brief",
+            "mandatory execution intent requires bounded analysis and review",
+            brief.stages,
+            True,
+            brief,
+        )
     return make_recipe(RecipeName.DIRECT)
 
 

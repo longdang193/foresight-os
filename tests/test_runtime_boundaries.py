@@ -149,6 +149,69 @@ def test_agent_factory_preserves_participant_identity_and_profile_options():
     assert client.kwargs["default_options"]["response_format"] == {"type": "json"}
 
 
+def test_agent_factory_applies_stage_model_and_reasoning_controls():
+    class CapturingClient:
+        def __init__(self):
+            self.kwargs = None
+
+        def as_agent(self, **kwargs):
+            self.kwargs = kwargs
+            return object()
+
+    client = CapturingClient()
+    AgentFactory(client).create(
+        ParticipantConfig(
+            "scout",
+            "scout",
+            "find signals",
+            model="approved-model",
+            reasoning_controls={"temperature": 0.1},
+            provider="local",
+        ),
+    )
+
+    assert client.kwargs["default_options"] == {"model": "approved-model", "temperature": 0.1}
+
+
+def test_agent_factory_rejects_unconfigured_stage_provider():
+    class CapturingClient:
+        def as_agent(self, **kwargs):
+            raise AssertionError("provider must be rejected before agent construction")
+
+    with pytest.raises(RuntimeError, match="provider 'external' is not configured"):
+        AgentFactory(CapturingClient()).create(
+            ParticipantConfig("scout", "scout", "find signals", provider="external"),
+        )
+
+
+def test_stage_capability_override_is_required_at_dispatch():
+    base = make_recipe(RecipeName.DIRECT)
+    stage = RecipeStage(
+        "controlled",
+        ExecutionPattern.DIRECT,
+        ({"id": "scout", "purpose": "find signals"},),
+        "prompt",
+        "typed-result",
+        {},
+        capabilities=("missing-capability",),
+    )
+    recipe = ExecutionRecipe(
+        base.name,
+        base.pattern,
+        base.roles,
+        base.max_agent_steps,
+        base.max_correction_rounds,
+        base.max_total_agent_calls,
+        base.completion,
+        base.escalation,
+        base.partial_result,
+        stages=(stage,),
+    )
+
+    with pytest.raises(RuntimeError, match="capabilities unavailable"):
+        asyncio.run(run_recipe_async(recipe, "find signals", FakeClient()))
+
+
 def test_tool_budget_fails_before_dispatch_and_reports_budget():
     calls = []
 

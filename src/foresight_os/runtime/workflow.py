@@ -3,7 +3,7 @@ import hashlib
 import inspect
 import json
 import time
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from uuid import uuid4
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
@@ -21,12 +21,14 @@ from foresight_os.runtime.metrics import (
     FailureClass,
     RunMetrics,
     RunResult,
+    RunCanceledError,
 )
 from foresight_os.runtime.capabilities import CapabilityResolver, CapabilityScope, ScopeOwnership
 from foresight_os.runtime.crawl4ai import bind_crawl4ai
 from foresight_os.runtime.external_signals import load_hosted_mcp_bindings
 from foresight_os.runtime.web_search import bind_web_search
 from foresight_os.persistence.analysis_store import AnalysisStore, StageReceipt
+from foresight_os.persistence.ids import canonical_json_hash
 from foresight_os.runtime.page_retrieval import PageRetrievalCapability, bind_page_retrieval
 from foresight_os.runtime.local_toolbelt import bind_local_toolbelt
 from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
@@ -50,6 +52,10 @@ CanonicalResultCommitter = Callable[
     [Any, object, Mapping[str, Any]],
     CanonicalStageResult | None | Awaitable[CanonicalStageResult | None],
 ]
+
+
+class StaleReuseError(RuntimeError):
+    """Raised when approved execution refuses to refresh a stale stage receipt."""
 
 
 def _positive_limit(value: object, *, default: int | None = None, label: str) -> int:
@@ -102,6 +108,11 @@ async def _run_native_stage(
     if not hasattr(client, "as_agent"):
         raise RuntimeError("a native MAF client with as_agent() is required for this pattern")
     context = dict(run_context or {})
+    if context.get("execution_admitted"):
+        expected_recipe_fingerprint = context.get("approved_recipe_fingerprint")
+        actual_recipe_fingerprint = context.get("recipe_fingerprint")
+        if expected_recipe_fingerprint and expected_recipe_fingerprint != actual_recipe_fingerprint:
+            raise ValidationError("approved recipe snapshot is immutable and cannot be changed at runtime")
     context.setdefault("skill_registry", SkillRegistry())
     context["handoff"] = pattern == ExecutionPattern.HANDOFF
     max_rounds = _positive_limit(context.get("max_rounds"), default=4, label="max_rounds")
@@ -185,10 +196,23 @@ def _effective_skill_ids(stage_skill_ids: tuple[str, ...], participant_skill_ids
 
 
 def _stage_participants(stage: Any) -> tuple[ParticipantConfig, ...]:
-    return tuple(
-        ParticipantConfig.from_mapping(item, f"participant-{index}")
-        for index, item in enumerate(getattr(stage, "participants", ()), 1)
-    )
+    stage_capabilities = tuple(str(item) for item in getattr(stage, "capabilities", ()))
+    stage_scope = tuple(str(item) for item in getattr(stage, "access_scope", ()))
+    stage_provider = str(getattr(stage, "provider", "local"))
+    stage_model = str(getattr(stage, "model", "unspecified"))
+    stage_reasoning_controls = dict(getattr(stage, "reasoning_controls", {}) or {})
+    participants = []
+    for index, item in enumerate(getattr(stage, "participants", ()), 1):
+        participant = ParticipantConfig.from_mapping(item, f"participant-{index}")
+        participants.append(replace(
+            participant,
+            capability_ids=tuple(dict.fromkeys((*stage_capabilities, *participant.capability_ids))),
+            data_scope=tuple(dict.fromkeys((*stage_scope, *participant.data_scope))),
+            provider=stage_provider,
+            model=stage_model if stage_model != "unspecified" else participant.model,
+            reasoning_controls={**participant.reasoning_controls, **stage_reasoning_controls},
+        ))
+    return tuple(participants)
 
 
 def _stage_fingerprints(
@@ -242,8 +266,16 @@ def _stage_fingerprints(
             stage_id: _canonical_result_hash(output)
             for stage_id, output in dict(dependency_outputs).items()
         },
+        "participants": tuple(asdict(participant) for participant in participant_configs),
     }
-    policy_payload = {"limits": getattr(stage, "limits", {})}
+    policy_payload = {
+        "limits": getattr(stage, "limits", {}),
+        "capabilities": getattr(stage, "capabilities", ()),
+        "access_scope": getattr(stage, "access_scope", ()),
+        "provider": getattr(stage, "provider", "local"),
+        "model": getattr(stage, "model", "unspecified"),
+        "reasoning_controls": getattr(stage, "reasoning_controls", {}),
+    }
     return (
         hashlib.sha256(json.dumps(semantic_payload, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")).hexdigest(),
         hashlib.sha256(json.dumps(policy_payload, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")).hexdigest(),
@@ -332,6 +364,7 @@ async def run_recipe_async(
     outputs: list[object] = []
     metrics.cleanup_complete = True
     context = dict(run_context or {})
+    context["recipe_fingerprint"] = canonical_json_hash(recipe.to_dict())
     run_max_rounds = None
     if "max_rounds" in context and context["max_rounds"] is not None:
         run_max_rounds = _positive_limit(context["max_rounds"], label="max_rounds")
@@ -349,13 +382,27 @@ async def run_recipe_async(
     if changed_record_ids and relation_index is not None:
         impact_closure = getattr(relation_index, "impact_closure", None) or getattr(relation_index, "impacted_descendants")
         impacted_ids = set(impact_closure(changed_record_ids))
-        context["invalidated_stage_ids"] = tuple(
+        auto_invalidated_stage_ids = tuple(
             sorted(
                 stage_id
                 for stage_id, receipt in context["stage_receipts"].items()
                 if impacted_ids.intersection(getattr(receipt, "result_references", ()))
             )
         )
+        context["auto_invalidated_stage_ids"] = auto_invalidated_stage_ids
+        context["invalidated_stage_ids"] = auto_invalidated_stage_ids
+    fresh_requested = set(str(item) for item in context.get("run_fresh_stages", ()))
+    if fresh_requested:
+        affected = set(fresh_requested)
+        changed = True
+        while changed:
+            changed = False
+            for stage in recipe.stages or ():
+                stage_id = str(getattr(stage, "stage_id", ""))
+                if stage_id not in affected and any(str(dep) in affected for dep in getattr(stage, "dependencies", ())):
+                    affected.add(stage_id)
+                    changed = True
+        context["invalidated_stage_ids"] = tuple(sorted(set(context.get("invalidated_stage_ids", ())) | affected))
     for stage_id, receipt in context["stage_receipts"].items():
         if stage_id in context["canonical_outputs"] or not context["canonical_records"]:
             continue
@@ -422,6 +469,8 @@ async def run_recipe_async(
             return FailureClass.TIMEOUT
         if isinstance(error, asyncio.CancelledError):
             return FailureClass.CANCELLATION
+        if isinstance(error, RunCanceledError):
+            return FailureClass.CANCELLATION
         if isinstance(error, ValidationError):
             return FailureClass.DOMAIN_VALIDATION
         name = type(error).__name__.lower()
@@ -468,10 +517,20 @@ async def run_recipe_async(
         canonical_output = context.get("canonical_outputs", {}).get(getattr(stage, "stage_id", ""))
         if receipt is not None:
             cache_entry = None
-        if getattr(stage, "stage_id", "") in set(context.get("invalidated_stage_ids", ())):
+        stage_id = getattr(stage, "stage_id", "")
+        fresh_requested_stage = stage_id in fresh_requested
+        invalidated_stage = stage_id in set(context.get("invalidated_stage_ids", ()))
+        auto_invalidated_stage = stage_id in set(context.get("auto_invalidated_stage_ids", ()))
+        if auto_invalidated_stage and not fresh_requested_stage and receipt is not None and context.get("fallback_on_stale_reuse") == "stop":
+            raise StaleReuseError(f"stale stage receipt for {stage_id}: changed evidence invalidated the receipt")
+        if invalidated_stage:
             receipt = None
+            cache_entry = None
+        fallback_on_stale_reuse = context.get("fallback_on_stale_reuse")
+        if receipt is not None and fallback_on_stale_reuse == "stop" and canonical_output is None:
+            raise StaleReuseError(f"stale stage receipt for {getattr(stage, 'stage_id', 'stage')}: canonical output is unavailable")
         if receipt is not None and canonical_output is not None and hasattr(receipt, "reusable_for"):
-            if receipt.reusable_for(
+            receipt_matches = receipt.reusable_for(
                 input_fingerprint=cache_key,
                 execution_policy_fingerprint=execution_policy_fingerprint,
                 skill_hashes=tuple(context.get("skill_hashes_by_stage", {}).get(getattr(stage, "stage_id", ""), ())),
@@ -482,7 +541,10 @@ async def run_recipe_async(
                 receipt.result_references,
                 receipt.result_hashes,
                 context.get("canonical_records"),
-            ):
+            )
+            if not receipt_matches and fallback_on_stale_reuse == "stop":
+                raise StaleReuseError(f"stale stage receipt for {getattr(stage, 'stage_id', 'stage')}: fingerprints or provenance do not match")
+            if receipt_matches:
                 cache_entry = {"status": "committed", "provenance_complete": True, "result_references": receipt.result_references, "result_hashes": receipt.result_hashes, "output": canonical_output}
         if cache_entry is not None:
             cache_valid, cached_output = _committed_cache_output(cache_entry, context.get("canonical_records"))
@@ -597,6 +659,9 @@ async def run_recipe_async(
             status="committed",
             committed=True,
             provenance_complete=True,
+            source_revision=str(context.get("source_revision", "")),
+            created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            reuse_decision="run_fresh" if getattr(stage, "stage_id", "") in fresh_requested else "reuse",
         )
         context["stage_receipts"][committed_receipt.stage_id] = committed_receipt
         if isinstance(receipt_store, AnalysisStore):
@@ -610,6 +675,12 @@ async def run_recipe_async(
             stages = (type("Stage", (), {"pattern": ExecutionPattern(recipe.pattern), "participants": tuple(recipe.roles)})(),)
         outputs_by_stage: dict[str, object] = {}
         for stage in stages:
+            run_control = context.get("run_control")
+            if run_control is not None:
+                try:
+                    await run_control.before_stage()
+                except Exception as error:
+                    raise RunCanceledError(str(error)) from error
             dependencies = tuple(getattr(stage, "dependencies", ()))
             missing = tuple(dependency for dependency in dependencies if dependency not in outputs_by_stage)
             if missing:

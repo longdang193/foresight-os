@@ -1,5 +1,14 @@
 # Extending ForesightOS
 
+## Preserve canonical owners
+
+Keep decision truth in `WorkBrief`, complete execution truth in
+`ExecutionRecipe`, human authorization in `ApprovalRecord`, and analytical
+truth in `AnalysisState`. `ApprovalPackage` is a derived review projection;
+do not add a second approval store or copy the recipe into the brief. Public
+execution must use the shared execution gate, while low-level workflow calls
+remain explicit test/probe primitives.
+
 Extensions should add one bounded owner to the existing system. Preserve the
 single analysis state, skill registry, capability resolver, and evidence
 receipt boundaries instead of introducing parallel stores or registries.

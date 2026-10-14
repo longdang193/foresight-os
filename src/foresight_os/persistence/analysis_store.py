@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -27,9 +28,12 @@ from foresight_os.domain.models import (
     SourceLocator,
     WorkStage,
     WorkBrief,
+    ExecutionIntent,
 )
+from foresight_os.domain.approval import ApprovalRecord
+from foresight_os.controller.recipes import ExecutionRecipe
 from foresight_os.domain.challenge import ChallengeObjection, ObjectionDisposition, ReviewOutcome, ReviewRecord
-from foresight_os.domain.validation import migrate_analysis_dict, validate_analysis, validate_work_brief
+from foresight_os.domain.validation import migrate_analysis_dict, validate_analysis, validate_approval_record, validate_execution_recipe, validate_work_brief
 
 
 @dataclass(frozen=True)
@@ -46,6 +50,9 @@ class StageReceipt:
     status: str = "incomplete"
     committed: bool = False
     provenance_complete: bool = False
+    source_revision: str = ""
+    created_at: str = ""
+    reuse_decision: str = "reuse"
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -65,6 +72,9 @@ class StageReceipt:
             status=str(value.get("status", "incomplete")),
             committed=bool(value.get("committed", False)),
             provenance_complete=bool(value.get("provenance_complete", False)),
+            source_revision=str(value.get("source_revision", "")),
+            created_at=str(value.get("created_at", "")),
+            reuse_decision=str(value.get("reuse_decision", "reuse")),
         )
 
     def reusable(self) -> bool:
@@ -118,6 +128,14 @@ class AnalysisStore:
         return self.root / "stage-receipts.json"
 
     @property
+    def execution_recipe_path(self) -> Path:
+        return self.root / "execution-recipe.json"
+
+    @property
+    def execution_approval_path(self) -> Path:
+        return self.root / "execution-approval.json"
+
+    @property
     def lock_path(self) -> Path:
         return self.root / ".analysis.lock"
 
@@ -154,8 +172,50 @@ class AnalysisStore:
                 stage.get("skill_ids", []),
                 stage.get("execution_pattern_override"),
                 stage.get("limits", {}),
+                ExecutionIntent(**{
+                    **stage["execution_intent"],
+                    "required_patterns": tuple(stage["execution_intent"].get("required_patterns", ())),
+                    "preferred_patterns": tuple(stage["execution_intent"].get("preferred_patterns", ())),
+                    "required_participants": tuple(stage["execution_intent"].get("required_participants", ())),
+                    "preferred_participants": tuple(stage["execution_intent"].get("preferred_participants", ())),
+                    "required_capabilities": tuple(stage["execution_intent"].get("required_capabilities", ())),
+                    "preferred_capabilities": tuple(stage["execution_intent"].get("preferred_capabilities", ())),
+                }) if stage.get("execution_intent") else None,
             ))
-        return WorkBrief(**{**value, "stages": stages})
+        intent_value = value.get("execution_intent")
+        execution_intent = None
+        if intent_value:
+            execution_intent = ExecutionIntent(
+                required_patterns=tuple(intent_value.get("required_patterns", ())),
+                preferred_patterns=tuple(intent_value.get("preferred_patterns", ())),
+                required_participants=tuple(intent_value.get("required_participants", ())),
+                preferred_participants=tuple(intent_value.get("preferred_participants", ())),
+                required_capabilities=tuple(intent_value.get("required_capabilities", ())),
+                preferred_capabilities=tuple(intent_value.get("preferred_capabilities", ())),
+                preferred_reasoning_controls=dict(intent_value.get("preferred_reasoning_controls", {})),
+                source=str(intent_value.get("source", "user")),
+            )
+        return WorkBrief(**{**value, "stages": stages, "execution_intent": execution_intent})
+
+    def save_recipe(self, recipe: ExecutionRecipe) -> None:
+        value = validate_execution_recipe(recipe)
+        with FileLock(str(self.lock_path)):
+            self._atomic_write(self.execution_recipe_path, json.dumps(value, sort_keys=True, indent=2, default=str) + "\n")
+
+    def load_recipe(self) -> ExecutionRecipe:
+        value = validate_execution_recipe(json.loads(self.execution_recipe_path.read_text(encoding="utf-8")))
+        return ExecutionRecipe.from_dict(value)
+
+    def save_execution_approval(self, approval: ApprovalRecord) -> None:
+        value = validate_approval_record(approval)
+        with FileLock(str(self.lock_path)):
+            self._atomic_write(self.execution_approval_path, json.dumps(value, sort_keys=True, indent=2, default=str) + "\n")
+
+    def load_execution_approval(self) -> ApprovalRecord | None:
+        if not self.execution_approval_path.exists():
+            return None
+        value = validate_approval_record(json.loads(self.execution_approval_path.read_text(encoding="utf-8")))
+        return ApprovalRecord.from_dict(value)
 
     def load_stage_receipts(self) -> dict[str, StageReceipt]:
         if not self.stage_receipts_path.exists():
