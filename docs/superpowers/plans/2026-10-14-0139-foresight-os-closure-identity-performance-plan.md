@@ -124,7 +124,7 @@ contracts and evidence are still verified independently.
 8. Frozen baseline/release comparison proves Group Chat p95 at the existing
    threshold, with workload identity and environment recorded.
 9. Plan status and evidence records distinguish delivered implementation,
-   delivered skill hardening, and pending closure acceptance.
+   delivered skill hardening, and completed closure acceptance.
 
 ## Execution Approach
 
@@ -178,8 +178,8 @@ contracts and evidence are still verified independently.
 
 ## Current Execution Ledger
 
-- Plan status is `completed`; Tasks 0–5 are implemented and their focused
-  verification passed.
+- Plan status is `completed`; Tasks 0–8 are implemented or verified, and their
+  required focused and final verification passed.
 - The original Task 6 receipts remain preserved with their stability failure:
   baseline drift `61.458%`, candidate drift `32.162%`, and ordinal run-1
   `CHALLENGE_RECOMMENDATION` regression `46.722%`.
