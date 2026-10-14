@@ -1,7 +1,7 @@
 ---
 layer: change
 artifact_type: plan
-status: active
+status: completed
 template_id: implementation-plan
 name: foresight-os-documentation-consolidation
 targets:
@@ -164,7 +164,7 @@ not rewritten into onboarding pages.
 | 4. Add documentation navigation | completed | Codex | `docs/README.md` links users to the six canonical content pages without duplicating content | Tasks 1–3 | navigation-only `docs/README.md` links all six canonical pages | none | reduce and reconcile README |
 | 5. Reduce and reconcile README | completed | Codex | Root README becomes a concise product front door and points to canonical docs | Tasks 1–4 | README rewritten to product overview, quickstart, architecture, evidence boundary, and canonical links | none | implement explicit-target checker |
 | 6. Add local Markdown-link validation | completed | Codex | Lightweight checker and focused tests for all canonical and historical local links | Tasks 1–5 | checker passed across explicit canonical targets plus tracked docs; focused tests passed | none | perform final documentation verification |
-| 7. Perform final documentation verification | active | Codex | Full evidence that content, links, source ownership, and repository behavior are consistent | Tasks 0–6 | pending | none | run final verification and settle plan status |
+| 7. Perform final documentation verification | completed | Codex | Full evidence that content, links, source ownership, and repository behavior are consistent | Tasks 0–6 | link checker passed for 22 Markdown paths; focused and full pytest passed; compileall and diff check passed; README 151 lines; worktree clean | none | preserve verified branch state |
 
 ### Task 0: Establish the documentation baseline
 
@@ -633,3 +633,4 @@ docs: consolidate user documentation and simplify README
 
 - Bootstrap: branch `codex/documentation-consolidation`; base `origin/main` at `391e92b`; initial worktree HEAD `391e92b`; workspace `C:\Users\HOANG PHI LONG DANG\.codex\worktrees\documentation-consolidation\foresight-OS`.
 - Task 0 baseline: inspected `pyproject.toml`, `src/foresight_os/cli.py`, vertical-slice and recovery paths, controller skill registry, packaged manifest, runtime capabilities/provider configuration, evaluation contracts, artifact boundaries, and related tests. No runtime changes are authorized.
+- Task 7 final verification: `python scripts/check_markdown_links.py ... --tracked-docs`, `python -m pytest -q`, `python -m compileall -q src tests evaluation`, and `git diff --check` all passed. The documented quickstart independently returned accepted revision `1`, generated `artifacts/executive-report.md`, and continued to revision `2` with reassessment ID `claim-northern-demand-growth`. Disposable verification outputs were removed; final status is clean.
