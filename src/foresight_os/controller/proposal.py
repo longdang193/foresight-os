@@ -83,7 +83,12 @@ def apply_execution_overrides(recipe: ExecutionRecipe, overrides: dict[str, Any]
     if not diagnostics:
         try:
             if "pattern" in overrides:
-                updated = replace(updated, pattern=ExecutionPattern(str(overrides["pattern"])).value)
+                pattern = ExecutionPattern(str(overrides["pattern"]))
+                updated = replace(
+                    updated,
+                    pattern=pattern.value,
+                    stages=tuple(replace(stage, pattern=pattern) for stage in updated.stages),
+                )
             for field_name in ("max_agent_steps", "max_correction_rounds", "max_total_agent_calls"):
                 if field_name in overrides:
                     value = int(overrides[field_name])

@@ -85,6 +85,22 @@ def test_propose_does_not_call_a_receipt_matching_without_current_fingerprints(t
     assert "runtime fingerprint comparison" in package["reuse_candidates"][0]["reason"]
 
 
+def test_detailed_approval_renders_material_execution_controls():
+    brief = create_work_brief("Question")
+    recipe = apply_execution_overrides(build_execution_recipe(brief).recipe, {"stages": [{
+        "stage_id": "stage-1",
+        "provider": "local",
+        "model": "approved-model",
+        "reasoning_controls": {"temperature": 0.1},
+    }]}).recipe
+
+    rendered = render_approval_markdown(build_approval_package(brief, recipe, AdaptationEnvelope()), detailed=True)
+
+    assert "Provider: `local`" in rendered
+    assert "Model: `approved-model`" in rendered
+    assert 'Reasoning controls: {"temperature": 0.1}' in rendered
+
+
 def test_work_brief_template_validates_against_canonical_contract():
     text = Path("docs/templates/work-brief-template.md").read_text(encoding="utf-8")
     fenced = text.split("```yaml\n", 1)[1].split("\n```", 1)[0]

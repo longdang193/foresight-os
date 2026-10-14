@@ -46,3 +46,16 @@ def test_stage_control_overrides_are_retained_for_runtime_enforcement():
     assert stage.access_scope == ("private:data",)
     assert stage.model == "approved-model"
     assert stage.reasoning_controls == {"temperature": 0.1}
+
+
+def test_global_pattern_override_updates_executable_stage_patterns():
+    result = build_execution_recipe(create_work_brief("Question", stages=[
+        WorkStage("first", "First"),
+        WorkStage("second", "Second"),
+    ]))
+
+    updated = apply_execution_overrides(result.recipe, {"pattern": "concurrent"})
+
+    assert updated.accepted
+    assert updated.recipe.pattern == "concurrent"
+    assert [stage.pattern.value for stage in updated.recipe.stages] == ["concurrent", "concurrent"]

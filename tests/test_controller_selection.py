@@ -100,3 +100,25 @@ def test_single_required_pattern_broadcasts_to_all_persisted_stages():
     recipe = select_recipe(brief)
 
     assert [stage.pattern for stage in recipe.stages] == [ExecutionPattern.CONCURRENT, ExecutionPattern.CONCURRENT]
+
+
+def test_required_participants_and_capabilities_are_carried_into_recipe():
+    brief = WorkBrief(
+        "requirements",
+        "review",
+        [],
+        ["answer"],
+        [],
+        [],
+        "assess",
+        "execute",
+        execution_intent=ExecutionIntent(
+            required_participants=("named-specialist",),
+            required_capabilities=("nonexistent",),
+        ),
+    )
+
+    recipe = select_recipe(brief)
+
+    assert "nonexistent" in recipe.stages[0].capabilities
+    assert any(item["id"] == "named-specialist" for item in recipe.stages[0].participants)

@@ -58,11 +58,18 @@ def test_admitted_execution_passes_immutable_context(monkeypatch, tmp_path):
         return type("Result", (), {"run_id": run_id})()
 
     monkeypatch.setattr("foresight_os.runtime.execution_gate.run_recipe_async", fake_run)
-    result = asyncio.run(ExecutionGate(store).execute(prompt="Question", run_id="run-1"))
+    result = asyncio.run(ExecutionGate(store).execute(prompt="Question", client=object(), run_id="run-1"))
     assert result.run_id == "run-1"
     assert seen["execution_admitted"] is True
     assert seen["approved_recipe_fingerprint"] == canonical_json_hash(store.load_recipe().to_dict())
     assert seen["fallback_on_stale_reuse"] == "stop"
+
+
+def test_admitted_execution_without_client_is_blocked(tmp_path):
+    store = prepared_store(tmp_path)
+
+    with pytest.raises(ExecutionAdmissionError, match="configured client"):
+        asyncio.run(ExecutionGate(store).execute(prompt="Question"))
 
 
 def test_superseded_approval_blocks_dispatch(tmp_path):

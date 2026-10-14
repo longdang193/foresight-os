@@ -75,6 +75,9 @@ def render_approval_markdown(package: ApprovalPackage, *, detailed: bool = False
             f"- Expected result: {stage.get('expected_result', '')}",
             f"- Participants: {', '.join(str(item.get('id', item)) if isinstance(item, dict) else str(item) for item in stage.get('participants', [])) or 'controller default'}",
             f"- Limits: {json.dumps(stage.get('limits', {}), sort_keys=True)}",
+            f"- Provider: `{stage.get('provider', 'local')}`",
+            f"- Model: `{stage.get('model', 'unspecified')}`",
+            f"- Reasoning controls: {json.dumps(stage.get('reasoning_controls', {}), sort_keys=True)}",
         ])
         if detailed:
             lines.extend([

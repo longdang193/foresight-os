@@ -95,6 +95,8 @@ class ExecutionGate:
             current_approval = self.store.load_execution_approval()
             if current_approval is None or current_approval.status != ApprovalStatus.APPROVED or current_approval.projection_fingerprint != admission.approval_fingerprint:
                 raise ExecutionAdmissionError("approval was superseded before dispatch")
+        if client is None:
+            raise ExecutionAdmissionError("approved execution requires a configured client")
         context = dict(run_context or {})
         context.update({
             "execution_admitted": True,

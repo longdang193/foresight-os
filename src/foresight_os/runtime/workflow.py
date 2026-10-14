@@ -3,7 +3,7 @@ import hashlib
 import inspect
 import json
 import time
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from uuid import uuid4
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
@@ -266,6 +266,7 @@ def _stage_fingerprints(
             stage_id: _canonical_result_hash(output)
             for stage_id, output in dict(dependency_outputs).items()
         },
+        "participants": tuple(asdict(participant) for participant in participant_configs),
     }
     policy_payload = {
         "limits": getattr(stage, "limits", {}),
@@ -381,13 +382,15 @@ async def run_recipe_async(
     if changed_record_ids and relation_index is not None:
         impact_closure = getattr(relation_index, "impact_closure", None) or getattr(relation_index, "impacted_descendants")
         impacted_ids = set(impact_closure(changed_record_ids))
-        context["invalidated_stage_ids"] = tuple(
+        auto_invalidated_stage_ids = tuple(
             sorted(
                 stage_id
                 for stage_id, receipt in context["stage_receipts"].items()
                 if impacted_ids.intersection(getattr(receipt, "result_references", ()))
             )
         )
+        context["auto_invalidated_stage_ids"] = auto_invalidated_stage_ids
+        context["invalidated_stage_ids"] = auto_invalidated_stage_ids
     fresh_requested = set(str(item) for item in context.get("run_fresh_stages", ()))
     if fresh_requested:
         affected = set(fresh_requested)
@@ -514,7 +517,12 @@ async def run_recipe_async(
         canonical_output = context.get("canonical_outputs", {}).get(getattr(stage, "stage_id", ""))
         if receipt is not None:
             cache_entry = None
-        if getattr(stage, "stage_id", "") in set(context.get("invalidated_stage_ids", ())):
+        stage_id = getattr(stage, "stage_id", "")
+        fresh_requested_stage = stage_id in fresh_requested
+        auto_invalidated_stage = stage_id in set(context.get("auto_invalidated_stage_ids", ()))
+        if auto_invalidated_stage and not fresh_requested_stage and receipt is not None and context.get("fallback_on_stale_reuse") == "stop":
+            raise StaleReuseError(f"stale stage receipt for {stage_id}: changed evidence invalidated the receipt")
+        if stage_id in set(context.get("invalidated_stage_ids", ())) and not fresh_requested_stage:
             receipt = None
         fallback_on_stale_reuse = context.get("fallback_on_stale_reuse")
         if receipt is not None and fallback_on_stale_reuse == "stop" and canonical_output is None:
