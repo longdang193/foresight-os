@@ -154,7 +154,10 @@ def validate_stability(baseline_repeat: list[dict], release_repeat: list[dict]) 
             errors.append("baseline/release workload differs")
         if baseline_repeat[0].get("environment") != release_repeat[0].get("environment"):
             errors.append("baseline/release environment differs")
-        if baseline_repeat[0].get("revision") == release_repeat[0].get("revision"):
+        if (
+            baseline_repeat[0].get("revision", {}).get("commit")
+            == release_repeat[0].get("revision", {}).get("commit")
+        ):
             errors.append("baseline/release revision is identical")
     return {"accepted": not errors, "errors": errors}
 

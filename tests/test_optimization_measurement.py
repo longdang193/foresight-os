@@ -162,3 +162,13 @@ def test_repeat_comparator_requires_stable_group_chat_p95_and_metadata():
     identical_revision = compare_repeats([baseline, baseline_repeat], [baseline, baseline_repeat])
     assert not identical_revision["accepted"]
     assert "baseline/release revision is identical" in identical_revision["stability"]["errors"]
+
+    same_commit_different_paths = deepcopy(baseline)
+    same_commit_different_paths["revision"]["repo_root"] = "another-repo"
+    same_commit_different_paths["revision"]["package_path"] = "another-repo/src/foresight_os/__init__.py"
+    same_commit_result = compare_repeats(
+        [baseline, baseline_repeat],
+        [same_commit_different_paths, deepcopy(same_commit_different_paths)],
+    )
+    assert not same_commit_result["accepted"]
+    assert "baseline/release revision is identical" in same_commit_result["stability"]["errors"]
