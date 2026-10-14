@@ -5,9 +5,9 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from .models import AnalysisState, EvidenceCandidate, ExecutionIntent, ResearchNeed, ResearchNeedKind, WorkBrief
+from .models import AnalysisState, EvidenceCandidate, ExecutionIntent, MethodProvenance, ResearchNeed, ResearchNeedKind, WorkBrief
 from foresight_os.controller.recipes import ExecutionRecipe
-from foresight_os.domain.approval import ApprovalRecord, AdaptationEnvelope
+from foresight_os.domain.approval import ApprovalProjection, ApprovalRecord, AdaptationEnvelope
 from .relationships import RecordKind, relationship_rule
 
 
@@ -87,6 +87,9 @@ def validate_approval_record(record: ApprovalRecord | dict[str, Any]) -> dict[st
 
 def _normalize_work_brief(value: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(value)
+    producer = normalized.get("producer")
+    if isinstance(producer, MethodProvenance):
+        normalized["producer"] = producer.to_dict()
     legacy_override = normalized.pop("execution_pattern_override", None)
     if legacy_override is not None and "execution_intent" not in normalized:
         patterns = (legacy_override,) if isinstance(legacy_override, str) else tuple(legacy_override)
@@ -163,9 +166,7 @@ def _normalize_execution_intent(value: ExecutionIntent | dict[str, Any]) -> dict
 
 
 def _canonical_projection_fingerprint(value: dict[str, Any]) -> str:
-    from foresight_os.persistence.ids import canonical_json_hash
-
-    return canonical_json_hash(value)
+    return ApprovalProjection.fingerprint_for_dict(value)
 
 
 def validate_evidence_candidate(candidate: EvidenceCandidate | dict[str, Any]) -> EvidenceCandidate:

@@ -23,6 +23,7 @@ from foresight_os.domain.models import (
     Revision,
     RevisionStatus,
     MeasurementKey,
+    MethodProvenance,
     ResearchNeed,
     ResearchNeedKind,
     SourceLocator,
@@ -31,6 +32,7 @@ from foresight_os.domain.models import (
     ExecutionIntent,
 )
 from foresight_os.domain.approval import ApprovalRecord
+from foresight_os.artifacts.brief import render_work_brief_markdown
 from foresight_os.controller.recipes import ExecutionRecipe
 from foresight_os.domain.challenge import ChallengeObjection, ObjectionDisposition, ReviewOutcome, ReviewRecord
 from foresight_os.domain.validation import migrate_analysis_dict, validate_analysis, validate_approval_record, validate_execution_recipe, validate_work_brief
@@ -141,7 +143,7 @@ class AnalysisStore:
 
     def save_brief(self, brief: WorkBrief) -> None:
         value = validate_work_brief(brief)
-        body = "# Work Brief\n\n" + value["current_direction"] + "\n"
+        body = render_work_brief_markdown(value)
         text = "---\n" + yaml.safe_dump(value, sort_keys=False) + "---\n\n" + body
         self._atomic_write(self.brief_path, text)
 
@@ -195,7 +197,14 @@ class AnalysisStore:
                 preferred_reasoning_controls=dict(intent_value.get("preferred_reasoning_controls", {})),
                 source=str(intent_value.get("source", "user")),
             )
-        return WorkBrief(**{**value, "stages": stages, "execution_intent": execution_intent})
+        producer_value = value.get("producer")
+        producer = MethodProvenance(**producer_value) if producer_value else None
+        return WorkBrief(**{
+            **value,
+            "stages": stages,
+            "execution_intent": execution_intent,
+            "producer": producer,
+        })
 
     def save_recipe(self, recipe: ExecutionRecipe) -> None:
         value = validate_execution_recipe(recipe)

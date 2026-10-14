@@ -51,6 +51,24 @@ class ResearchNeed:
 
 
 @dataclass(frozen=True)
+class MethodProvenance:
+    id: str
+    source: str
+    contract_version: str = "1"
+    content_sha256: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        value = {
+            "id": self.id,
+            "source": self.source,
+            "contract_version": self.contract_version,
+        }
+        if self.content_sha256:
+            value["content_sha256"] = self.content_sha256
+        return value
+
+
+@dataclass(frozen=True)
 class MeasurementKey:
     region: str
     measure: str
@@ -234,10 +252,15 @@ class WorkBrief:
     consequence_level: str = "standard"
     user_preferences: dict[str, Any] = field(default_factory=dict)
     execution_intent: ExecutionIntent | None = None
+    producer: MethodProvenance | None = None
 
     def to_dict(self) -> dict[str, Any]:
         value = asdict(self)
         value.pop("execution_pattern_override", None)
+        if self.producer is None:
+            value.pop("producer", None)
+        else:
+            value["producer"] = self.producer.to_dict()
         if self.execution_intent is None:
             if self.execution_pattern_override is None:
                 value.pop("execution_intent", None)
