@@ -250,6 +250,87 @@ class CapabilityResolver:
         return None
 
 
+def prepare_capability_context(
+    required_capabilities: tuple[str, ...] | list[str],
+    run_context: Mapping[str, Any] | None = None,
+    *,
+    scope: CapabilityScope | None = None,
+    human_approved: bool | None = None,
+    load_local: bool = True,
+    load_hosted: bool = True,
+    bind_adapters: bool = True,
+) -> dict[str, Any]:
+    """Build and validate the capability context shared by admission and runtime."""
+    context = dict(run_context or {})
+    required = tuple(dict.fromkeys(str(item) for item in required_capabilities if str(item)))
+    context["required_capabilities"] = required
+    if scope is not None:
+        context["scope"] = scope
+    else:
+        context.setdefault("scope", CapabilityScope())
+    if human_approved is not None:
+        context["human_approved"] = human_approved
+    context.setdefault("capability_resolver", CapabilityResolver())
+
+    if load_local:
+        from foresight_os.runtime.local_toolbelt import bind_local_toolbelt
+
+        local_bindings = context.setdefault("local_capabilities", {})
+        for name, binding in bind_local_toolbelt().items():
+            local_bindings.setdefault(name, binding)
+
+    if context.get("mcp_bindings") is not None:
+        context.setdefault("mcp_tools", {}).update(
+            {
+                key: value
+                for key, value in context["mcp_bindings"].items()
+                if not required or key in required
+            }
+        )
+    elif load_hosted and required:
+        from foresight_os.runtime.external_signals import load_hosted_mcp_bindings
+
+        for capability_id, binding in load_hosted_mcp_bindings(
+            context.get("mcp_environment"),
+            required_capabilities=required,
+        ).items():
+            context.setdefault("mcp_tools", {}).setdefault(capability_id, binding)
+
+    if bind_adapters:
+        if context.get("web_search_provider") is not None:
+            from foresight_os.runtime.web_search import bind_web_search
+
+            context.setdefault("adapters", {}).setdefault(
+                "web_search", bind_web_search(context["web_search_provider"])
+            )
+        if context.get("page_retrieval") is not None:
+            from foresight_os.runtime.page_retrieval import bind_page_retrieval
+
+            context.setdefault("adapters", {}).setdefault(
+                "page_retrieval", bind_page_retrieval(context["page_retrieval"])
+            )
+        elif context.get("page_retrieval_fixture_hosts") is not None:
+            from foresight_os.runtime.page_retrieval import PageRetrievalCapability, bind_page_retrieval
+
+            context.setdefault("adapters", {}).setdefault(
+                "page_retrieval",
+                bind_page_retrieval(PageRetrievalCapability(fixture_hosts=set(context["page_retrieval_fixture_hosts"]))),
+            )
+        if context.get("crawl4ai") is not None:
+            from foresight_os.runtime.crawl4ai import bind_crawl4ai
+
+            context.setdefault("adapters", {}).setdefault(
+                "web_crawl", bind_crawl4ai(context["crawl4ai"])
+            )
+
+    resolved = context["capability_resolver"].resolve(required, context)
+    context["capability_resolutions"] = resolved
+    unavailable = [f"{key}: {item.reason}" for key, item in resolved.items() if not item.available]
+    if unavailable:
+        raise CapabilityUnavailableError(f"capabilities unavailable: {'; '.join(unavailable)}")
+    return context
+
+
 def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, context: Mapping[str, Any]):
     scope = context.get("scope")
     semaphores = getattr(scope, "semaphores", None) if scope is not None else None

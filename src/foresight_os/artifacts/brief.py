@@ -7,6 +7,37 @@ _UNKNOWN = "not specified"
 _NONE_DECLARED = "none declared"
 
 
+def deliverable_status(requested: str, state: Any) -> str:
+    """Evaluate one supported deliverable using explicit state predicates."""
+
+    normalized = str(requested).strip().lower()
+    records = state.canonical_records()
+    artifacts = tuple(getattr(state, "artifacts", ()))
+    if normalized in {"analysis", "analytical records"}:
+        return "PERSISTED" if bool(records) else "NOT_STARTED"
+    if normalized in {"calculation", "verified calculation", "verified calculations"}:
+        return "PERSISTED" if any(getattr(item.verification_status, "value", item.verification_status) == "VERIFIED" for item in state.calculations) else "NOT_STARTED"
+    if normalized in {"report", "executive report"}:
+        return "PERSISTED" if any(str(item.kind).lower() == "report" and item.lifecycle.value == "CURRENT" for item in artifacts) else "NOT_STARTED"
+    if normalized in {"presentation outline", "presentation-spec", "presentation spec"}:
+        return "PERSISTED" if any(str(item.kind).lower() in {"presentation-outline", "presentation_spec"} and item.lifecycle.value == "CURRENT" for item in artifacts) else "NOT_STARTED"
+    if normalized in {"pptx", "verified pptx"}:
+        return "PERSISTED" if any(
+            item.lifecycle.value == "CURRENT"
+            and isinstance(getattr(item, "delivery_receipt", None), dict)
+            and item.delivery_receipt.get("destination") == "pptx"
+            for item in artifacts
+        ) else "NOT_STARTED"
+    if normalized in {"canva", "canva design", "canva receipt"}:
+        return "PERSISTED" if any(
+            item.lifecycle.value == "CURRENT"
+            and isinstance(getattr(item, "delivery_receipt", None), dict)
+            and item.delivery_receipt.get("destination") == "canva"
+            for item in artifacts
+        ) else "NOT_STARTED"
+    return "NOT_VERIFIED"
+
+
 def _inline(value: Any, fallback: str = _UNKNOWN) -> str:
     if value is None:
         return fallback

@@ -36,6 +36,12 @@ until review and human acceptance, and report runtime, persistence, analysis,
 and deliverable statuses separately. Infrastructure repair may unblock work but
 must not be reported as completion of the approved analysis.
 
+Add presentation delivery behavior to `.agents/skills/foresight-delivery/`, not
+to the packaged participant registry. Delivery must validate accepted state,
+current presentation-spec provenance, one requested destination, and a durable
+receipt persisted through `AnalysisStore`; an unavailable adapter or local
+persistence failure must remain blocked or failed.
+
 ## Add a skill
 
 1. Create `src/foresight_os/skills/<skill-id>/SKILL.md` with a focused method,

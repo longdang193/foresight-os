@@ -11,7 +11,7 @@ from typing import Any
 from agent_framework import FunctionExecutor, WorkflowBuilder, WorkflowContext
 
 from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, StageInput
-from foresight_os.runtime.executors import AnalystExecutor, ReviewerExecutor
+from foresight_os.runtime.executors import AnalystExecutor, ReviewerExecutor, run_agent_with_tool_fallback
 from foresight_os.controller.budgets import BudgetState
 from foresight_os.domain.validation import ValidationError
 from foresight_os.domain.challenge import derive_finding_views
@@ -25,17 +25,13 @@ from foresight_os.runtime.metrics import (
     RunResult,
     RunCanceledError,
 )
-from foresight_os.runtime.capabilities import CapabilityResolver, CapabilityScope, ScopeOwnership
-from foresight_os.runtime.crawl4ai import bind_crawl4ai
-from foresight_os.runtime.external_signals import load_hosted_mcp_bindings
-from foresight_os.runtime.web_search import bind_web_search
+from foresight_os.runtime.capabilities import CapabilityScope, ScopeOwnership, prepare_capability_context
 from foresight_os.persistence.analysis_store import AnalysisStore, StageReceipt
 from foresight_os.persistence.ids import canonical_json_hash
-from foresight_os.runtime.page_retrieval import PageRetrievalCapability, bind_page_retrieval
-from foresight_os.runtime.local_toolbelt import bind_local_toolbelt
+from foresight_os.artifacts.brief import deliverable_status
 from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
 from foresight_os.controller.skills import SkillRegistry
-from foresight_os.analysis.result_committer import ANALYSIS_STAGE_RESULT_CONTRACT, CanonicalStageResult, analysis_stage_result_schema
+from foresight_os.analysis.result_committer import ANALYSIS_STAGE_RESULT_CONTRACT, CanonicalStageResult, analysis_stage_result_schema, decode_stage_output
 
 
 CanonicalResultCommitter = Callable[
@@ -84,21 +80,7 @@ async def _close_agents(agents: list[object]) -> list[BaseException]:
 
 
 def _workflow_output_value(output: object) -> object:
-    nested_response = getattr(output, "agent_response", None)
-    if nested_response is not None and nested_response is not output:
-        return _workflow_output_value(nested_response)
-    value = getattr(output, "value", None)
-    if value is not None:
-        return value
-    text = getattr(output, "text", None)
-    if text is None:
-        return output
-    if isinstance(text, str):
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            pass
-    return text
+    return decode_stage_output(output)
 
 
 async def _run_native_stage(
@@ -157,6 +139,37 @@ async def _run_native_stage(
     else:
         return [await agents[0].run(prompt)]
     tools_enabled = any(getattr(agent, "default_options", {}).get("tools") for agent in agents)
+    if tools_enabled and context.get("require_structured_output"):
+        options = {"response_format": context.get("structured_output_schema")}
+        if pattern == ExecutionPattern.CONCURRENT:
+            results = await asyncio.gather(
+                *[run_agent_with_tool_fallback(agent, prompt, options) for agent in agents]
+            )
+            if metrics is not None:
+                metrics.model_calls += len(agents)
+            return list(results)
+        if pattern == ExecutionPattern.GROUP_CHAT:
+            results: list[object] = []
+            current_prompt = prompt
+            for round_index in range(max_rounds):
+                agent = agents[round_index % len(agents)]
+                result = await run_agent_with_tool_fallback(agent, current_prompt, options)
+                results.append(result)
+                current_prompt = f"Challenge this proposal and return the required structured result:\n{result}"
+                if metrics is not None:
+                    metrics.model_calls += 1
+                    metrics.chat_rounds += 1
+            return results
+        results = []
+        current_prompt = prompt
+        for index, agent in enumerate(agents):
+            result = await run_agent_with_tool_fallback(agent, current_prompt, options)
+            results.append(result)
+            if index + 1 < len(agents):
+                current_prompt = f"Review this proposal and return the required structured result:\n{result}"
+            if metrics is not None:
+                metrics.model_calls += 1
+        return results
     if metrics is None or tools_enabled:
         result = await workflow.run(prompt)
         if metrics is not None and tools_enabled:
@@ -200,6 +213,27 @@ def _stage_input_payload(stage_input: object) -> dict[str, object]:
     if isinstance(stage_input, StageInput):
         return stage_input.to_payload()
     return {"decision_question": stage_input}
+
+
+def _synthesize_stage_outputs(stage: Any, outputs: list[object], failures: tuple[BaseException, ...] = (), *, allow_legacy_fallback: bool = False) -> object:
+    if len(outputs) == 1 and not failures:
+        return outputs[0]
+    if str(getattr(stage, "synthesis_policy", "")) != "aggregate-typed-results":
+        raise ValidationError(f"stage {getattr(stage, 'stage_id', 'stage')} requires an explicit synthesis policy")
+    if not outputs or not all(isinstance(item, Mapping) for item in outputs):
+        if allow_legacy_fallback:
+            return outputs[-1] if outputs else None
+        raise ValidationError("typed stage synthesis requires mapping outputs")
+    first = dict(outputs[0])
+    collections = ("evidence", "calculations", "claims", "implications", "recommendations", "artifacts", "relationships")
+    for key in collections:
+        first[key] = [entry for output in outputs for entry in list(output.get(key, []))]
+    first["assumptions"] = [entry for output in outputs for entry in list(output.get("assumptions", []))]
+    first["uncertainty"] = [entry for output in outputs for entry in list(output.get("uncertainty", []))]
+    first["monitoring_indicators"] = [entry for output in outputs for entry in list(output.get("monitoring_indicators", []))]
+    if failures:
+        first["uncertainty"].extend(f"participant failure: {type(error).__name__}" for error in failures)
+    return first
 
 
 def _effective_skill_ids(stage_skill_ids: tuple[str, ...], participant_skill_ids: tuple[str, ...]) -> tuple[str, ...]:
@@ -278,6 +312,7 @@ def _stage_fingerprints(
             for stage_id, output in dict(dependency_outputs).items()
         },
         "participants": tuple(asdict(participant) for participant in participant_configs),
+        "synthesis_policy": getattr(stage, "synthesis_policy", ""),
     }
     policy_payload = {
         "limits": getattr(stage, "limits", {}),
@@ -286,6 +321,7 @@ def _stage_fingerprints(
         "provider": getattr(stage, "provider", "local"),
         "model": getattr(stage, "model", "unspecified"),
         "reasoning_controls": getattr(stage, "reasoning_controls", {}),
+        "synthesis_policy": getattr(stage, "synthesis_policy", ""),
     }
     return (
         hashlib.sha256(json.dumps(semantic_payload, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")).hexdigest(),
@@ -432,7 +468,6 @@ async def run_recipe_async(
     context["scope"] = scope
     context["metrics"] = metrics
     context["budget"] = budget
-    context.setdefault("capability_resolver", CapabilityResolver())
     required_capabilities: set[str] = set()
     selected_skills_by_stage: dict[str, dict[str, tuple[object, ...]]] = {}
     for stage in recipe.stages or ():
@@ -448,34 +483,8 @@ async def run_recipe_async(
     if not recipe.stages:
         for participant in recipe.roles:
             required_capabilities.update(ParticipantConfig.from_mapping(participant).capability_ids)
-    context["required_capabilities"] = tuple(sorted(required_capabilities))
     context["selected_skills_by_stage"] = selected_skills_by_stage
-    local_bindings = context.setdefault("local_capabilities", {})
-    for name, binding in bind_local_toolbelt().items():
-        local_bindings.setdefault(name, binding)
-    if context.get("mcp_bindings") is not None:
-        context.setdefault("mcp_tools", {}).update(
-            {key: value for key, value in context["mcp_bindings"].items() if not required_capabilities or key in required_capabilities}
-        )
-    else:
-        if required_capabilities:
-            for capability_id, binding in load_hosted_mcp_bindings(
-                context.get("mcp_environment"),
-                required_capabilities=required_capabilities,
-            ).items():
-                if capability_id in required_capabilities:
-                    context.setdefault("mcp_tools", {}).setdefault(capability_id, binding)
-    if context.get("web_search_provider") is not None:
-        context.setdefault("adapters", {}).setdefault("web_search", bind_web_search(context["web_search_provider"]))
-    if context.get("page_retrieval") is not None:
-        context.setdefault("adapters", {}).setdefault("page_retrieval", bind_page_retrieval(context["page_retrieval"]))
-    elif context.get("page_retrieval_fixture_hosts") is not None:
-        context.setdefault("adapters", {}).setdefault(
-            "page_retrieval",
-            bind_page_retrieval(PageRetrievalCapability(fixture_hosts=set(context["page_retrieval_fixture_hosts"]))),
-        )
-    if context.get("crawl4ai") is not None:
-        context.setdefault("adapters", {}).setdefault("web_crawl", bind_crawl4ai(context["crawl4ai"]))
+    context = prepare_capability_context(tuple(sorted(required_capabilities)), context, scope=scope)
 
     def classify(error: BaseException) -> FailureClass:
         if isinstance(error, BudgetExceededError):
@@ -524,6 +533,13 @@ async def run_recipe_async(
         stage_context["stage_id"] = str(getattr(stage, "stage_id", "stage"))
         stage_context["selected_skills"] = selected_skills
         stage_context["selected_skills_by_participant"] = selected_skills_by_participant
+        dependency_records: dict[str, object] = {}
+        for dependency in tuple(getattr(stage, "dependencies", ())):
+            dependency_receipt = context.get("stage_receipts", {}).get(str(dependency))
+            for reference in tuple(getattr(dependency_receipt, "result_references", ())):
+                if reference in context.get("canonical_records", {}):
+                    dependency_records[reference] = context["canonical_records"][reference]
+        stage_context["dependency_records"] = dependency_records
         cache_key = _stage_cache_key(stage, stage_input, stage_skill_ids, selected_skills_by_participant)
         semantic_fingerprint, execution_policy_fingerprint = _stage_fingerprints(
             stage,
@@ -605,31 +621,38 @@ async def run_recipe_async(
                 raise BudgetExceededError("maximum concurrent branches exceeded before dispatch")
             if not budget.reserve(branches=branch_count):
                 raise BudgetExceededError("maximum concurrent branches exceeded before dispatch")
-        async def invoke() -> tuple[list[object], object]:
+        async def invoke(stage_prompt: str | None = None) -> tuple[list[object], object]:
+            prompt_value = stage_prompt or str(stage_input)
             if client is not None and pattern != ExecutionPattern.DIRECT:
-                native_outputs = await _run_native_stage(pattern, str(stage_input), client, participants, metrics, stage_context)
+                native_outputs = await _run_native_stage(pattern, prompt_value, client, participants, metrics, stage_context)
                 if pattern == ExecutionPattern.CONCURRENT:
-                    aggregate = ConcurrentAggregate(tuple(native_outputs))
                     metrics.branches = len(participants)
                     metrics.parallelism = metrics.branches
-                    return native_outputs, aggregate
-                return native_outputs, native_outputs[-1]
+                return native_outputs, _synthesize_stage_outputs(
+                    stage,
+                    native_outputs,
+                    allow_legacy_fallback=context.get("analysis_store") is None,
+                )
             if pattern == ExecutionPattern.DIRECT:
-                stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(str(stage_input))]
+                stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(prompt_value)]
             elif pattern == ExecutionPattern.CONCURRENT:
                 branch_count = len(participants) or 2
                 metrics.branches = branch_count
                 metrics.parallelism = branch_count
                 branch_results = await asyncio.gather(
-                    *[AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participant, f"participant-{index}"), stage_context).execute(str(stage_input)) for index, participant in enumerate(participants or ({"purpose": "participant"},) * branch_count, 1)],
+                    *[AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participant, f"participant-{index}"), stage_context).execute(prompt_value) for index, participant in enumerate(participants or ({"purpose": "participant"},) * branch_count, 1)],
                     return_exceptions=True,
                 )
                 results = tuple(item for item in branch_results if not isinstance(item, BaseException))
                 failures = tuple(item for item in branch_results if isinstance(item, BaseException))
-                aggregate = ConcurrentAggregate(results, failures)
-                return list(results), aggregate
+                return list(results), _synthesize_stage_outputs(
+                    stage,
+                    list(results),
+                    failures,
+                    allow_legacy_fallback=context.get("analysis_store") is None,
+                )
             elif pattern == ExecutionPattern.GROUP_CHAT:
-                stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(str(stage_input))]
+                stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(prompt_value)]
                 if not budget.reserve(rounds=1):
                     raise BudgetExceededError("maximum group chat rounds exceeded")
                 metrics.chat_rounds += 1
@@ -640,28 +663,47 @@ async def run_recipe_async(
                         raise BudgetExceededError("maximum group chat rounds exceeded")
                     metrics.chat_rounds += 1
             else:
-                stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(str(stage_input))]
+                stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(prompt_value)]
                 if len(participants) > 1 or pattern == ExecutionPattern.HANDOFF:
                     reviewer_prompt = f"Review this proposal:\n{stage_outputs[-1]}"
                     reviewer = participants[1] if len(participants) > 1 else {"purpose": "review"}
                     stage_outputs.append(await ReviewerExecutor(client, factory, ParticipantConfig.from_mapping(reviewer, "reviewer"), stage_context).execute(reviewer_prompt))
             if client is not None:
                 metrics.model_calls += len(stage_outputs)
-            return stage_outputs, stage_outputs[-1]
-        if max_timeout is not None:
-            stage_outputs, current = await asyncio.wait_for(invoke(), float(max_timeout))
-        else:
-            stage_outputs, current = await invoke()
+            return stage_outputs, _synthesize_stage_outputs(
+                stage,
+                stage_outputs,
+                allow_legacy_fallback=context.get("analysis_store") is None,
+            )
         committer = context.get("canonical_result_committer")
+        correction_prompt: str | None = None
+        while True:
+            if max_timeout is not None:
+                stage_outputs, current = await asyncio.wait_for(invoke(correction_prompt), float(max_timeout))
+            else:
+                stage_outputs, current = await invoke(correction_prompt)
+            if committer is None:
+                break
+            try:
+                canonical = committer(
+                    stage,
+                    current,
+                    {**stage_context, "stage_input": stage_input, "stage_outputs": tuple(stage_outputs)},
+                )
+                if inspect.isawaitable(canonical):
+                    canonical = await canonical
+                break
+            except ValidationError as error:
+                if not budget.correct():
+                    raise
+                metrics.correction_rounds += 1
+                correction_prompt = (
+                    f"{stage_input}\n\n"
+                    "The previous structured result was rejected by canonical validation. "
+                    f"Correct only the validation issue and return the complete result again: {error}"
+                )
         if committer is None:
             return stage_outputs, current
-        canonical = committer(
-            stage,
-            current,
-            {**stage_context, "stage_input": stage_input, "stage_outputs": tuple(stage_outputs)},
-        )
-        if inspect.isawaitable(canonical):
-            canonical = await canonical
         if canonical is None:
             return stage_outputs, current
         if not isinstance(canonical, CanonicalStageResult):
@@ -725,18 +767,10 @@ async def run_recipe_async(
         except (FileNotFoundError, ValueError):
             run_metrics.deliverable_status = {}
             return
-        artifacts = tuple(state.artifacts)
-        statuses: dict[str, str] = {}
-        for requested in brief.desired_deliverables:
-            normalized = str(requested).strip().lower()
-            matched = any(
-                normalized == str(artifact.kind).strip().lower()
-                or normalized in str(artifact.path).strip().lower()
-                or str(artifact.kind).strip().lower() in normalized
-                for artifact in artifacts
-            )
-            statuses[str(requested)] = "PERSISTED" if matched else "NOT_STARTED"
-        run_metrics.deliverable_status = statuses
+        run_metrics.deliverable_status = {
+            str(requested): deliverable_status(str(requested), state)
+            for requested in brief.desired_deliverables
+        }
 
     primary_error: BaseException | None = None
     try:
@@ -769,6 +803,7 @@ async def run_recipe_async(
                     )
                 ),
                 dependency_outputs=tuple((dependency, outputs_by_stage[dependency]) for dependency in dependencies),
+                research_needs=tuple(getattr(stage, "research_needs", ()) or ()),
             )
             stage_outputs, current = await dispatch_stage(stage, stage_input)
             outputs_by_stage[getattr(stage, "stage_id", f"stage-{len(outputs_by_stage) + 1}")] = current

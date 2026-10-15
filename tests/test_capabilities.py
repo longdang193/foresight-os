@@ -9,6 +9,7 @@ from foresight_os.runtime.capabilities import (
     CapabilityOwnership,
     CapabilityResolver,
     CapabilityScope,
+    prepare_capability_context,
 )
 from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
 
@@ -121,3 +122,38 @@ def test_factory_rejects_participant_capability_denial():
             ParticipantConfig("scout", "scout", "search", capability_ids=("missing",)),
             {"capability_resolver": resolver, "scope": CapabilityScope()},
         )
+
+
+def test_factory_guides_json_safe_spreadsheet_tool_arguments():
+    captured = {}
+
+    class Client:
+        def as_agent(self, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+    context = prepare_capability_context(("spreadsheet_read",), {"scope": CapabilityScope()}, human_approved=True)
+    AgentFactory(Client()).create(
+        ParticipantConfig("analyst", "analyst", "read a workbook", capability_ids=("spreadsheet_read",)),
+        context,
+    )
+
+    assert "omit limits" in captured["instructions"].lower()
+
+
+def test_prepare_capability_context_is_shared_and_preserves_fingerprints():
+    scope = CapabilityScope()
+
+    context = prepare_capability_context(
+        ("spreadsheet_read",),
+        {
+            "scope": scope,
+            "human_approved": True,
+            "capability_fingerprints": ("local-toolbelt-v1",),
+        },
+    )
+
+    assert context["scope"] is scope
+    assert context["required_capabilities"] == ("spreadsheet_read",)
+    assert context["capability_fingerprints"] == ("local-toolbelt-v1",)
+    assert context["capability_resolutions"]["spreadsheet_read"].available

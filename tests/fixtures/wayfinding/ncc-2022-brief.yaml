@@ -28,12 +28,6 @@ current_direction: Build a traceable category-by-channel scorecard and keep any 
 next_useful_step: Normalize MAT TY versus MAT YA and MAT 2YA measures, reconcile them with channel and consumer evidence, and open the category and channel decision questions for review.
 horizon: 2023 entry; 2023-2025 channel plan; stable-growth planning from 2024 onward
 consequence_level: high
-execution_intent:
-  required_patterns:
-    - sequential
-  required_capabilities:
-    - spreadsheet_read
-  source: wayfinding
 user_preferences:
   evidence_basis: supplied_workbook_first
   review: independent

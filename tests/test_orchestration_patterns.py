@@ -7,6 +7,7 @@ from agent_framework.orchestrations import HandoffBuilder
 from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, RecipeName, RecipeStage, make_recipe
 from foresight_os.controller.budgets import BudgetState
 from foresight_os.persistence.ids import canonical_json_hash
+from foresight_os.analysis.result_committer import decode_stage_output
 from foresight_os.runtime.workflow import CanonicalStageResult, _canonical_result_hash, _close_agents, _run_native_stage, _workflow_output_value, run_recipe_async
 from foresight_os.runtime.metrics import RunMetrics
 
@@ -73,6 +74,7 @@ def test_native_workflow_unwraps_wrapped_json_text_and_preserves_prose():
 
     assert _workflow_output_value(wrapped) == {"stage_id": "stage-1"}
     assert _workflow_output_value(prose) == "plain text"
+    assert decode_stage_output(wrapped) == {"stage_id": "stage-1"}
 
 
 def test_handoff_uses_native_builder_and_allowed_route():
@@ -95,6 +97,29 @@ def test_composed_native_stages_pass_outputs_and_settle_metrics():
     assert result.metrics.branches == 2
     assert result.metrics.chat_rounds == 4
     assert result.metrics.cleanup_complete
+
+
+def test_multi_participant_stage_synthesizes_typed_outputs_before_commit():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "one"}, {"id": "two"}),
+        "typed-result",
+        "typed-result",
+        {},
+        synthesis_policy="aggregate-typed-results",
+    )
+    from foresight_os.runtime.workflow import _synthesize_stage_outputs
+
+    result = _synthesize_stage_outputs(
+        stage,
+        [
+            {"evidence": [{"id": "e1"}], "claims": [], "calculations": [], "implications": [], "recommendations": [], "artifacts": [], "relationships": [], "assumptions": [], "uncertainty": [], "monitoring_indicators": []},
+            {"evidence": [{"id": "e2"}], "claims": [], "calculations": [], "implications": [], "recommendations": [], "artifacts": [], "relationships": [], "assumptions": [], "uncertainty": [], "monitoring_indicators": []},
+        ],
+    )
+
+    assert [item["id"] for item in result["evidence"]] == ["e1", "e2"]
 
 
 def test_admitted_native_execution_validates_the_approved_recipe_snapshot():

@@ -61,8 +61,7 @@ def _brief_from_fixture() -> WorkBrief:
 
 def test_ncc_fixture_round_trips_through_canonical_execution_path(tmp_path):
     brief = _brief_from_fixture()
-    assert brief.execution_intent.required_patterns == ("sequential",)
-    assert brief.execution_intent.required_capabilities == ("spreadsheet_read",)
+    assert brief.execution_intent is None
     assert all(stage.execution_intent is None for stage in brief.stages)
     assert [stage.stage_id for stage in brief.stages] == ["source-audit", "category-screen", "channel-screen", "joint-validation", "challenge-synthesis"]
     assert brief.stages[3].dependencies == ["category-screen", "channel-screen"]
@@ -80,11 +79,15 @@ def test_ncc_fixture_round_trips_through_canonical_execution_path(tmp_path):
 
     assert loaded == brief
     assert all("artifact_generation" not in stage.capabilities for stage in recipe.stages)
-    assert recipe.stages[-1].capabilities == ("domain_validation", "spreadsheet_read")
+    assert recipe.stages[-1].capabilities == ("domain_validation",)
+    assert recipe.stages[0].capabilities == ("spreadsheet_read", "domain_validation")
+    assert recipe.stages[1].capabilities == ("data_analysis", "calculation", "graph_context")
     assert "Trad.Trade" in rendered_brief
     assert "conditional growth bridge" in rendered_brief
-    assert "Required patterns: sequential" in rendered_brief
-    assert "Required capabilities: spreadsheet_read" in rendered_brief
+    assert "Required patterns:" not in rendered_brief
+    assert "Required capabilities:" not in rendered_brief
+    assert recipe.pattern == "sequential"
+    assert recipe.stages[-1].synthesis_policy == "aggregate-typed-results"
     assert "category-screen" in rendered_approval
     assert "joint-validation" in rendered_approval
     assert "map.md" not in rendered_brief

@@ -48,6 +48,12 @@ the shared gate, persists provisional analytical results, verifies recovery, and
 stops again for analytical review and human acceptance. Runtime settlement is
 not analytical completion.
 
+Accepted presentation delivery is a separate host-facing procedure under
+`.agents/skills/foresight-delivery/`. It validates the accepted revision and
+current presentation-spec hash, invokes one requested adapter, and persists a
+matching receipt through `AnalysisStore`. Provider success without local proof
+remains failed or blocked.
+
 ### 2. Controller and recipe
 
 The controller resolves policy into an `ExecutionRecipe`. A recipe names the
@@ -95,6 +101,11 @@ workflow is the sole writer of `StageReceipt`. Stage receipts record input and p
 skill hashes, capability fingerprints, result references and hashes, commit
 status, and provenance completeness. A receipt is reusable only when its
 fingerprints and committed result evidence still match the current stage.
+When a provider returns completed local tool results without a final message,
+the runtime performs one bounded no-tool structured retry using those transient
+results; malformed or empty output remains subject to canonical validation.
+Canonical validation may consume the recipe's bounded correction round, but it
+never invents references or upgrades rejected output.
 
 Approved execution reports four independent outcome dimensions: runtime
 settlement, persistence, analytical review/acceptance, and each requested
@@ -128,10 +139,11 @@ The local executive report is written to `artifacts/executive-report.md` from
 the committed analysis state. Presentation specifications are revision-bound,
 hash-checked, and either `CURRENT` or `DRAFT / UNVALIDATED`.
 
-Canva is an optional rendering boundary, not part of the analytical core. A
-presentation can be published only when it is current, human-approved, backed
-by an adapter, and accompanied by a matching durable delivery receipt. Local
-analysis and report generation do not require Canva authentication.
+Canva and PPTX are optional rendering boundaries, not part of the analytical
+core. A presentation can be delivered only when it is current, human-approved,
+backed by exactly one requested adapter, and accompanied by a matching durable
+delivery receipt. Local analysis and report generation do not require provider
+authentication.
 
 ## Boundaries and failure behavior
 

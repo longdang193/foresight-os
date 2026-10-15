@@ -10,6 +10,7 @@ from foresight_os.runtime.metrics import BudgetExceededError, FailureClass, RunM
 from foresight_os.runtime.capabilities import CapabilityDefinition, CapabilityUnavailableError, ExecutionMode, ForesightFunctionMiddleware, ScopeOwnership, CapabilityScope, instrument_tool
 from foresight_os.controller.budgets import BudgetState
 from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
+from foresight_os.runtime.executors import AnalystExecutor, ReviewerExecutor, run_agent_with_tool_fallback
 from foresight_os.runtime.workflow import run_recipe_async
 from foresight_os.runtime.local_toolbelt import data_analysis, spreadsheet_read
 
@@ -153,6 +154,75 @@ def test_agent_factory_preserves_participant_identity_and_profile_options():
     assert client.kwargs["id"] == "scout"
     assert client.kwargs["default_options"]["model"] == "configured-model"
     assert client.kwargs["default_options"]["response_format"] == {"type": "json"}
+
+
+@pytest.mark.parametrize("executor_type", (AnalystExecutor, ReviewerExecutor))
+def test_executor_passes_structured_output_schema_at_runtime(executor_type):
+    schema = {"type": "json_schema", "json_schema": {"name": "stage", "schema": {"type": "object"}}}
+    seen = {}
+
+    class CapturingAgent:
+        async def run(self, prompt, **kwargs):
+            seen.update(kwargs)
+            return SimpleNamespace(value={"status": "ready"}, text="")
+
+    class CapturingClient:
+        def as_agent(self, **kwargs):
+            return CapturingAgent()
+
+    executor = executor_type(
+        CapturingClient(),
+        participant=ParticipantConfig("participant", "participant", "test"),
+        run_context={"require_structured_output": True, "structured_output_schema": schema},
+    )
+
+    result = asyncio.run(executor.execute("prompt"))
+
+    assert result == {"status": "ready"}
+    assert seen["options"]["response_format"] == schema
+
+
+def test_tool_result_fallback_retries_without_tools_when_provider_returns_empty_final():
+    calls = []
+
+    class Agent:
+        async def run(self, prompt, **kwargs):
+            calls.append((prompt, kwargs))
+            if len(calls) == 1:
+                return SimpleNamespace(
+                    value=None,
+                    text="",
+                    messages=[
+                        SimpleNamespace(role="tool", contents=[SimpleNamespace(result={"cell": "B2"})]),
+                    ],
+                )
+            return SimpleNamespace(value={"status": "ready"}, text="", messages=[])
+
+    result = asyncio.run(run_agent_with_tool_fallback(Agent(), "inspect workbook", {"response_format": {"type": "json"}}))
+
+    assert result == {"status": "ready"}
+    assert calls[0][1]["options"] == {"response_format": {"type": "json"}}
+    assert calls[1][1]["tools"] == []
+    assert "B2" in calls[1][0]
+
+
+def test_tool_result_fallback_treats_provider_json_parse_errors_as_text():
+    class Response:
+        text = "{\"status\":\"ready\"}{\"extra\":true}"
+
+        @property
+        def value(self):
+            raise ValueError("invalid JSON")
+
+        messages = []
+
+    class Agent:
+        async def run(self, prompt, **kwargs):
+            return Response()
+
+    result = asyncio.run(run_agent_with_tool_fallback(Agent(), "prompt", {"response_format": {"type": "json"}}))
+
+    assert result == Response.text
 
 
 def test_agent_factory_applies_stage_model_and_reasoning_controls():

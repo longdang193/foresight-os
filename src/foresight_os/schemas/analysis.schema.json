@@ -66,7 +66,7 @@
     "calculation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "key", "formula", "input_ids", "output", "units", "source_locators"],
+      "required": ["id", "key", "formula", "input_ids", "output", "units", "source_locators", "verification_status"],
       "properties": {
         "id": { "type": "string", "minLength": 1 },
         "key": { "$ref": "#/$defs/measurement_key" },
@@ -74,7 +74,8 @@
         "input_ids": { "type": "array", "items": { "type": "string" } },
         "output": { "type": "number" },
         "units": { "type": "string", "minLength": 1 },
-        "source_locators": { "type": "array", "items": { "type": "string" } }
+        "source_locators": { "type": "array", "items": { "type": "string" } },
+        "verification_status": { "type": "string", "enum": ["VERIFIED", "NOT_VERIFIED"] }
       }
     },
     "analytical_record": {
@@ -125,7 +126,8 @@
         "kind": { "type": "string", "minLength": 1 },
         "path": { "type": "string", "minLength": 1 },
         "lifecycle": { "enum": ["CURRENT", "SUPERSEDED"] },
-        "relationship_ids": { "type": "array", "items": { "type": "string" } }
+        "relationship_ids": { "type": "array", "items": { "type": "string" } },
+        "delivery_receipt": { "type": ["object", "null"] }
       }
     },
     "relationship": {

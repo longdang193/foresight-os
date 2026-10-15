@@ -52,6 +52,8 @@ class PresentationSpec:
     slides: tuple[SlideSpec, ...]
     source_finding_ids: tuple[str, ...]
     spec_hash: str = ""
+    profile: str = "executive-six"
+    template_structure: tuple[str, ...] = ()
 
     def to_payload(self, *, include_hash: bool = True) -> dict[str, Any]:
         payload = asdict(self)
@@ -64,6 +66,16 @@ class PresentationSpec:
 class CanvaDeliveryReceipt:
     provider: str
     design_id: str
+    source_revision: int
+    presentation_spec_hash: str
+    confirmed_state: str
+    last_verified_at: str
+
+
+@dataclass(frozen=True)
+class PptxDeliveryReceipt:
+    provider: str
+    artifact_path: str
     source_revision: int
     presentation_spec_hash: str
     confirmed_state: str
@@ -87,6 +99,20 @@ def presentation_spec_fingerprint(spec: PresentationSpec) -> str:
 def _shorten(value: str, limit: int = 220) -> str:
     value = " ".join(str(value).split())
     return value if len(value) <= limit else value[: limit - 1].rstrip() + "…"
+
+
+def _citation_notes(state: AnalysisState, evidence_ids: tuple[str, ...]) -> tuple[str, ...]:
+    evidence = {item.id: item for item in state.evidence}
+    notes = []
+    for evidence_id in evidence_ids:
+        item = evidence.get(evidence_id)
+        if item is None:
+            continue
+        locator = item.source_locator
+        notes.append(
+            f"Citation {evidence_id}: {locator.file_version}; {locator.sheet}!{locator.range}; units={locator.units}."
+        )
+    return tuple(notes)
 
 
 def _normal_state_error(state: AnalysisState) -> str | None:
@@ -123,6 +149,7 @@ def _slide_for(
             f"Evidence IDs: {', '.join(evidence_ids) or 'none'}.",
         ]
         + ([f"Calculation IDs: {', '.join(calculation_ids)}."] if calculation_ids else [])
+        + list(_citation_notes(state, evidence_ids))
     )
     return SlideSpec(number, title, purpose, bullets, finding_ids, evidence_ids, calculation_ids, counterevidence_ids, uncertainty, disconfirmation, notes)
 
@@ -135,7 +162,17 @@ def compile_presentation(
     audience: str = "decision makers",
     title: str | None = None,
     provisional: bool = False,
+    profile: str = "executive-six",
+    template_structure: tuple[str, ...] | list[str] | None = None,
 ) -> PresentationSpec:
+    if profile not in {"executive-six", "case-competition", "user-template"}:
+        raise ValueError(f"unsupported presentation profile: {profile}")
+    structure = tuple(str(item) for item in (template_structure or ()))
+    if profile == "user-template" and not structure:
+        raise ValueError("user-template presentation requires a supplied structure")
+    if structure and len(structure) != 6:
+        raise ValueError("presentation template structure must define six slide titles")
+    slide_titles = structure or SLIDE_TITLES
     if not provisional:
         error = _normal_state_error(state)
         if error:
@@ -146,12 +183,19 @@ def compile_presentation(
     implications = [by_id[item.id] for item in state.implications if item.id in by_id]
     recommendations = [by_id[item.id] for item in state.recommendations if item.id in by_id]
     slides = (
-        _slide_for(1, SLIDE_TITLES[0], "Frame the decision, scope, and time horizon.", [], state, (f"Decision question: {_shorten(decision_question or 'Not specified')}.", f"Horizon: {_shorten(horizon)}.")),
-        _slide_for(2, SLIDE_TITLES[1], "Show the canonical evidence and analytical signals.", claims + implications, state),
-        _slide_for(3, SLIDE_TITLES[2], "Expose assumptions, uncertainty, and disconfirmation conditions.", claims + implications, state),
-        _slide_for(4, SLIDE_TITLES[3], "Present canonical implications and available options.", implications + recommendations, state),
-        _slide_for(5, SLIDE_TITLES[4], "State the accepted recommendation and its qualifications.", recommendations, state),
-        _slide_for(6, SLIDE_TITLES[5], "Define what to monitor and when to reassess.", recommendations + implications, state),
+        _slide_for(1, slide_titles[0], "Frame the decision, scope, and time horizon.", [], state, (f"Decision question: {_shorten(decision_question or 'Not specified')}.", f"Horizon: {_shorten(horizon)}.")),
+        _slide_for(2, slide_titles[1], "Show the canonical evidence and analytical signals.", claims + implications, state),
+        _slide_for(3, slide_titles[2], "Expose assumptions, uncertainty, and disconfirmation conditions.", claims + implications, state),
+        _slide_for(4, slide_titles[3], "Present canonical implications and available options.", implications + recommendations, state),
+        _slide_for(5, slide_titles[4], "State the accepted recommendation and its qualifications.", recommendations, state),
+        _slide_for(6, slide_titles[5], "Define what to monitor and when to reassess.", recommendations + implications, state, tuple(
+            dict.fromkeys(
+                [
+                    *(f"Monitor: {item}" for view in recommendations + implications for item in view.monitoring_indicators),
+                    *(f"Reassess if: {item}" for view in recommendations + implications for item in view.disconfirmation_conditions),
+                ]
+            )
+        )),
     )
     spec = PresentationSpec(
         investigation_id=state.investigation_id,
@@ -163,6 +207,8 @@ def compile_presentation(
         status="DRAFT / UNVALIDATED" if provisional else "CURRENT",
         slides=slides,
         source_finding_ids=tuple(item.target_id for item in views),
+        profile=profile,
+        template_structure=structure,
     )
     spec = replace(spec, spec_hash=presentation_spec_fingerprint(spec))
     validate_presentation_spec(spec, state, provisional=provisional)
@@ -170,8 +216,15 @@ def compile_presentation(
 
 
 def validate_presentation_spec(spec: PresentationSpec, state: AnalysisState, *, provisional: bool = False) -> None:
-    if len(spec.slides) != 6 or tuple(item.title for item in spec.slides) != SLIDE_TITLES:
-        raise ValueError("presentation spec must contain the fixed six-slide template")
+    if spec.profile not in {"executive-six", "case-competition", "user-template"}:
+        raise ValueError("presentation spec has an unsupported profile")
+    expected_titles = spec.template_structure or SLIDE_TITLES
+    if len(spec.slides) != 6 or tuple(item.title for item in spec.slides) != expected_titles:
+        raise ValueError("presentation spec must contain six declared slide titles")
+    if spec.profile == "case-competition" and len(spec.slides) > 20:
+        raise ValueError("case-competition presentation exceeds the twenty-slide limit")
+    if spec.profile == "user-template" and not spec.template_structure:
+        raise ValueError("user-template presentation requires a supplied structure")
     if spec.analysis_revision != state.revision:
         raise ValueError("presentation spec revision is stale")
     if spec.spec_hash != presentation_spec_fingerprint(spec):
@@ -211,6 +264,49 @@ def presentation_artifact(state: AnalysisState, spec: PresentationSpec, path: st
     return artifact, relationships
 
 
+def _validate_delivery_receipt(spec: PresentationSpec, receipt: CanvaDeliveryReceipt | PptxDeliveryReceipt, *, destination: str) -> None:
+    if receipt.source_revision != spec.analysis_revision or receipt.presentation_spec_hash != spec.spec_hash:
+        raise PresentationBoundaryError("delivery receipt does not match the presentation spec")
+    if not receipt.provider or receipt.confirmed_state not in {"CONFIRMED", "SUCCEEDED"}:
+        raise PresentationBoundaryError("delivery receipt is not successful")
+    if not receipt.last_verified_at:
+        raise PresentationBoundaryError("delivery receipt is missing verification time")
+    try:
+        verified_at = datetime.fromisoformat(receipt.last_verified_at.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise PresentationBoundaryError("delivery receipt has an invalid verification time") from error
+    if verified_at.tzinfo is None:
+        raise PresentationBoundaryError("delivery receipt verification time must include a timezone")
+    if destination == "canva" and (not isinstance(receipt, CanvaDeliveryReceipt) or not receipt.design_id):
+        raise PresentationBoundaryError("Canva receipt must include a design ID")
+    if destination == "pptx" and (not isinstance(receipt, PptxDeliveryReceipt) or not receipt.artifact_path):
+        raise PresentationBoundaryError("PPTX receipt must include an artifact path")
+
+
+def persist_delivery_receipt(store: Any, spec: PresentationSpec, receipt: CanvaDeliveryReceipt | PptxDeliveryReceipt, *, destination: str) -> AnalysisState:
+    if spec.status != "CURRENT":
+        raise PresentationBoundaryError("provisional presentation specs cannot be delivered")
+    _validate_delivery_receipt(spec, receipt, destination=destination)
+    artifact_id = f"artifact-presentation-{spec.spec_hash[:16]}"
+    payload = asdict(receipt)
+    payload["destination"] = destination
+    payload["presentation_artifact_id"] = artifact_id
+    try:
+        return store.save_delivery_receipt(artifact_id, payload)
+    except Exception as error:
+        raise PresentationBoundaryError("delivery succeeded but its local receipt could not be persisted") from error
+
+
+def verify_persisted_delivery_receipt(state: AnalysisState, spec: PresentationSpec, *, destination: str) -> None:
+    artifact_id = f"artifact-presentation-{spec.spec_hash[:16]}"
+    artifact = next((item for item in state.artifacts if item.id == artifact_id), None)
+    receipt = artifact.delivery_receipt if artifact is not None else None
+    if not isinstance(receipt, dict) or receipt.get("destination") != destination or receipt.get("presentation_spec_hash") != spec.spec_hash:
+        raise PresentationBoundaryError("persisted delivery receipt is missing or stale")
+    if receipt.get("source_revision") != spec.analysis_revision or receipt.get("confirmed_state") not in {"CONFIRMED", "SUCCEEDED"}:
+        raise PresentationBoundaryError("persisted delivery receipt does not match the presentation spec")
+
+
 def publish_to_canva(spec: PresentationSpec, adapter: CanvaAdapter | None = None, *, human_approved: bool = False) -> CanvaDeliveryReceipt:
     if spec.status != "CURRENT":
         raise PresentationBoundaryError("provisional presentation specs cannot be published")
@@ -221,6 +317,5 @@ def publish_to_canva(spec: PresentationSpec, adapter: CanvaAdapter | None = None
     receipt = adapter.publish(spec)
     if not isinstance(receipt, CanvaDeliveryReceipt):
         raise PresentationBoundaryError("Canva adapter must return a durable CanvaDeliveryReceipt")
-    if receipt.source_revision != spec.analysis_revision or receipt.presentation_spec_hash != spec.spec_hash or not receipt.design_id:
-        raise PresentationBoundaryError("Canva receipt does not match the presentation spec")
+    _validate_delivery_receipt(spec, receipt, destination="canva")
     return receipt

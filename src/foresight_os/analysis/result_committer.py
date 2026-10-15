@@ -13,6 +13,7 @@ from foresight_os.domain.models import (
     Assessment,
     Basis,
     CalculationRecord,
+    CalculationVerificationStatus,
     Evidence,
     Lifecycle,
     MeasurementKey,
@@ -48,7 +49,7 @@ _RECOGNIZED_FIELDS = frozenset(
 _MEASUREMENT_KEY_FIELDS = frozenset({"region", "measure", "period", "units", "scenario", "version"})
 _SOURCE_LOCATOR_FIELDS = frozenset({"file_version", "sheet", "range", "units", "transformation", "calculation"})
 _EVIDENCE_FIELDS = frozenset({"id", "source_locator", "version", "date", "excerpt", "limitations", "measurement_key"})
-_CALCULATION_FIELDS = frozenset({"id", "key", "input_ids", "formula", "output", "units", "source_locators"})
+_CALCULATION_FIELDS = frozenset({"id", "key", "input_ids", "formula", "output", "units", "source_locators", "verification_status"})
 _ANALYTICAL_RECORD_FIELDS = frozenset(
     {
         "id",
@@ -67,6 +68,26 @@ _ANALYTICAL_RECORD_FIELDS = frozenset(
 )
 _ARTIFACT_FIELDS = frozenset({"id", "kind", "path", "lifecycle", "relationship_ids"})
 _RELATIONSHIP_FIELDS = frozenset({"id", "from_id", "to_id", "relation_type"})
+
+
+def decode_stage_output(output: object) -> object:
+    """Unwrap provider response containers and decode one JSON text boundary."""
+
+    nested_response = getattr(output, "agent_response", None)
+    if nested_response is not None and nested_response is not output:
+        return decode_stage_output(nested_response)
+    value = getattr(output, "value", None)
+    if value is not None:
+        return value
+    text = getattr(output, "text", None)
+    if text is None:
+        return output
+    if isinstance(text, str):
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return text
+    return text
 
 
 def analysis_stage_result_schema() -> dict[str, Any]:
@@ -312,11 +333,14 @@ class CanonicalResultCommitter:
             current = _initial_analysis_state(self.investigation_id)
         if current.investigation_id != self.investigation_id:
             raise ValueError("canonical result investigation does not match the analysis store")
+        existing_records = context.get("dependency_records")
+        if existing_records is None:
+            existing_records = current.canonical_records()
         normalized = output if isinstance(output, StageAnalyticalResult) else normalize_stage_result(
             output,
             expected_stage_id=stage_id,
             expected_contract=contract,
-            existing_records=current.canonical_records(),
+            existing_records=existing_records,
         )
         if normalized.stage_id != stage_id or normalized.contract != contract:
             raise ValidationError("canonical result does not match the recipe stage contract")
@@ -571,13 +595,14 @@ def normalize_stage_result(
         source_locators = _text_list(item.get("source_locators", ()), f"calculations[{index}].source_locators")
         output = _finite_number(item.get("output"), f"calculations[{index}]")
         calculation = CalculationRecord(
-            id=deterministic_id("calculation", {"stage_id": stage_id, "key": asdict(key), "formula": formula, "input_ids": input_ids, "output": output, "units": units, "source_locators": source_locators}),
+            id=deterministic_id("calculation", {"stage_id": stage_id, "key": asdict(key), "formula": formula, "input_ids": input_ids, "output": output, "units": units, "source_locators": source_locators, "verification_status": CalculationVerificationStatus.NOT_VERIFIED.value}),
             key=key,
             formula=formula,
             input_ids=input_ids,
             output=output,
             units=units,
             source_locators=source_locators,
+            verification_status=CalculationVerificationStatus.NOT_VERIFIED,
         )
         _register_alias(item.get("id"), calculation.id, aliases, supplied_ids, canonical_ids, f"calculations[{index}]")
         if item.get("id") is not None:
@@ -594,8 +619,8 @@ def normalize_stage_result(
             _validate_fields(item, _ANALYTICAL_RECORD_FIELDS, f"{collection}[{index}]")
             statement = _required_text(item, "statement", f"{collection}[{index}]")
             basis = _enum_value(Basis, item.get("basis", "DERIVED"), f"{collection}[{index}].basis")
-            assessment = _enum_value(Assessment, item.get("assessment", "UNASSESSED"), f"{collection}[{index}].assessment")
-            lifecycle = _enum_value(Lifecycle, item.get("lifecycle", "CURRENT"), f"{collection}[{index}].lifecycle")
+            _enum_value(Assessment, item.get("assessment", "UNASSESSED"), f"{collection}[{index}].assessment")
+            _enum_value(Lifecycle, item.get("lifecycle", "CURRENT"), f"{collection}[{index}].lifecycle")
             evidence_ids = [
                 _resolve(
                     entry,
@@ -610,11 +635,11 @@ def normalize_stage_result(
             disconfirmation_conditions = _text_list(item.get("disconfirmation_conditions", []), f"{collection}[{index}].disconfirmation_conditions")
             monitoring_indicators = _text_list(item.get("monitoring_indicators", value.get("monitoring_indicators", [])), f"{collection}[{index}].monitoring_indicators")
             record = AnalyticalRecord(
-                id=deterministic_id(collection[:-1], {"stage_id": stage_id, "statement": statement, "basis": basis.value, "assessment": assessment.value, "evidence_ids": evidence_ids}),
+                id=deterministic_id(collection[:-1], {"stage_id": stage_id, "statement": statement, "basis": basis.value, "assessment": Assessment.UNASSESSED.value, "evidence_ids": evidence_ids}),
                 statement=statement,
                 basis=basis,
-                assessment=assessment,
-                lifecycle=lifecycle,
+                assessment=Assessment.UNASSESSED,
+                lifecycle=Lifecycle.CURRENT,
                 evidence_ids=evidence_ids,
                 relationship_ids=[],
                 assumptions=tuple(assumptions),
@@ -673,8 +698,11 @@ def normalize_stage_result(
             relationship_rule(relation_type)
         except ValueError as exc:
             raise ValidationError(str(exc)) from exc
+        relationship_id = deterministic_id("relationship", {"stage_id": stage_id, "from_id": from_id, "to_id": to_id, "relation_type": relation_type})
+        if relationship_id in relationship_aliases:
+            continue
         relationship = Relationship(
-            id=deterministic_id("relationship", {"stage_id": stage_id, "from_id": from_id, "to_id": to_id, "relation_type": relation_type}),
+            id=relationship_id,
             from_id=from_id,
             to_id=to_id,
             relation_type=relation_type,

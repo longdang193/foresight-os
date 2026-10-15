@@ -13,20 +13,20 @@
     "decision_question": "Which Personal Care category should Cosluxe Nature enter first in Vietnam, and which channels should it prioritize across 2023-2025 to support stable growth of at least 8% from 2024 onward?",
     "horizon": "2023 entry; 2023-2025 channel plan; stable-growth planning from 2024 onward",
     "relevant_constraints": "Vietnam Personal Care category performance in offline channels using MAT 2YA, MAT YA, and MAT TY measures ending September 2022.|Vietnam Personal Care ecommerce category growth, new launches, and survival of new launches.|Vietnam consumer price-tier movement, essential and routine category perceptions, channel penetration, and shopping frequency.|Vietnam traditional-trade regional and urban-rural dynamics, modern-trade store universe, and channel value sales.|Cosluxe Nature portfolio focus, premium image, and natural-ingredient positioning as stated in the case materials.|Vietnam entry begins in 2023 and stable-growth planning begins from 2024 onward.|Workbook facts retain their stated source, period, units, and dummy-case status.|First entry category means the initial priority category, not exclusion of the remainder of the portfolio.|Offline and ecommerce measures are not comparable until definitions, periods, and units are normalized.|The 8% growth ambition is a planning target, not an observed result.|Confirm launch budget, margin, supply, distribution, and portfolio-cannibalization constraints with the client.|Confirm whether the recommendation optimizes revenue, profit, market share, reach, or a weighted combination.|Confirm acceptable external desk-research scope and evidence-quality threshold for claims beyond the workbook.|Reconcile category definitions and channel boundaries across the named workbook sheets.|Validate whether the 2023-2025 horizon and 2024 growth baseline match the client's planning calendar.",
-    "required_capabilities": "spreadsheet_read",
+    "required_capabilities": "",
     "required_participants": "",
     "selected_patterns": "sequential",
-    "selection_rationale": "valid explicit execution-pattern override",
-    "selection_source": "explicit_override",
+    "selection_rationale": "ordered Work Brief stages",
+    "selection_source": "work_brief",
     "unresolved_capabilities": ""
   },
   "name": "ANALYZE_REVIEW",
   "partial_result": "no accepted recommendation; preserve partial state",
   "pattern": "sequential",
   "purpose": "ANALYZE_REVIEW",
-  "rationale": "valid explicit execution-pattern override",
+  "rationale": "ordered Work Brief stages",
   "reuse_policy": "reuse only committed, provenance-complete matching receipts",
-  "review_policy": "stage output validation",
+  "review_policy": "required review policy applies at the final stage",
   "roles": [
     {
       "profile": "normal",
@@ -87,7 +87,7 @@
       ],
       "pattern": "sequential",
       "provider": "local",
-      "rationale": "explicit_override: valid explicit execution-pattern override; selected sequential for stage source-audit",
+      "rationale": "work_brief: ordered Work Brief stages; selected sequential for stage source-audit",
       "reasoning_controls": {},
       "relevant_constraints": [
         "Vietnam Personal Care category performance in offline channels using MAT 2YA, MAT YA, and MAT TY measures ending September 2022.",
@@ -112,12 +112,14 @@
         "ResearchNeed(kind=<ResearchNeedKind.VALIDATION: 'VALIDATION'>, query='Confirm whether offline, ecommerce, value, volume, store, penetration, and frequency measures can be compared directly.', source_hint='data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx; source notes and headers')",
         "ResearchNeed(kind=<ResearchNeedKind.STRUCTURED_DATA: 'STRUCTURED_DATA'>, query='Explicitly decide whether the hidden Others sheet is included in the first-pass evidence boundary.', source_hint='data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx; hidden sheet Others')"
       ],
+      "result_contract": "analysis-stage-result/v1",
       "reuse_policy": "reuse only committed, provenance-complete matching receipts",
       "review_checks": [
         "stage output validation"
       ],
       "skill_ids": [],
-      "stage_id": "source-audit"
+      "stage_id": "source-audit",
+      "synthesis_policy": "aggregate-typed-results"
     },
     {
       "access_scope": [
@@ -131,8 +133,7 @@
       "capabilities": [
         "data_analysis",
         "calculation",
-        "graph_context",
-        "spreadsheet_read"
+        "graph_context"
       ],
       "completion_rule": "stage output matches expected result and required checks pass",
       "decision_question": "Which Personal Care category should Cosluxe Nature enter first in Vietnam, and which channels should it prioritize across 2023-2025 to support stable growth of at least 8% from 2024 onward?",
@@ -162,8 +163,7 @@
           "capability_ids": [
             "data_analysis",
             "calculation",
-            "graph_context",
-            "spreadsheet_read"
+            "graph_context"
           ],
           "id": "analyst",
           "profile": "normal",
@@ -174,7 +174,7 @@
       ],
       "pattern": "sequential",
       "provider": "local",
-      "rationale": "explicit_override: valid explicit execution-pattern override; selected sequential for stage category-screen",
+      "rationale": "work_brief: ordered Work Brief stages; selected sequential for stage category-screen",
       "reasoning_controls": {},
       "relevant_constraints": [
         "Vietnam Personal Care category performance in offline channels using MAT 2YA, MAT YA, and MAT TY measures ending September 2022.",
@@ -198,12 +198,14 @@
         "ResearchNeed(kind=<ResearchNeedKind.QUANTITATIVE_ANALYSIS: 'QUANTITATIVE_ANALYSIS'>, query='Compare ecommerce growth, new-launch intensity, and survival of new launches by candidate category.', source_hint='data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx; sheet Ecommerce')",
         "ResearchNeed(kind=<ResearchNeedKind.EXISTING_EVIDENCE: 'EXISTING_EVIDENCE'>, query='Connect consumer essentiality, face or body care relevance, price-tier movement, and Cosluxe portfolio fit to category hypotheses.', source_hint='data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx; sheets Consumer and Case')"
       ],
+      "result_contract": "analysis-stage-result/v1",
       "reuse_policy": "reuse only committed, provenance-complete matching receipts",
       "review_checks": [
         "stage output validation"
       ],
       "skill_ids": [],
-      "stage_id": "category-screen"
+      "stage_id": "category-screen",
+      "synthesis_policy": "aggregate-typed-results"
     },
     {
       "access_scope": [
@@ -218,8 +220,7 @@
         "data_analysis",
         "calculation",
         "graph_context",
-        "domain_validation",
-        "spreadsheet_read"
+        "domain_validation"
       ],
       "completion_rule": "stage output matches expected result and required checks pass",
       "decision_question": "Which Personal Care category should Cosluxe Nature enter first in Vietnam, and which channels should it prioritize across 2023-2025 to support stable growth of at least 8% from 2024 onward?",
@@ -250,8 +251,7 @@
             "data_analysis",
             "calculation",
             "graph_context",
-            "domain_validation",
-            "spreadsheet_read"
+            "domain_validation"
           ],
           "id": "analyst",
           "profile": "normal",
@@ -262,7 +262,7 @@
       ],
       "pattern": "sequential",
       "provider": "local",
-      "rationale": "explicit_override: valid explicit execution-pattern override; selected sequential for stage channel-screen",
+      "rationale": "work_brief: ordered Work Brief stages; selected sequential for stage channel-screen",
       "reasoning_controls": {},
       "relevant_constraints": [
         "Vietnam Personal Care category performance in offline channels using MAT 2YA, MAT YA, and MAT TY measures ending September 2022.",
@@ -286,12 +286,14 @@
         "ResearchNeed(kind=<ResearchNeedKind.EXISTING_EVIDENCE: 'EXISTING_EVIDENCE'>, query='Reconcile channel penetration and shopping frequency with store-universe and regional or urban-rural dynamics.', source_hint='data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx; sheets Consumer, Modern Trade, Trad.Trade')",
         "ResearchNeed(kind=<ResearchNeedKind.VALIDATION: 'VALIDATION'>, query=\"Test whether proposed phasing is consistent with the chosen category's launch and distribution requirements.\", source_hint='Derived category-channel scorecard')"
       ],
+      "result_contract": "analysis-stage-result/v1",
       "reuse_policy": "reuse only committed, provenance-complete matching receipts",
       "review_checks": [
         "stage output validation"
       ],
       "skill_ids": [],
-      "stage_id": "channel-screen"
+      "stage_id": "channel-screen",
+      "synthesis_policy": "aggregate-typed-results"
     },
     {
       "access_scope": [
@@ -303,8 +305,7 @@
         "dependency_safe_topology_reduction"
       ],
       "capabilities": [
-        "domain_validation",
-        "spreadsheet_read"
+        "domain_validation"
       ],
       "completion_rule": "stage output matches expected result and required checks pass",
       "decision_question": "Which Personal Care category should Cosluxe Nature enter first in Vietnam, and which channels should it prioritize across 2023-2025 to support stable growth of at least 8% from 2024 onward?",
@@ -333,8 +334,7 @@
       "participants": [
         {
           "capability_ids": [
-            "domain_validation",
-            "spreadsheet_read"
+            "domain_validation"
           ],
           "id": "analyst",
           "profile": "normal",
@@ -345,7 +345,7 @@
       ],
       "pattern": "sequential",
       "provider": "local",
-      "rationale": "explicit_override: valid explicit execution-pattern override; selected sequential for stage joint-validation",
+      "rationale": "work_brief: ordered Work Brief stages; selected sequential for stage joint-validation",
       "reasoning_controls": {},
       "relevant_constraints": [
         "Vietnam Personal Care category performance in offline channels using MAT 2YA, MAT YA, and MAT TY measures ending September 2022.",
@@ -367,12 +367,14 @@
       "research_needs": [
         "ResearchNeed(kind=<ResearchNeedKind.VALIDATION: 'VALIDATION'>, query='Reconcile category choice, channel sequence, consumer relevance, portfolio fit, and the conditional 8% growth bridge.', source_hint='Outputs from source-audit, category-screen, and channel-screen')"
       ],
+      "result_contract": "analysis-stage-result/v1",
       "reuse_policy": "reuse only committed, provenance-complete matching receipts",
       "review_checks": [
         "stage output validation"
       ],
       "skill_ids": [],
-      "stage_id": "joint-validation"
+      "stage_id": "joint-validation",
+      "synthesis_policy": "aggregate-typed-results"
     },
     {
       "access_scope": [
@@ -384,8 +386,7 @@
         "dependency_safe_topology_reduction"
       ],
       "capabilities": [
-        "domain_validation",
-        "spreadsheet_read"
+        "domain_validation"
       ],
       "completion_rule": "stage output matches expected result and required checks pass",
       "decision_question": "Which Personal Care category should Cosluxe Nature enter first in Vietnam, and which channels should it prioritize across 2023-2025 to support stable growth of at least 8% from 2024 onward?",
@@ -417,8 +418,7 @@
       "participants": [
         {
           "capability_ids": [
-            "domain_validation",
-            "spreadsheet_read"
+            "domain_validation"
           ],
           "id": "analyst",
           "profile": "normal",
@@ -428,8 +428,7 @@
         },
         {
           "capability_ids": [
-            "domain_validation",
-            "spreadsheet_read"
+            "domain_validation"
           ],
           "id": "reviewer",
           "profile": "normal",
@@ -440,7 +439,7 @@
       ],
       "pattern": "sequential",
       "provider": "local",
-      "rationale": "explicit_override: valid explicit execution-pattern override; selected sequential for stage challenge-synthesis",
+      "rationale": "work_brief: ordered Work Brief stages; selected sequential for stage challenge-synthesis",
       "reasoning_controls": {},
       "relevant_constraints": [
         "Vietnam Personal Care category performance in offline channels using MAT 2YA, MAT YA, and MAT TY measures ending September 2022.",
@@ -463,12 +462,14 @@
         "ResearchNeed(kind=<ResearchNeedKind.VALIDATION: 'VALIDATION'>, query='Challenge the recommendation against alternative categories, channel phasing, data limitations, and the 8% growth target.', source_hint='All prior stage outputs and the supplied workbook')",
         "ResearchNeed(kind=<ResearchNeedKind.VALIDATION: 'VALIDATION'>, query='Draft a text-based executive presentation outline within the suggested maximum of 20 slides.', source_hint='data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx; sheet Case')"
       ],
+      "result_contract": "analysis-stage-result/v1",
       "reuse_policy": "reuse only committed, provenance-complete matching receipts",
       "review_checks": [
-        "stage output validation"
+        "independent review"
       ],
       "skill_ids": [],
-      "stage_id": "challenge-synthesis"
+      "stage_id": "challenge-synthesis",
+      "synthesis_policy": "aggregate-typed-results"
     }
   ]
 }

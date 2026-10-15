@@ -11,8 +11,7 @@ from foresight_os.controller.recipes import ExecutionRecipe
 from foresight_os.analysis.result_committer import ANALYSIS_STAGE_RESULT_CONTRACT, CanonicalResultCommitter, analysis_stage_result_schema
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.persistence.ids import canonical_json_hash
-from foresight_os.runtime.capabilities import CapabilityResolver, CapabilityUnavailableError
-from foresight_os.runtime.local_toolbelt import bind_local_toolbelt
+from foresight_os.runtime.capabilities import CapabilityUnavailableError, prepare_capability_context
 from foresight_os.runtime.workflow import run_recipe_async
 
 
@@ -54,25 +53,20 @@ def _preflight_recipe(store: AnalysisStore, recipe: ExecutionRecipe, run_context
         if getattr(stage, "pattern", None) is None:
             raise ExecutionAdmissionError(f"stage {stage.stage_id} has no execution pattern")
         pattern = getattr(getattr(stage, "pattern", None), "value", getattr(stage, "pattern", ""))
-        if str(pattern) == "concurrent":
-            raise ExecutionAdmissionError(
-                f"stage {stage.stage_id} uses unsupported concurrent pattern for canonical typed persistence"
-            )
+        output_count = len(getattr(stage, "participants", ()))
+        if str(pattern) in {"concurrent", "handoff", "group_chat"} or output_count > 1:
+            if str(getattr(stage, "synthesis_policy", "")) != "aggregate-typed-results":
+                raise ExecutionAdmissionError(f"stage {stage.stage_id} requires an explicit synthesis policy")
     required = _required_capability_ids(recipe)
     if required:
-        context = {
-            **run_context,
-            "local_capabilities": {**bind_local_toolbelt(), **dict(run_context.get("local_capabilities", {}))},
-            "mcp_tools": dict(run_context.get("mcp_bindings", run_context.get("mcp_tools", {}))),
-            "human_approved": True,
-        }
         try:
-            resolved = CapabilityResolver().resolve(required, context)
+            prepare_capability_context(
+                required,
+                run_context,
+                human_approved=True,
+            )
         except (CapabilityUnavailableError, RuntimeError, ValueError) as exc:
             raise ExecutionAdmissionError(f"capability preflight failed: {exc}") from exc
-        unavailable = [f"{key}: {item.reason}" for key, item in resolved.items() if not item.available]
-        if unavailable:
-            raise ExecutionAdmissionError(f"capability preflight failed: {'; '.join(unavailable)}")
     if not isinstance(analysis_stage_result_schema(), dict):
         raise ExecutionAdmissionError("structured output schema is unavailable")
 
@@ -167,6 +161,7 @@ class ExecutionGate:
             "approval_projection_fingerprint": admission.approval_fingerprint,
             "run_fresh_stages": tuple(admission.run_decisions.get("run_fresh_stages", ())),
             "fallback_on_stale_reuse": admission.run_decisions.get("fallback_on_stale_reuse", "run_fresh"),
+            "human_approved": True,
             "analysis_store": self.store,
             "require_structured_output": True,
             "structured_output_schema": analysis_stage_result_schema(),

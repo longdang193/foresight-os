@@ -83,6 +83,8 @@ def test_factory_binds_exact_stage_id_for_structured_results():
     assert "omit the edge rather than inventing a relationship" in captured["instructions"]
     assert "stage result must be self-contained" in captured["instructions"]
     assert "Do not reference an ID that appears only in dependency_outputs" in captured["instructions"]
+    assert "never use a spreadsheet coordinate" in captured["instructions"]
+    assert "Do not emit duplicate relationship edges" in captured["instructions"]
 
 
 def test_stage_local_skills_do_not_leak_between_stages():
