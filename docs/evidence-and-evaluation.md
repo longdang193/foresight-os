@@ -75,6 +75,16 @@ workbook remains an external local fixture. Receipts may record its hash and
 sanitized source metadata, but workbook bytes and raw provider payloads must
 not enter Git or durable analytical state.
 
+The deterministic probe intentionally stops before the independent
+`decision_challenge` and human acceptance phases. To complete the approved
+validation lifecycle, pass the receipt and an authorized typed
+`ReviewResult(check_id="decision_challenge")` to
+`foresight_os.analysis.ncc_validation.persist_ncc_validation_reviews`. The
+adapter validates the pending revision and target IDs, persists typed
+`ReviewRecord` values for every required check, and leaves human acceptance
+pending unless an explicit acceptance decision is supplied. It rejects stale
+receipts and receipts that omit the required decision challenge.
+
 ## Evaluation levels
 
 The evaluation contract compares progressively richer conditions:
