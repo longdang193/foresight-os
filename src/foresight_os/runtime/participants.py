@@ -64,6 +64,12 @@ class AgentFactory:
         required_skill_capabilities = skill_registry.required_capabilities(selected_skills) if skill_registry is not None else ()
         required_capabilities = tuple(dict.fromkeys((*config.capability_ids, *required_skill_capabilities)))
         instructions = f"Act as the {config.role} responsible for {config.purpose} and return a structured result."
+        if "spreadsheet_read" in required_capabilities:
+            instructions += (
+                " For spreadsheet_read, pass source as a string and use the selected sheet or range "
+                "to bound the read. Omit limits unless a concrete measured safety bound is required; "
+                "do not invent low max_rows or max_cells values that could truncate the selected sheet."
+            )
         if context.get("require_structured_output") and context.get("stage_id"):
             instructions += (
                 f" The output field stage_id must be exactly {context['stage_id']!r}; "
@@ -83,6 +89,12 @@ class AgentFactory:
                 " The stage result must be self-contained: include every evidence record used by "
                 "this stage in the current payload, and re-declare dependency evidence before "
                 "referencing it. Do not reference an ID that appears only in dependency_outputs."
+            )
+            instructions += (
+                " Every calculations[].input_ids value must match an id declared in the current "
+                "evidence or calculations collection; never use a spreadsheet coordinate, source "
+                "locator, or tool-result label as an input id. Do not emit duplicate relationship "
+                "edges with the same endpoints and relation type."
             )
         kwargs: dict[str, Any] = {
             "id": config.id,
@@ -105,6 +117,9 @@ class AgentFactory:
             kwargs.setdefault("default_options", {})["response_format"] = context["structured_output_schema"]
         tools = context.get("tools_by_participant", {}).get(config.id)
         middleware = []
+        provider_middleware = context.get("provider_call_middleware")
+        if provider_middleware is not None:
+            middleware.append(provider_middleware)
         if tools is None and required_capabilities and context.get("capability_resolver") is not None:
             participant_context = dict(context)
             participant_context["participant_data_scope"] = config.data_scope

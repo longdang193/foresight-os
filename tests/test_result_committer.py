@@ -16,7 +16,9 @@ from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.persistence.ids import canonical_json_hash
 from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, RecipeStage, RecipeName, StageInput, make_recipe
 from foresight_os.domain.models import AnalysisState, Revision, SourceLocator, Evidence
-from foresight_os.runtime.workflow import _stage_cache_key, run_recipe_async
+from foresight_os.runtime.metrics import BudgetExceededError
+import foresight_os.runtime.workflow as workflow_module
+from foresight_os.runtime.workflow import CanonicalStageResult, _stage_cache_key, _synthesize_stage_outputs, run_recipe_async
 
 
 def _payload(**overrides):
@@ -123,6 +125,15 @@ def test_duplicate_provider_aliases_are_rejected():
         normalize_stage_result(duplicate)
 
 
+def test_duplicate_relationship_edges_are_canonicalized_once():
+    duplicate = _payload()
+    duplicate["relationships"].append(dict(duplicate["relationships"][0]))
+
+    result = normalize_stage_result(duplicate)
+
+    assert len(result.relationships) == 1
+
+
 @pytest.mark.parametrize("output", [True, float("nan"), float("inf"), "not-a-number"])
 def test_invalid_calculation_output_is_rejected(output):
     payload = _payload(
@@ -172,6 +183,68 @@ def test_artifact_relationship_aliases_are_resolved():
     result = normalize_stage_result(payload)
 
     assert result.artifacts[0].relationship_ids == [result.relationships[0].id]
+
+
+def test_synthesized_artifact_payload_remains_provider_compatible(tmp_path):
+    stage = RecipeStage("stage-1", ExecutionPattern.CONCURRENT, ({"id": "one"}, {"id": "two"}), "prompt", "typed-result", {})
+    artifact = {"id": "provider-artifact", "kind": "report", "path": "work/report.md", "relationship_ids": []}
+    payload = _payload(evidence=[], claims=[], relationships=[], artifacts=[artifact])
+    synthesized = _synthesize_stage_outputs(stage, [payload, payload])
+
+    committer = CanonicalResultCommitter(AnalysisStore(tmp_path / "case"), "case")
+    result = committer(stage, synthesized, {})
+
+    assert result.result_references
+
+
+def test_multi_participant_validation_uses_correction_budget(monkeypatch):
+    base = make_recipe(RecipeName.DIRECT)
+    stage = RecipeStage("stage-1", ExecutionPattern.CONCURRENT, ({"id": "one"}, {"id": "two"}), "prompt", "typed-result", {})
+    recipe = ExecutionRecipe(
+        base.name,
+        base.pattern,
+        base.roles,
+        base.max_agent_steps,
+        base.max_correction_rounds,
+        4,
+        base.completion,
+        base.escalation,
+        base.partial_result,
+        stages=(stage,),
+    )
+    synthesis_calls = 0
+    native_calls = 0
+
+    async def fake_native(*args, **kwargs):
+        nonlocal native_calls
+        native_calls += 1
+        return [{"status": "raw"}, {"status": "raw"}]
+
+    def fake_synthesis(*args, **kwargs):
+        nonlocal synthesis_calls
+        synthesis_calls += 1
+        if synthesis_calls == 1:
+            raise ValidationError("invalid aggregate")
+        return {"status": "ready"}
+
+    monkeypatch.setattr(workflow_module, "_run_native_stage", fake_native)
+    monkeypatch.setattr(workflow_module, "_synthesize_stage_outputs", fake_synthesis)
+
+    def committer(stage, output, context):
+        return CanonicalStageResult(("result",), (canonical_json_hash(output),), output)
+
+    result = asyncio.run(
+        run_recipe_async(
+            recipe,
+            "question",
+            client=object(),
+            run_id="aggregate-correction",
+            run_context={"canonical_result_committer": committer},
+        )
+    )
+
+    assert result.metrics.correction_rounds == 1
+    assert native_calls == 2
 
 
 def test_schema_is_strict_and_binds_contract():
@@ -273,6 +346,33 @@ def test_current_provider_alias_cannot_redirect_existing_canonical_reference(tmp
 
     assert second.output["claims"][0]["evidence_ids"] == [prior_evidence_id]
     assert len(store.load_pending().evidence) == 2
+
+
+def test_committer_resolves_only_declared_dependency_records(tmp_path):
+    store = AnalysisStore(tmp_path / "case")
+    committer = CanonicalResultCommitter(store, "case")
+    first_stage = type("Stage", (), {"stage_id": "stage-1", "result_contract": ANALYSIS_STAGE_RESULT_CONTRACT})()
+    first = committer(first_stage, _payload(), {})
+    evidence_id = next(item for item in first.result_references if item.startswith("evidence-"))
+    second_stage = type("Stage", (), {"stage_id": "stage-2", "result_contract": ANALYSIS_STAGE_RESULT_CONTRACT})()
+    second_payload = _payload(
+        stage_id="stage-2",
+        evidence=[],
+        claims=[{**_payload()["claims"][0], "evidence_ids": [evidence_id], "relationship_ids": []}],
+        relationships=[],
+    )
+
+    committer(second_stage, second_payload, {"dependency_records": {evidence_id: first.canonical_records[evidence_id]}})
+
+    with pytest.raises(ValidationError, match="unknown reference"):
+        committer(second_stage, second_payload, {"dependency_records": {}})
+
+
+def test_participant_cannot_assign_assessment_or_supersede_lifecycle():
+    result = normalize_stage_result(_payload())
+
+    assert result.claims[0].assessment.value == "UNASSESSED"
+    assert result.claims[0].lifecycle.value == "CURRENT"
 
 
 def test_current_relationship_alias_cannot_redirect_existing_relationship_reference(tmp_path):
@@ -388,7 +488,7 @@ def test_workflow_writes_receipt_only_after_committer_returns_verified_state(tmp
     )
 
     class Agent:
-        async def run(self, prompt):
+        async def run(self, prompt, **kwargs):
             return SimpleNamespace(value=_payload(), text="")
 
     class Client:
@@ -415,3 +515,89 @@ def test_workflow_writes_receipt_only_after_committer_returns_verified_state(tmp
     assert result.metrics.runtime_status == "SETTLED"
     assert result.metrics.persistence_status == "PERSISTED"
     assert result.metrics.analysis_status == "PENDING_REVIEW"
+
+
+def test_workflow_uses_one_correction_round_for_canonical_validation_feedback():
+    base = make_recipe(RecipeName.DIRECT)
+    stage = RecipeStage("stage-1", ExecutionPattern.DIRECT, ({"id": "analyst", "purpose": "analyze"},), "prompt", "typed-result", {})
+    recipe = ExecutionRecipe(
+        base.name,
+        base.pattern,
+        base.roles,
+        base.max_agent_steps,
+        base.max_correction_rounds,
+        base.max_total_agent_calls,
+        base.completion,
+        base.escalation,
+        base.partial_result,
+        stages=(stage,),
+    )
+    prompts = []
+
+    class Agent:
+        async def run(self, prompt, **kwargs):
+            prompts.append(prompt)
+            return SimpleNamespace(value={"status": "invalid" if len(prompts) == 1 else "ready"}, text="")
+
+    class Client:
+        def as_agent(self, **kwargs):
+            return Agent()
+
+    def committer(stage, output, context):
+        if len(prompts) == 1:
+            raise ValidationError("unknown reference: relationships[0].from_id -> missing")
+        return CanonicalStageResult(("result",), (canonical_json_hash(output),), output)
+
+    result = asyncio.run(
+        run_recipe_async(
+            recipe,
+            "question",
+            client=Client(),
+            run_id="canonical-correction",
+            run_context={"canonical_result_committer": committer},
+        )
+    )
+
+    assert result.outputs[-1]["status"] == "ready"
+    assert result.metrics.correction_rounds == 1
+    assert len(prompts) == 2
+    assert "canonical validation" in prompts[1]
+
+
+def test_canonical_correction_retry_reserves_agent_call_budget():
+    base = make_recipe(RecipeName.DIRECT)
+    stage = RecipeStage("stage-1", ExecutionPattern.DIRECT, ({"id": "analyst", "purpose": "analyze"},), "prompt", "typed-result", {})
+    recipe = ExecutionRecipe(
+        base.name,
+        base.pattern,
+        base.roles,
+        base.max_agent_steps,
+        base.max_correction_rounds,
+        1,
+        base.completion,
+        base.escalation,
+        base.partial_result,
+        stages=(stage,),
+    )
+
+    class Agent:
+        async def run(self, prompt, **kwargs):
+            return SimpleNamespace(value={"status": "invalid"}, text="")
+
+    class Client:
+        def as_agent(self, **kwargs):
+            return Agent()
+
+    def committer(stage, output, context):
+        raise ValidationError("canonical rejection")
+
+    with pytest.raises(BudgetExceededError, match="agent calls"):
+        asyncio.run(
+            run_recipe_async(
+                recipe,
+                "question",
+                client=Client(),
+                run_id="canonical-correction-budget",
+                run_context={"canonical_result_committer": committer},
+            )
+        )

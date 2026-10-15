@@ -1,14 +1,18 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from agent_framework import Agent, AgentResponse, ChatResponse, ChatResponseUpdate, Content, Message, ResponseStream
 from agent_framework.orchestrations import HandoffBuilder
 
 from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, RecipeName, RecipeStage, make_recipe
 from foresight_os.controller.budgets import BudgetState
 from foresight_os.persistence.ids import canonical_json_hash
-from foresight_os.runtime.workflow import CanonicalStageResult, _canonical_result_hash, _close_agents, _run_native_stage, _workflow_output_value, run_recipe_async
-from foresight_os.runtime.metrics import RunMetrics
+from foresight_os.domain.validation import ValidationError
+from foresight_os.analysis.result_committer import decode_stage_output
+from foresight_os.runtime.workflow import CanonicalStageResult, _canonical_result_hash, _close_agents, _run_native_stage, _synthesize_stage_outputs, _workflow_output_value, run_recipe_async
+from foresight_os.runtime.metrics import BudgetExceededError, RunMetrics
 
 
 class FakeChatClient:
@@ -33,6 +37,15 @@ class FakeChatClient:
         return Agent(self, **kwargs)
 
 
+class CountingChatClient(FakeChatClient):
+    def __init__(self):
+        self.calls = 0
+
+    def get_response(self, messages, **kwargs):
+        self.calls += 1
+        return super().get_response(messages, **kwargs)
+
+
 def _recipe(patterns: tuple[ExecutionPattern, ...]) -> ExecutionRecipe:
     base = make_recipe(RecipeName.ANALYZE_REVIEW)
     stages = tuple(
@@ -45,7 +58,7 @@ def _recipe(patterns: tuple[ExecutionPattern, ...]) -> ExecutionRecipe:
         base.roles,
         base.max_agent_steps,
         base.max_correction_rounds,
-        base.max_total_agent_calls,
+        12,
         base.completion,
         base.escalation,
         base.partial_result,
@@ -58,6 +71,27 @@ def test_native_sequential_concurrent_and_group_chat_execute_with_installed_buil
     for pattern in (ExecutionPattern.SEQUENTIAL, ExecutionPattern.CONCURRENT, ExecutionPattern.GROUP_CHAT):
         outputs = asyncio.run(_run_native_stage(pattern, "hello", client, [{"purpose": "one"}, {"purpose": "two"}]))
         assert outputs
+
+
+def test_native_provider_budget_is_reserved_before_model_dispatch():
+    client = CountingChatClient()
+    metrics = RunMetrics("budget-boundary", "SEQUENTIAL", "sequential")
+    budget = BudgetState(5, 1, 0)
+
+    with pytest.raises(BudgetExceededError, match="agent calls"):
+        asyncio.run(
+            _run_native_stage(
+                ExecutionPattern.SEQUENTIAL,
+                "hello",
+                client,
+                [{"purpose": "one"}],
+                metrics,
+                {"budget": budget, "reserve_agent_call": budget.call},
+            )
+        )
+
+    assert client.calls == 0
+    assert metrics.model_calls == 0
 
 
 def test_native_workflow_unwraps_structured_agent_response_values():
@@ -73,6 +107,7 @@ def test_native_workflow_unwraps_wrapped_json_text_and_preserves_prose():
 
     assert _workflow_output_value(wrapped) == {"stage_id": "stage-1"}
     assert _workflow_output_value(prose) == "plain text"
+    assert decode_stage_output(wrapped) == {"stage_id": "stage-1"}
 
 
 def test_handoff_uses_native_builder_and_allowed_route():
@@ -80,6 +115,65 @@ def test_handoff_uses_native_builder_and_allowed_route():
     agents = [client.as_agent(id=f"participant-{i}", instructions="test", require_per_service_call_history_persistence=True) for i in (1, 2)]
     workflow = HandoffBuilder(participants=agents, output_from="all").with_start_agent(agents[0]).add_handoff(agents[0], [agents[1]]).build()
     assert len(workflow.get_executors_list()) >= 2
+
+
+def test_structured_tool_handoff_preserves_native_routing(monkeypatch):
+    captured = {}
+
+    class ToolAgent:
+        def __init__(self, agent_id):
+            self.id = agent_id
+            self.client = SimpleNamespace()
+            self.default_options = {"tools": [object()]}
+
+        async def close(self):
+            return None
+
+    class ToolClient:
+        def as_agent(self, **kwargs):
+            agent = ToolAgent(kwargs["id"])
+            captured.setdefault("agents", []).append(agent)
+            return agent
+
+    class Workflow:
+        async def run(self, prompt):
+            captured["prompt"] = prompt
+            return SimpleNamespace(get_outputs=lambda: ["participant-1"])
+
+    class Builder:
+        def __init__(self, participants, output_from):
+            captured["participants"] = participants
+
+        def with_start_agent(self, agent):
+            captured["start_agent"] = agent.id
+            return self
+
+        def add_handoff(self, source, targets):
+            captured["handoffs"] = [(source.id, tuple(target.id for target in targets))]
+            return self
+
+        def build(self):
+            return Workflow()
+
+    monkeypatch.setattr("agent_framework.orchestrations.HandoffBuilder", Builder)
+
+    outputs = asyncio.run(
+        _run_native_stage(
+            ExecutionPattern.HANDOFF,
+            "hello",
+            ToolClient(),
+            [
+                {"id": "participant-1", "purpose": "one", "handoff_targets": ("participant-2",)},
+                {"id": "participant-2", "purpose": "two"},
+                {"id": "participant-3", "purpose": "three"},
+            ],
+            run_context={"require_structured_output": True, "structured_output_schema": {"type": "object"}},
+        )
+    )
+
+    assert outputs == ["participant-1"]
+    assert captured["start_agent"] == "participant-1"
+    assert captured["handoffs"] == [("participant-1", ("participant-2",))]
 
 
 def test_composed_native_stages_pass_outputs_and_settle_metrics():
@@ -95,6 +189,111 @@ def test_composed_native_stages_pass_outputs_and_settle_metrics():
     assert result.metrics.branches == 2
     assert result.metrics.chat_rounds == 4
     assert result.metrics.cleanup_complete
+
+
+def test_multi_participant_stage_synthesizes_typed_outputs_before_commit():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "one"}, {"id": "two"}),
+        "typed-result",
+        "typed-result",
+        {},
+        synthesis_policy="aggregate-typed-results",
+    )
+    from foresight_os.runtime.workflow import _synthesize_stage_outputs
+
+    result = _synthesize_stage_outputs(
+        stage,
+        [
+            {"evidence": [{"id": "e1"}], "claims": [], "calculations": [], "implications": [], "recommendations": [], "artifacts": [], "relationships": [], "assumptions": [], "uncertainty": [], "monitoring_indicators": []},
+            {"evidence": [{"id": "e2"}], "claims": [], "calculations": [], "implications": [], "recommendations": [], "artifacts": [], "relationships": [], "assumptions": [], "uncertainty": [], "monitoring_indicators": []},
+        ],
+    )
+
+    assert [item["id"] for item in result["evidence"]] == ["e1", "e2"]
+
+
+def test_multi_participant_stage_deduplicates_identical_canonical_records():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "one"}, {"id": "two"}),
+        "typed-result",
+        "typed-result",
+        {},
+        synthesis_policy="aggregate-typed-results",
+    )
+
+    result = _synthesize_stage_outputs(
+        stage,
+        [
+            {"evidence": [{"id": "e1", "statement": "same"}], "claims": [], "calculations": [], "implications": [], "recommendations": [], "artifacts": [], "relationships": [], "assumptions": [], "uncertainty": [], "monitoring_indicators": []},
+            {"evidence": [{"id": "e1", "statement": "same"}], "claims": [], "calculations": [], "implications": [], "recommendations": [], "artifacts": [], "relationships": [], "assumptions": [], "uncertainty": [], "monitoring_indicators": []},
+        ],
+    )
+
+    assert result["evidence"] == [{"id": "e1", "statement": "same"}]
+
+
+def test_multi_participant_stage_rejects_conflicting_canonical_records():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "one"}, {"id": "two"}),
+        "typed-result",
+        "typed-result",
+        {},
+        synthesis_policy="aggregate-typed-results",
+    )
+
+    with pytest.raises(ValidationError, match="conflicting canonical record"):
+        _synthesize_stage_outputs(
+            stage,
+            [
+                {"evidence": [{"id": "e1", "statement": "first"}], "claims": [], "calculations": [], "implications": [], "recommendations": [], "artifacts": [], "relationships": [], "assumptions": [], "uncertainty": [], "monitoring_indicators": []},
+                {"evidence": [{"id": "e1", "statement": "second"}], "claims": [], "calculations": [], "implications": [], "recommendations": [], "artifacts": [], "relationships": [], "assumptions": [], "uncertainty": [], "monitoring_indicators": []},
+            ],
+        )
+
+
+def test_multi_participant_stage_deduplicates_equivalent_records_with_different_aliases():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "one"}, {"id": "two"}),
+        "typed-result",
+        "typed-result",
+        {},
+        synthesis_policy="aggregate-typed-results",
+    )
+    common = {
+        "contract": "analysis-stage-result/v1",
+        "stage_id": "stage-1",
+        "calculations": [],
+        "claims": [],
+        "implications": [],
+        "recommendations": [],
+        "artifacts": [],
+        "relationships": [],
+        "assumptions": [],
+        "uncertainty": [],
+        "monitoring_indicators": [],
+        "evidence": [{
+            "source_locator": {"file_version": "workbook-v1", "sheet": "Summary", "range": "B2", "units": "percent", "transformation": "none", "calculation": "observed"},
+            "version": "v1",
+            "date": "2026-01-01",
+            "excerpt": "same signal",
+            "limitations": [],
+            "measurement_key": None,
+        }],
+    }
+    first = {**common, "evidence": [{**common["evidence"][0], "id": "analyst-evidence"}]}
+    second = {**common, "evidence": [{**common["evidence"][0], "id": "reviewer-evidence"}]}
+
+    result = _synthesize_stage_outputs(stage, [first, second])
+
+    assert len(result["evidence"]) == 1
 
 
 def test_admitted_native_execution_validates_the_approved_recipe_snapshot():
@@ -153,7 +352,7 @@ def test_handoff_metrics_report_observed_transfer_not_recipe_shape():
         )
     )
 
-    assert result.metrics.model_calls == 3
+    assert result.metrics.model_calls == 1
     assert result.metrics.handoffs == 0
 
 

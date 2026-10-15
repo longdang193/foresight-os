@@ -7,6 +7,7 @@ import sys
 from foresight_os.analysis.result_committer import ANALYSIS_STAGE_RESULT_CONTRACT, CanonicalResultCommitter
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.wayfinding import create_work_brief
+from foresight_os.domain.models import AnalysisState, CalculationRecord, Evidence, MeasurementKey, Revision, SourceLocator
 
 
 def _payload():
@@ -100,3 +101,22 @@ print(json.dumps({
     assert payload["revision_status"] == "PENDING_REVIEW"
     assert payload["deliverables"]["executive report"] == "PERSISTED"
     assert payload["finding_views"] == 0
+
+
+def test_legacy_calculation_without_verification_status_reloads_unverified(tmp_path: Path):
+    store = AnalysisStore(tmp_path / "legacy")
+    state = AnalysisState(
+        "legacy",
+        1,
+        evidence=[Evidence("e1", SourceLocator("hash", "Sheet", "A1", "units", "none", "source"), "v1", "2026", "1")],
+        calculations=[CalculationRecord("calculation-1", MeasurementKey("scope", "measure", "2026", "units"), "x", ["e1"], 1.0, "units", ["hash:Sheet!A1"])],
+        revisions=[Revision("revision-1", 1, "legacy", ["calculation-1"])],
+    )
+    store.save_analysis(state)
+    value = json.loads(store.analysis_path.read_text(encoding="utf-8"))
+    value["calculations"][0].pop("verification_status")
+    store.analysis_path.write_text(json.dumps(value), encoding="utf-8")
+
+    loaded = store.load_analysis()
+
+    assert loaded.calculations[0].verification_status.value == "NOT_VERIFIED"

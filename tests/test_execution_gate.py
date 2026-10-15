@@ -116,10 +116,10 @@ def test_unsupported_result_contract_blocks_before_provider_dispatch(tmp_path):
     assert provider_calls == 0
 
 
-def test_concurrent_canonical_stage_blocks_before_provider_dispatch(tmp_path):
+def test_concurrent_canonical_stage_requires_synthesis_before_provider_dispatch(tmp_path):
     store = prepared_store(tmp_path)
     recipe = store.load_recipe()
-    store.save_recipe(replace(recipe, stages=tuple(replace(stage, pattern=ExecutionPattern.CONCURRENT) for stage in recipe.stages)))
+    store.save_recipe(replace(recipe, stages=tuple(replace(stage, pattern=ExecutionPattern.CONCURRENT, synthesis_policy="single-output") for stage in recipe.stages)))
     approve_recipe(store, store.load_recipe())
     provider_calls = 0
 
@@ -129,6 +129,6 @@ def test_concurrent_canonical_stage_blocks_before_provider_dispatch(tmp_path):
             provider_calls += 1
             return object()
 
-    with pytest.raises(ExecutionAdmissionError, match="unsupported concurrent pattern"):
+    with pytest.raises(ExecutionAdmissionError, match="requires an explicit synthesis policy"):
         asyncio.run(ExecutionGate(store).execute(prompt="Question", client=Client()))
     assert provider_calls == 0

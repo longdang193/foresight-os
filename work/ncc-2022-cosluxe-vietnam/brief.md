@@ -186,17 +186,6 @@ user_preferences:
   review: independent
   audience: Cosluxe Nature business-planning and strategy stakeholders
   presentation_limit_slides: 20
-execution_intent:
-  required_patterns:
-  - sequential
-  preferred_patterns: []
-  required_participants: []
-  preferred_participants: []
-  required_capabilities:
-  - spreadsheet_read
-  preferred_capabilities: []
-  preferred_reasoning_controls: {}
-  source: wayfinding
 ---
 
 # Work Brief
@@ -256,9 +245,7 @@ Which Personal Care category should Cosluxe Nature enter first in Vietnam, and w
 
 ## Execution intent
 
-- Required patterns: sequential
-- Required capabilities: spreadsheet_read
-- Intent source: wayfinding
+- not specified
 
 ## Proposed investigation
 

@@ -17,6 +17,7 @@ from foresight_os.domain.models import (
     Basis,
     Evidence,
     CalculationRecord,
+    CalculationVerificationStatus,
     Invalidation,
     Lifecycle,
     Relationship,
@@ -248,6 +249,32 @@ class AnalysisStore:
         with FileLock(str(self.lock_path)):
             self._write_validated(value)
 
+    def save_delivery_receipt(self, artifact_id: str, receipt: dict[str, object]) -> AnalysisState:
+        with FileLock(str(self.lock_path)):
+            if self.pending_analysis_path.exists():
+                raise ValueError("cannot persist delivery receipt while a pending analysis revision exists")
+            state = self.load_accepted()
+            source_revision = receipt.get("source_revision")
+            if state.revision_status.value != "ACCEPTED" or source_revision != state.revision:
+                raise ValueError("cannot persist delivery receipt for a non-current accepted revision")
+            artifacts = []
+            found = False
+            for artifact in state.artifacts:
+                if artifact.id == artifact_id:
+                    if artifact.kind != "presentation_spec":
+                        raise ValueError("delivery receipt must attach to a presentation artifact")
+                    if artifact.id in state.invalidation.stale_artifact_ids or artifact.lifecycle.value != "CURRENT":
+                        raise ValueError("cannot persist delivery receipt for a stale presentation artifact")
+                    artifacts.append(replace(artifact, delivery_receipt=dict(receipt)))
+                    found = True
+                else:
+                    artifacts.append(artifact)
+            if not found:
+                raise ValueError(f"unknown artifact for delivery receipt: {artifact_id}")
+            updated = replace(state, artifacts=artifacts)
+            self._write_validated(validate_analysis(updated))
+            return updated
+
     def commit_revision(self, state: AnalysisState, expected_revision: int, accepted: bool) -> AnalysisState:
         with FileLock(str(self.lock_path)):
             current = self._load_path(self.analysis_path) if self.analysis_path.exists() else None
@@ -359,6 +386,7 @@ class AnalysisStore:
                 item["output"],
                 item["units"],
                 item["source_locators"],
+                CalculationVerificationStatus(item.get("verification_status", "NOT_VERIFIED")),
             )
             for item in value.get("calculations", [])
         ]
@@ -403,6 +431,7 @@ class AnalysisStore:
                     item["path"],
                     Lifecycle(item["lifecycle"]),
                     item["relationship_ids"],
+                    item.get("delivery_receipt"),
                 )
                 for item in value["artifacts"]
             ],

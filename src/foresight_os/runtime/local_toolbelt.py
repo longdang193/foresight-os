@@ -16,7 +16,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import openpyxl
 
-from foresight_os.domain.models import CalculationRecord, Evidence, MeasurementKey, SourceLocator
+from foresight_os.domain.models import CalculationRecord, CalculationVerificationStatus, Evidence, MeasurementKey, SourceLocator
 from foresight_os.domain.validation import validate_analysis, validate_evidence_candidate
 
 
@@ -56,6 +56,24 @@ class ToolbeltLimits:
     max_result_rows: int = 10_000
 
 
+def _coerce_toolbelt_limits(value: ToolbeltLimits | Mapping[str, Any] | None) -> ToolbeltLimits:
+    if value is None or isinstance(value, ToolbeltLimits):
+        return value or ToolbeltLimits()
+    if not isinstance(value, Mapping):
+        raise ToolbeltError("toolbelt limits must be structured")
+    fields = (
+        "max_bytes",
+        "max_expanded_bytes",
+        "max_rows",
+        "max_cells",
+        "max_merged_ranges",
+        "max_merged_cells_per_range",
+        "max_total_merged_cells",
+        "max_result_rows",
+    )
+    return ToolbeltLimits(**{name: int(value[name]) for name in fields if name in value})
+
+
 class WorkbookReadCache:
     def __init__(self, max_entries: int = 8, max_bytes: int = 50_000_000) -> None:
         self.max_entries = max(1, max_entries)
@@ -82,7 +100,7 @@ class WorkbookReadCache:
         if previous is not None:
             self._bytes -= previous[1]
         while self._entries and (len(self._entries) >= self.max_entries or self._bytes + estimated > self.max_bytes):
-            _, (_, size) = self._entries.pop(next(iter(self._entries)))
+            _, size = self._entries.pop(next(iter(self._entries)))
             self._bytes -= size
         self._entries[key] = (result, estimated)
         self._bytes += estimated
@@ -102,7 +120,7 @@ class WorkbookReadCache:
         if previous is not None:
             self._bytes -= previous[1]
         while self._analysis_entries and (len(self._analysis_entries) >= self.max_entries or self._bytes + estimated > self.max_bytes):
-            _, (_, size) = self._analysis_entries.pop(next(iter(self._analysis_entries)))
+            _, size = self._analysis_entries.pop(next(iter(self._analysis_entries)))
             self._bytes -= size
         self._analysis_entries[key] = (result, estimated)
         self._bytes += estimated
@@ -134,6 +152,37 @@ class SheetSelection:
     include_hidden_rows: bool = False
 
 
+def _coerce_sheet_selection(value: SheetSelection | Mapping[str, Any] | None) -> SheetSelection | None:
+    if value is None or isinstance(value, SheetSelection):
+        return value
+    if isinstance(value, str):
+        return SheetSelection(sheet_names=(value,))
+    if not isinstance(value, Mapping):
+        raise ToolbeltError("spreadsheet selection must be structured")
+
+    def pairs(name: str, singular_name: str) -> tuple[tuple[str, str], ...]:
+        result = []
+        entries = value.get(name, ()) or ()
+        if not entries and value.get(singular_name) is not None:
+            entries = (value[singular_name],)
+        for item in entries:
+            if not isinstance(item, Sequence) or len(item) != 2:
+                raise ToolbeltError(f"spreadsheet selection {name} entries must contain two values")
+            result.append((str(item[0]), str(item[1])))
+        return tuple(result)
+
+    sheet_names = value.get("sheet_names", ()) or ()
+    if not sheet_names and value.get("sheet") is not None:
+        sheet_names = (value["sheet"],)
+    return SheetSelection(
+        sheet_names=tuple(str(item) for item in sheet_names),
+        ranges=pairs("ranges", "range"),
+        tables=pairs("tables", "table"),
+        include_hidden=bool(value.get("include_hidden", False)),
+        include_hidden_rows=bool(value.get("include_hidden_rows", False)),
+    )
+
+
 @dataclass(frozen=True)
 class CellProvenance:
     workbook_sha256: str
@@ -153,6 +202,26 @@ class TypedMeasurement:
     provenance: CellProvenance
     cross_sheet_references: tuple[str, ...] = ()
     cross_sheet_cells: tuple[tuple[str, str], ...] = ()
+    trusted: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "value": self.value.value if isinstance(self.value, ExcelError) else self.value,
+            "data_type": self.data_type,
+            "formula": self.formula,
+            "cached_value": self.cached_value.value if isinstance(self.cached_value, ExcelError) else self.cached_value,
+            "formula_status": self.formula_status.value,
+            "provenance": {
+                "workbook_sha256": self.provenance.workbook_sha256,
+                "sheet": self.provenance.sheet,
+                "coordinate": self.provenance.coordinate,
+                "range": self.provenance.range,
+            },
+            "cross_sheet_references": list(self.cross_sheet_references),
+            "cross_sheet_cells": [list(item) for item in self.cross_sheet_cells],
+            "trusted": self.trusted,
+        }
 
 
 @dataclass(frozen=True)
@@ -176,6 +245,71 @@ class TypedTable:
             return tuple(str(item).strip() for item in self.headers[0])
         return tuple(" ".join(str(part) for part in parts if str(part).strip()).strip() for parts in zip(*self.headers, strict=False))
 
+    def to_dict(self) -> dict[str, Any]:
+        compact_rows = []
+        compact_row_provenance = []
+        compact_row_measurements = []
+        for index, row in enumerate(self.rows):
+            if not any(value not in (None, "") for value in row):
+                continue
+            provenance = self.row_provenance[index] if index < len(self.row_provenance) else ()
+            measurements = self.row_measurements[index] if index < len(self.row_measurements) else ()
+            compact_rows.append(list(row))
+            compact_row_provenance.append(
+                [
+                    {
+                        "workbook_sha256": item.workbook_sha256,
+                        "sheet": item.sheet,
+                        "coordinate": item.coordinate,
+                        "range": item.range,
+                    }
+                    for value, item in zip(row, provenance, strict=False)
+                    if value not in (None, "")
+                ]
+            )
+            compact_row_measurements.append([item.to_dict() for item in measurements])
+        return {
+            "id": self.id,
+            "name": self.name,
+            "sheet": self.sheet,
+            "headers": [list(row) for row in self.headers],
+            "rows": compact_rows,
+            "row_provenance": compact_row_provenance,
+            "row_measurements": compact_row_measurements,
+            "row_count": len(self.rows),
+            "omitted_blank_row_count": len(self.rows) - len(compact_rows),
+            "hidden": self.hidden,
+            "source_range": self.source_range,
+            "related_provenance": [
+                {
+                    "workbook_sha256": item.workbook_sha256,
+                    "sheet": item.sheet,
+                    "coordinate": item.coordinate,
+                    "range": item.range,
+                }
+                for item in self.related_provenance
+            ],
+        }
+
+
+_AUTHORITATIVE_MEASUREMENTS: dict[tuple[str, str, str], TypedMeasurement] = {}
+_AUTHORITATIVE_CALCULATIONS: dict[tuple[str, str], CalculationRecord] = {}
+_AUTHORITATIVE_RECORD_LIMIT = ToolbeltLimits().max_cells
+
+
+def _remember_authoritative_measurements(measurements: Iterable[TypedMeasurement]) -> None:
+    for measurement in measurements:
+        key = (measurement.provenance.workbook_sha256, measurement.id, measurement.provenance.range)
+        _AUTHORITATIVE_MEASUREMENTS[key] = measurement
+    while len(_AUTHORITATIVE_MEASUREMENTS) > _AUTHORITATIVE_RECORD_LIMIT:
+        _AUTHORITATIVE_MEASUREMENTS.pop(next(iter(_AUTHORITATIVE_MEASUREMENTS)))
+
+
+def _remember_authoritative_calculation(record: CalculationRecord, workbook_hash: str) -> None:
+    _AUTHORITATIVE_CALCULATIONS[(workbook_hash, record.id)] = record
+    while len(_AUTHORITATIVE_CALCULATIONS) > _AUTHORITATIVE_RECORD_LIMIT:
+        _AUTHORITATIVE_CALCULATIONS.pop(next(iter(_AUTHORITATIVE_CALCULATIONS)))
+
 
 @dataclass(frozen=True)
 class SheetSummary:
@@ -187,6 +321,17 @@ class SheetSummary:
     merged_ranges: tuple[str, ...]
     tables: tuple[str, ...]
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "state": self.state,
+            "max_row": self.max_row,
+            "max_column": self.max_column,
+            "hidden_rows": list(self.hidden_rows),
+            "merged_ranges": list(self.merged_ranges),
+            "tables": list(self.tables),
+        }
+
 
 @dataclass(frozen=True)
 class WorkbookReadResult:
@@ -196,6 +341,23 @@ class WorkbookReadResult:
     tables: tuple[TypedTable, ...]
     measurements: tuple[TypedMeasurement, ...]
     warnings: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        serialized_measurements = [
+            item.to_dict()
+            for item in self.measurements
+            if item.value not in (None, "") or item.formula is not None
+        ]
+        return {
+            "source": self.source,
+            "workbook_sha256": self.workbook_sha256,
+            "sheets": [item.to_dict() for item in self.sheets],
+            "tables": [item.to_dict() for item in self.tables],
+            "measurements": serialized_measurements,
+            "measurement_count": len(self.measurements),
+            "omitted_blank_measurement_count": len(self.measurements) - len(serialized_measurements),
+            "warnings": list(self.warnings),
+        }
 
 
 @dataclass(frozen=True)
@@ -286,6 +448,18 @@ def _in_selection(sheet: str, selection: SheetSelection | None) -> bool:
     return selection is None or not selection.sheet_names or sheet in selection.sheet_names
 
 
+def _implicit_xlsx_bounds(ws) -> tuple[int, int, int, int] | None:
+    used_cells = [cell for cell in getattr(ws, "_cells", {}).values() if cell.value is not None]
+    if not used_cells:
+        return None
+    return (
+        1,
+        1,
+        max(cell.column for cell in used_cells),
+        max(cell.row for cell in used_cells),
+    )
+
+
 def _check_cancel(cancel_check: Callable[[], bool] | None) -> None:
     if cancel_check and cancel_check():
         raise ToolbeltError("cancelled")
@@ -358,7 +532,7 @@ def _read_delimited(source: Path, selection: SheetSelection | None, limits: Tool
         for column_number, value in enumerate(row, 1):
             coordinate = f"{openpyxl.utils.get_column_letter(col_start + column_number - 1)}{row_start + row_number - 1}"
             locator = CellProvenance(digest, sheet, coordinate, f"{sheet}!{coordinate}")
-            measurements.append(TypedMeasurement(f"{digest[:12]}:{sheet}:{coordinate}", value, _excel_type(value), None, None, FormulaStatus.VALUE, locator))
+            measurements.append(TypedMeasurement(f"{digest[:12]}:{sheet}:{coordinate}", value, _excel_type(value), None, None, FormulaStatus.VALUE, locator, trusted=True))
             row_provenance.append(locator)
         provenance_rows.append(tuple(row_provenance))
     header_rows = min(1, len(raw_rows))
@@ -386,6 +560,7 @@ def _preflight_xlsx_archive(source: Path, selection: SheetSelection | None, limi
         total_merged_cell_count = 0
         for sheet in workbook_root.findall("main:sheets/main:sheet", namespaces):
             title = sheet.attrib["name"]
+            selected_sheet = not selection or not selection.sheet_names or title in selection.sheet_names
             target = targets.get(sheet.attrib.get(f"{{{namespaces['rel']}}}id"))
             if not target:
                 continue
@@ -393,17 +568,19 @@ def _preflight_xlsx_archive(source: Path, selection: SheetSelection | None, limi
             sheet_path = posixpath.normpath(normalized_target if normalized_target.startswith("xl/") else posixpath.join("xl", normalized_target))
             selected_ranges = [cell_range for selected_sheet, cell_range in (selection.ranges if selection else ()) if selected_sheet == title]
             bounds = [_range_bounds(cell_range) for cell_range in selected_ranges]
-            for range_bounds in bounds:
-                if range_bounds[3] - range_bounds[1] + 1 > limits.max_rows:
-                    raise ToolbeltError("workbook selection exceeds row limit")
-                if (range_bounds[3] - range_bounds[1] + 1) * (range_bounds[2] - range_bounds[0] + 1) > limits.max_cells:
-                    raise ToolbeltError("workbook selection exceeds cell limit")
+            if selected_sheet:
+                for range_bounds in bounds:
+                    if range_bounds[3] - range_bounds[1] + 1 > limits.max_rows:
+                        raise ToolbeltError("workbook selection exceeds row limit")
+                    if (range_bounds[3] - range_bounds[1] + 1) * (range_bounds[2] - range_bounds[0] + 1) > limits.max_cells:
+                        raise ToolbeltError("workbook selection exceeds cell limit")
             with archive.open(sheet_path) as handle:
                 for _, element in ET.iterparse(handle, events=("end",)):
                     _check_cancel(cancel_check)
                     if element.tag == f"{{{namespaces['main']}}}row":
-                        total_row_count += 1
-                        if total_row_count > limits.max_rows:
+                        if selected_sheet:
+                            total_row_count += 1
+                        if selected_sheet and total_row_count > limits.max_rows:
                             raise ToolbeltError("workbook allocation exceeds row limit")
                     elif element.tag == f"{{{namespaces['main']}}}c":
                         coordinate = element.attrib.get("r", "")
@@ -425,18 +602,24 @@ def _preflight_xlsx_archive(source: Path, selection: SheetSelection | None, limi
                             total_merged_cell_count += area
                             if total_merged_cell_count > limits.max_total_merged_cells:
                                 raise ToolbeltError("workbook merged area exceeds total limit")
+                            if total_cell_count + total_merged_cell_count > limits.max_cells:
+                                raise ToolbeltError("workbook allocation exceeds cell limit")
                     element.clear()
 
 
 def spreadsheet_read(
-    source: Path,
-    selection: SheetSelection | None = None,
-    limits: ToolbeltLimits | None = None,
+    source: str,
+    selection: Mapping[str, Any] | None = None,
+    limits: Mapping[str, Any] | None = None,
     *,
     cancel_check: Callable[[], bool] | None = None,
     _cache: Any = None,
 ) -> WorkbookReadResult:
-    limits = limits or ToolbeltLimits()
+    """Read a bounded workbook using JSON-compatible source, selection, and limits."""
+    selection = _coerce_sheet_selection(selection)
+    limits = _coerce_toolbelt_limits(limits)
+    if limits.max_cells > _AUTHORITATIVE_RECORD_LIMIT:
+        raise ToolbeltError("workbook cell limit exceeds authoritative retention capacity")
     source = Path(source)
     _check_cancel(cancel_check)
     cache_key = None
@@ -444,11 +627,15 @@ def spreadsheet_read(
         cache_key = _cache.key(source, selection, limits)
         cached_result = _cache.get(cache_key)
         if cached_result is not None:
-            return replace(cached_result, source=str(source))
+            cached_result = replace(cached_result, source=str(source))
+            _remember_authoritative_measurements(cached_result.measurements)
+            return cached_result
     if source.stat().st_size > limits.max_bytes:
         raise ToolbeltError("workbook exceeds byte limit")
     if source.suffix.lower() in {".csv", ".tsv"}:
-        return _read_delimited(source, selection, limits, cancel_check)
+        result = _read_delimited(source, selection, limits, cancel_check)
+        _remember_authoritative_measurements(result.measurements)
+        return result
     if source.suffix.lower() not in {".xlsx", ".xlsm", ".xltx", ".xltm"}:
         raise ToolbeltError("unsupported spreadsheet format")
     try:
@@ -484,7 +671,11 @@ def spreadsheet_read(
             else:
                 selected_ranges = [cell_range for sheet, cell_range in (selection.ranges if selection else ()) if sheet == ws.title]
             if not selected_ranges:
-                selected_ranges = [f"A1:{openpyxl.utils.get_column_letter(ws.max_column)}{ws.max_row}"] if ws.max_row and ws.max_column else []
+                implicit_bounds = _implicit_xlsx_bounds(ws)
+                selected_ranges = [
+                    f"{openpyxl.utils.get_column_letter(implicit_bounds[0])}{implicit_bounds[1]}:"
+                    f"{openpyxl.utils.get_column_letter(implicit_bounds[2])}{implicit_bounds[3]}"
+                ] if implicit_bounds else []
             for source_range in selected_ranges:
                 min_col, min_row, max_col, max_row = _range_bounds(source_range)
                 if max_row - min_row + 1 > limits.max_rows:
@@ -530,7 +721,7 @@ def spreadsheet_read(
                         measurement_id = f"{digest[:12]}:{ws.title}:{cell.coordinate}"
                         referenced_cells = _formula_references(formula)
                         references = tuple(sorted({sheet for sheet, _ in referenced_cells}))
-                        measurements.append(TypedMeasurement(measurement_id, value, _excel_type(raw_value), formula, cached_value, status, locator, references, referenced_cells))
+                        measurements.append(TypedMeasurement(measurement_id, value, _excel_type(raw_value), formula, cached_value, status, locator, references, referenced_cells, True))
                         row_cells.append(measurements[-1])
                         values.append(value)
                         provenance.append(locator)
@@ -569,6 +760,7 @@ def spreadsheet_read(
         result = WorkbookReadResult(str(source), digest, tuple(sheets), tuple(finalized_tables), tuple(measurements))
         if _cache is not None and cache_key is not None:
             _cache.put(cache_key, result)
+        _remember_authoritative_measurements(result.measurements)
         return result
     finally:
         if cached is not None:
@@ -597,14 +789,16 @@ def _ensure_homogeneous_units(rows: Sequence[dict[str, Any]], table: TypedTable,
 
 
 def data_analysis(
-    table: TypedTable,
-    operation: AnalysisOperation,
-    limits: ToolbeltLimits | None = None,
+    table: TypedTable | Mapping[str, Any],
+    operation: AnalysisOperation | Mapping[str, Any],
+    limits: Mapping[str, Any] | None = None,
     *,
     cancel_check: Callable[[], bool] | None = None,
     _cache: Any = None,
 ) -> AnalysisResult:
-    limits = limits or ToolbeltLimits()
+    table = _coerce_typed_table(table)
+    operation = _coerce_analysis_operation(operation)
+    limits = _coerce_toolbelt_limits(limits)
     _check_cancel(cancel_check)
     analysis_cache_key = None
     if _cache is not None and hasattr(_cache, "analysis_key"):
@@ -742,6 +936,65 @@ def _coerce_cell_provenance(value: CellProvenance | Mapping[str, Any]) -> CellPr
     )
 
 
+def _coerce_typed_table(value: TypedTable | Mapping[str, Any]) -> TypedTable:
+    if isinstance(value, TypedTable):
+        return value
+    if not isinstance(value, Mapping):
+        raise ToolbeltError("analysis table must be structured")
+    headers = tuple(tuple(str(item) for item in row) for row in value.get("headers", ()) or ())
+    rows = tuple(tuple(_coerce(item) for item in row) for row in value.get("rows", ()) or ())
+    row_provenance = tuple(
+        tuple(_coerce_cell_provenance(item) for item in row)
+        for row in value.get("row_provenance", ()) or ()
+    )
+    row_measurements = tuple(
+        tuple(
+            item
+            for item in (_coerce_calculation_input(raw) for raw in row)
+            if isinstance(item, TypedMeasurement)
+        )
+        for row in value.get("row_measurements", ()) or ()
+    )
+    related_provenance = tuple(_coerce_cell_provenance(item) for item in value.get("related_provenance", ()) or ())
+    return TypedTable(
+        id=str(value.get("id", "")),
+        name=str(value.get("name", "")),
+        sheet=str(value.get("sheet", "")),
+        headers=headers,
+        rows=rows,
+        row_provenance=row_provenance,
+        hidden=bool(value.get("hidden", False)),
+        source_range=str(value.get("source_range", "")),
+        related_provenance=related_provenance,
+        row_measurements=row_measurements,
+    )
+
+
+def _coerce_analysis_operation(value: AnalysisOperation | Mapping[str, Any]) -> AnalysisOperation:
+    if isinstance(value, AnalysisOperation):
+        return value
+    if not isinstance(value, Mapping):
+        raise ToolbeltError("analysis operation must be structured")
+    scenarios = tuple((str(item[0]), float(item[1])) for item in value.get("scenarios", ()) or ())
+    sensitivity = tuple(
+        (str(item[0]), tuple(float(entry) for entry in item[1]))
+        for item in value.get("sensitivity", ()) or ()
+    )
+    filters = tuple(tuple(item) for item in value.get("filters", ()) or ())
+    return AnalysisOperation(
+        kind=str(value.get("kind", "")),
+        columns=tuple(str(item) for item in value.get("columns", ()) or ()),
+        key_columns=tuple(str(item) for item in value.get("key_columns", ()) or ()),
+        value_column=str(value["value_column"]) if value.get("value_column") is not None else None,
+        scenarios=scenarios,
+        sensitivity=sensitivity,
+        many_to_many=bool(value.get("many_to_many", False)),
+        filters=filters,
+        join_table=_coerce_typed_table(value["join_table"]) if value.get("join_table") is not None else None,
+        join_keys=tuple(str(item) for item in value.get("join_keys", ()) or ()),
+    )
+
+
 def _coerce_calculation_input(value: Evidence | CalculationRecord | TypedMeasurement | Mapping[str, Any]) -> Evidence | CalculationRecord | TypedMeasurement:
     if isinstance(value, (Evidence, CalculationRecord, TypedMeasurement)):
         return value
@@ -759,6 +1012,11 @@ def _coerce_calculation_input(value: Evidence | CalculationRecord | TypedMeasure
             output=float(value["output"]),
             units=str(value.get("units", "")),
             source_locators=[str(item) for item in value.get("source_locators", ())],
+            verification_status=(
+                value.get("verification_status", CalculationVerificationStatus.NOT_VERIFIED)
+                if isinstance(value.get("verification_status", CalculationVerificationStatus.NOT_VERIFIED), CalculationVerificationStatus)
+                else CalculationVerificationStatus(str(value.get("verification_status", CalculationVerificationStatus.NOT_VERIFIED)))
+            ),
         )
     if "value" in value and "provenance" in value:
         status = value.get("formula_status", FormulaStatus.VALUE)
@@ -772,6 +1030,7 @@ def _coerce_calculation_input(value: Evidence | CalculationRecord | TypedMeasure
             provenance=_coerce_cell_provenance(value["provenance"]),
             cross_sheet_references=tuple(str(item) for item in value.get("cross_sheet_references", ())),
             cross_sheet_cells=tuple(tuple(str(part) for part in item) for item in value.get("cross_sheet_cells", ())),
+            trusted=False,
         )
     if "excerpt" in value and "source_locator" in value:
         locator_value = value["source_locator"]
@@ -810,18 +1069,52 @@ def calculation(
     inputs: Sequence[Evidence | CalculationRecord | TypedMeasurement | Mapping[str, Any]],
     formula: FormulaSpec | Mapping[str, Any],
     units: UnitSpec | Mapping[str, Any],
+    approved_workbook_sha256: str | None = None,
 ) -> CalculationRecord:
     inputs = tuple(_coerce_calculation_input(item) for item in inputs)
     formula = _coerce_formula_spec(formula)
     units = _coerce_unit_spec(units)
     if any(isinstance(item, TypedMeasurement) and item.formula_status in {FormulaStatus.FORMULA_WITHOUT_CACHE, FormulaStatus.FORMULA_STALE_OR_UNKNOWN, FormulaStatus.ERROR} for item in inputs):
         raise ToolbeltError("BLOCKED_RECALCULATION: formula input is not trustworthy")
-    values = [
-        _numeric(item.value if isinstance(item, TypedMeasurement) else item.output, allow_legacy_prose=False)
-        if isinstance(item, (TypedMeasurement, CalculationRecord))
-        else _numeric(item.excerpt, allow_legacy_prose=True)
-        for item in inputs
-    ]
+    if any(isinstance(item, Evidence) for item in inputs):
+        raise ToolbeltError("BLOCKED_RECALCULATION: authoritative workbook measurement required")
+    measurements = [item for item in inputs if isinstance(item, TypedMeasurement)]
+    if measurements:
+        if not approved_workbook_sha256:
+            raise ToolbeltError("BLOCKED_RECALCULATION: workbook measurement provenance is untrusted; approved workbook hash is missing or mismatched")
+        resolved_measurements = []
+        for item in measurements:
+            if item.provenance.workbook_sha256 != approved_workbook_sha256:
+                raise ToolbeltError("BLOCKED_RECALCULATION: approved workbook hash is missing or mismatched")
+            authoritative = _AUTHORITATIVE_MEASUREMENTS.get((approved_workbook_sha256, item.id, item.provenance.range))
+            if authoritative is None or replace(item, trusted=False) != replace(authoritative, trusted=False):
+                raise ToolbeltError("BLOCKED_RECALCULATION: workbook measurement provenance is untrusted")
+            resolved_measurements.append(authoritative)
+        resolved_iter = iter(resolved_measurements)
+        inputs = tuple(next(resolved_iter) if isinstance(item, TypedMeasurement) else item for item in inputs)
+    calculations = [item for item in inputs if isinstance(item, CalculationRecord)]
+    if calculations:
+        if not approved_workbook_sha256:
+            raise ToolbeltError("BLOCKED_RECALCULATION: approved workbook hash is missing or mismatched")
+        resolved_calculations = []
+        for item in calculations:
+            if item.verification_status != CalculationVerificationStatus.VERIFIED or not item.input_ids or not item.source_locators:
+                raise ToolbeltError("BLOCKED_RECALCULATION: authoritative calculation ancestry is unavailable")
+            if any(approved_workbook_sha256 not in locator for locator in item.source_locators):
+                raise ToolbeltError("BLOCKED_RECALCULATION: approved workbook hash is missing or mismatched")
+            authoritative = _AUTHORITATIVE_CALCULATIONS.get((approved_workbook_sha256, item.id))
+            if authoritative is None or replace(item, verification_status=CalculationVerificationStatus.NOT_VERIFIED) != replace(authoritative, verification_status=CalculationVerificationStatus.NOT_VERIFIED):
+                raise ToolbeltError("BLOCKED_RECALCULATION: authoritative calculation ancestry is unavailable")
+            resolved_calculations.append(authoritative)
+        resolved_iter = iter(resolved_calculations)
+        inputs = tuple(next(resolved_iter) if isinstance(item, CalculationRecord) else item for item in inputs)
+        measurements = [item for item in inputs if isinstance(item, TypedMeasurement)]
+    workbook_hashes = {item.provenance.workbook_sha256 for item in measurements}
+    if len(workbook_hashes) > 1:
+        raise ToolbeltError("workbook hash mismatch")
+    if measurements and (not approved_workbook_sha256 or workbook_hashes != {approved_workbook_sha256}):
+        raise ToolbeltError("BLOCKED_RECALCULATION: approved workbook hash is missing or mismatched")
+    values = [_numeric(item.value if isinstance(item, TypedMeasurement) else item.output, allow_legacy_prose=False) for item in inputs]
     input_units = {
         item.source_locator.units for item in inputs if isinstance(item, Evidence)
     } | {
@@ -836,10 +1129,17 @@ def calculation(
         raise ToolbeltError(f"unsupported formula operation: {formula.operation}") from error
     except ZeroDivisionError as error:
         raise ToolbeltError("divide by zero") from error
-    record_id = "calculation-" + hashlib.sha256(f"{formula.expression}:{values}:{units.units}".encode()).hexdigest()[:16]
-    locators = [f"{item.provenance.workbook_sha256}:{item.provenance.sheet}!{item.provenance.coordinate}" for item in inputs if isinstance(item, TypedMeasurement)]
+    locators = list(dict.fromkeys(
+        [f"{item.provenance.workbook_sha256}:{item.provenance.sheet}!{item.provenance.coordinate}" for item in inputs if isinstance(item, TypedMeasurement)]
+        + [locator for item in inputs if isinstance(item, CalculationRecord) for locator in item.source_locators]
+    ))
     input_ids = [item.id for item in inputs]
-    return CalculationRecord(record_id, MeasurementKey("toolbelt", formula.expression, "current", units.units), formula.expression, input_ids, output, units.units, locators)
+    identity = (formula.expression, values, units.units, input_ids, locators)
+    record_id = "calculation-" + hashlib.sha256(repr(identity).encode()).hexdigest()[:16]
+    record = CalculationRecord(record_id, MeasurementKey("toolbelt", formula.expression, "current", units.units), formula.expression, input_ids, output, units.units, locators, CalculationVerificationStatus.VERIFIED)
+    if approved_workbook_sha256:
+        _remember_authoritative_calculation(record, approved_workbook_sha256)
+    return record
 
 
 def graph_context(graph: Any, record_id: str, limit: int = 50) -> dict[str, Any]:
@@ -859,9 +1159,12 @@ def domain_validation(value: Any) -> dict[str, Any]:
     return {"valid": True, "kind": "candidate", "candidate_id": candidate.candidate_id}
 
 
-def powerbi_project_read(source: Path | str, limits: Any = None) -> Any:
+def powerbi_project_read(source: str, limits: Any = None) -> Any:
     from foresight_os.analysis.powerbi import read_powerbi_project
+    from foresight_os.analysis.powerbi import PowerBIReadLimits
 
+    if isinstance(limits, Mapping):
+        limits = PowerBIReadLimits(**{name: int(limits[name]) for name in ("max_files", "max_total_bytes", "max_file_bytes") if name in limits})
     return read_powerbi_project(source, limits)
 
 

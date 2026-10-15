@@ -55,6 +55,18 @@ def test_stage_input_contains_only_declared_dependency_outputs(monkeypatch):
     assert all("outer prompt" not in item for item in observed if isinstance(item, str) and '"dependency_outputs"' in item)
 
 
+def test_stage_input_carries_research_needs_into_provider_payload():
+    stage_input = StageInput(
+        "question",
+        "2030",
+        "assess",
+        "result",
+        research_needs=("workbook measurements", "source details"),
+    )
+
+    assert stage_input.to_payload()["research_needs"] == ("workbook measurements", "source details")
+
+
 def test_semantic_and_policy_fingerprints_are_distinct():
     base = RecipeStage("stage-1", ExecutionPattern.DIRECT, ({"id": "analyst"},), "prompt", "typed-result", {}, objective="assess", expected_result="result")
     changed_policy = RecipeStage("stage-1", ExecutionPattern.DIRECT, ({"id": "analyst"},), "prompt", "typed-result", {"max_timeout_seconds": 120}, objective="assess", expected_result="result")

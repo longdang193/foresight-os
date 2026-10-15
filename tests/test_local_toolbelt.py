@@ -1,8 +1,10 @@
 import hashlib
+import json
 import re
 import zipfile
 from datetime import datetime
 from pathlib import Path
+from typing import get_type_hints
 
 import openpyxl
 import pytest
@@ -13,11 +15,118 @@ from foresight_os.runtime.local_toolbelt import (
     SheetSelection,
     ToolbeltLimits,
     ToolbeltError,
+    TypedMeasurement,
+    _implicit_xlsx_bounds,
     calculation,
     data_analysis,
     spreadsheet_read,
     WorkbookReadCache,
+    bind_local_toolbelt,
 )
+from foresight_os.domain.models import Evidence, SourceLocator
+
+
+def test_provider_tool_paths_are_json_string_boundaries():
+    bindings = bind_local_toolbelt()
+
+    assert get_type_hints(bindings["spreadsheet_read"].value)["source"] is str
+    assert get_type_hints(bindings["powerbi_project_read"].value)["source"] is str
+
+
+def test_provider_spreadsheet_arguments_are_json_coerced(workbook_path: Path):
+    result = spreadsheet_read(
+        str(workbook_path),
+        "Demand",
+        {"max_rows": 10},
+    )
+
+    assert result.sheets[0].name == "Demand"
+    assert result.measurements
+
+
+def test_workbook_read_compacts_implicit_padding_and_provider_serialization(tmp_path: Path):
+    source = tmp_path / "padded.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Case"
+    sheet.append(["Label", "Value"])
+    sheet.append(["North", 10])
+    sheet["Z1000"].number_format = "0.00"
+    workbook.save(source)
+
+    result = spreadsheet_read(str(source), "Case")
+    payload = result.to_dict()
+    encoded = json.dumps(payload, sort_keys=True)
+
+    assert result.tables[0].source_range == "A1:B2"
+    assert len(result.measurements) == 4
+    assert payload["measurement_count"] == 4
+    assert payload["omitted_blank_measurement_count"] == 0
+    assert result.workbook_sha256 in encoded
+    assert "B2" in encoded
+    assert len(encoded) < 10_000
+
+
+def test_implicit_xlsx_bounds_uses_sparse_cells_without_iterating():
+    class Cell:
+        def __init__(self, row, column, value):
+            self.row = row
+            self.column = column
+            self.value = value
+
+    class Worksheet:
+        _cells = {(1, 1): Cell(1, 1, "header"), (4, 3): Cell(4, 3, 10)}
+
+        def iter_rows(self):
+            raise AssertionError("implicit bounds must not scan the worksheet grid")
+
+    assert _implicit_xlsx_bounds(Worksheet()) == (1, 1, 3, 4)
+
+
+def test_selected_sheet_does_not_inherit_unselected_sheet_row_limit(tmp_path: Path):
+    workbook = openpyxl.Workbook()
+    large = workbook.active
+    large.title = "Large"
+    for _ in range(20):
+        large.append(["value"])
+    small = workbook.create_sheet("Small")
+    small.append(["value"])
+    source = tmp_path / "bounded.xlsx"
+    workbook.save(source)
+
+    result = spreadsheet_read(str(source), {"sheet": "Small"}, {"max_rows": 2})
+
+    assert result.tables[0].sheet == "Small"
+
+
+def test_unselected_sheet_merge_allocation_is_preflighted(tmp_path: Path):
+    workbook = openpyxl.Workbook()
+    selected = workbook.active
+    selected.title = "Selected"
+    selected.append(["value"])
+    selected.append([1])
+    unselected = workbook.create_sheet("Unselected")
+    unselected.merge_cells("A1:J1000")
+    source = tmp_path / "merged-unselected.xlsx"
+    workbook.save(source)
+
+    with pytest.raises(ToolbeltError, match="allocation exceeds cell limit"):
+        spreadsheet_read(source, {"sheet": "Selected"}, {"max_cells": 5})
+
+
+def test_workbook_read_cache_evicts_old_entries_without_unpacking_error(tmp_path: Path):
+    cache = WorkbookReadCache(max_entries=1)
+    first = tmp_path / "first.xlsx"
+    second = tmp_path / "second.xlsx"
+    for source, value in ((first, "first"), (second, "second")):
+        workbook = openpyxl.Workbook()
+        workbook.active.append([value])
+        workbook.save(source)
+
+    spreadsheet_read(str(first), _cache=cache)
+    spreadsheet_read(str(second), _cache=cache)
+
+    assert cache.size > 0
 
 
 def _make_workbook(path: Path) -> None:
@@ -93,7 +202,18 @@ def test_formula_without_cache_blocks_decision_critical_calculation(workbook_pat
         calculation([formula], formula=__import__("foresight_os.runtime.local_toolbelt", fromlist=["FormulaSpec"]).FormulaSpec("formula", "sum"), units=__import__("foresight_os.runtime.local_toolbelt", fromlist=["UnitSpec"]).UnitSpec("units"))
 
 
-def test_calculation_accepts_json_shaped_tool_arguments():
+def test_false_evidence_excerpt_cannot_be_recalculated_as_workbook_truth():
+    evidence = Evidence("evidence-1", SourceLocator("hash", "Demand", "C3", "units", "none", "source"), "v1", "2026", "=999")
+
+    with pytest.raises(ToolbeltError, match="authoritative workbook measurement required"):
+        calculation(
+            [evidence],
+            formula={"expression": "Demand!C3", "operation": "sum"},
+            units={"units": "units"},
+        )
+
+
+def test_calculation_rejects_untrusted_json_shaped_measurements():
     measurement = {
         "id": "measurement-1",
         "value": 12,
@@ -109,15 +229,58 @@ def test_calculation_accepts_json_shaped_tool_arguments():
         },
     }
 
-    result = calculation(
-        [measurement],
+    with pytest.raises(ToolbeltError, match="provenance is untrusted"):
+        calculation(
+            [measurement],
+            formula={"expression": "Demand!C3", "operation": "sum"},
+            units={"units": "units"},
+        )
+
+
+def test_spreadsheet_measurement_survives_json_provider_boundary(workbook_path):
+    result = spreadsheet_read(workbook_path, SheetSelection(tables=(("Demand", "DemandTable"),)))
+    measurement = next(item for item in result.measurements if item.provenance.coordinate == "C3")
+
+    record = calculation(
+        [json.loads(json.dumps(measurement.to_dict(), default=str))],
         formula={"expression": "Demand!C3", "operation": "sum"},
         units={"units": "units"},
+        approved_workbook_sha256=result.workbook_sha256,
     )
 
-    assert result.output == 12
-    assert result.input_ids == ["measurement-1"]
-    assert result.units == "units"
+    assert record.verification_status.value == "VERIFIED"
+
+
+def test_fabricated_calculation_mapping_cannot_be_verified():
+    with pytest.raises(ToolbeltError, match="authoritative calculation"):
+        calculation(
+            [{
+                "id": "calculation-fake",
+                "key": {"region": "toolbelt", "measure": "fake", "period": "current", "units": "units", "scenario": "default", "version": "v1"},
+                "formula": "fake",
+                "input_ids": ["measurement-fake"],
+                "output": 12,
+                "units": "units",
+                "source_locators": ["workbook-hash:Demand!C3"],
+            }],
+            formula={"expression": "fake", "operation": "sum"},
+            units={"units": "units"},
+            approved_workbook_sha256="workbook-hash",
+        )
+
+
+def test_serialized_formula_measurements_keep_recalculation_guard(tmp_path):
+    source = tmp_path / "formula.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.append(["Value"])
+    workbook.active.append(["=1+1"])
+    workbook.save(source)
+
+    result = spreadsheet_read(source)
+    payload = result.tables[0].to_dict()
+
+    with pytest.raises(ToolbeltError, match="BLOCKED_RECALCULATION"):
+        data_analysis(payload, AnalysisOperation("aggregate", value_column="Value"))
 
 
 def test_formula_cache_and_manual_recalculation_state_are_truthful(workbook_path, tmp_path):
@@ -314,6 +477,47 @@ def test_run_local_workbook_cache_keeps_path_provenance(tmp_path, workbook_path)
     assert first_result.workbook_sha256 == second_result.workbook_sha256
 
 
+def test_overlapping_workbook_reads_preserve_measurement_authority(workbook_path):
+    narrow = spreadsheet_read(workbook_path, SheetSelection(ranges=(("Demand", "A2:C3"),)))
+    measurement = next(item for item in narrow.measurements if item.provenance.coordinate == "C3")
+    spreadsheet_read(workbook_path, SheetSelection(ranges=(("Demand", "A2:F4"),)))
+
+    record = calculation(
+        [json.loads(json.dumps(measurement.to_dict(), default=str))],
+        formula={"expression": "Demand!C3", "operation": "sum"},
+        units={"units": "units"},
+        approved_workbook_sha256=narrow.workbook_sha256,
+    )
+
+    assert record.verification_status.value == "VERIFIED"
+
+
+def test_supported_measurement_volume_remains_authoritative(tmp_path):
+    source = tmp_path / "large.csv"
+    rows = ["Region,V1,V2,V3,V4"]
+    rows.extend(f"R{index},{index},{index + 1},{index + 2},{index + 3}" for index in range(25_002))
+    source.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    result = spreadsheet_read(str(source))
+    measurement = next(item for item in result.measurements if item.provenance.coordinate == "B2")
+    record = calculation(
+        [measurement],
+        formula={"expression": "large!B2", "operation": "sum"},
+        units={"units": "units"},
+        approved_workbook_sha256=result.workbook_sha256,
+    )
+
+    assert record.verification_status.value == "VERIFIED"
+
+
+def test_explicit_read_capacity_above_authoritative_retention_is_rejected(tmp_path):
+    source = tmp_path / "bounded.csv"
+    source.write_text("Region,Value\nNorth,10\n", encoding="utf-8")
+
+    with pytest.raises(ToolbeltError, match="authoritative retention capacity"):
+        spreadsheet_read(source, limits=ToolbeltLimits(max_cells=250_001))
+
+
 def test_run_local_workbook_cache_reuses_deterministic_analysis(workbook_path):
     cache = WorkbookReadCache()
     table = spreadsheet_read(workbook_path, _cache=cache).tables[0]
@@ -330,9 +534,46 @@ def test_calculation_provenance_qualifies_workbook_sheet_and_coordinate(workbook
     result = spreadsheet_read(workbook_path, SheetSelection(sheet_names=("Demand", "Assumptions"), include_hidden=True, include_hidden_rows=True))
     demand_value = next(item for item in result.measurements if item.provenance.sheet == "Demand" and item.provenance.coordinate == "C3")
     assumption_value = next(item for item in result.measurements if item.provenance.sheet == "Assumptions" and item.provenance.coordinate == "B2")
-    record = calculation([demand_value, assumption_value], __import__("foresight_os.runtime.local_toolbelt", fromlist=["FormulaSpec"]).FormulaSpec("Demand!C3 + Assumptions!B2"), __import__("foresight_os.runtime.local_toolbelt", fromlist=["UnitSpec"]).UnitSpec("units"))
+    record = calculation(
+        [demand_value, assumption_value],
+        __import__("foresight_os.runtime.local_toolbelt", fromlist=["FormulaSpec"]).FormulaSpec("Demand!C3 + Assumptions!B2"),
+        __import__("foresight_os.runtime.local_toolbelt", fromlist=["UnitSpec"]).UnitSpec("units"),
+        approved_workbook_sha256=result.workbook_sha256,
+    )
     assert any(":Demand!C3" in locator for locator in record.source_locators)
     assert any(":Assumptions!B2" in locator for locator in record.source_locators)
+    assert record.verification_status.value == "VERIFIED"
+
+
+def test_calculation_authority_keeps_same_value_inputs_separate(tmp_path):
+    source = tmp_path / "same-values.csv"
+    source.write_text("Metric,Value\nA,10\nB,10\n", encoding="utf-8")
+    result = spreadsheet_read(str(source))
+    first = next(item for item in result.measurements if item.provenance.coordinate == "B2")
+    second = next(item for item in result.measurements if item.provenance.coordinate == "B3")
+    units = {"units": "units"}
+
+    first_record = calculation(
+        [first],
+        formula={"expression": "same-value", "operation": "sum"},
+        units=units,
+        approved_workbook_sha256=result.workbook_sha256,
+    )
+    second_record = calculation(
+        [second],
+        formula={"expression": "same-value", "operation": "sum"},
+        units=units,
+        approved_workbook_sha256=result.workbook_sha256,
+    )
+
+    assert first_record.id != second_record.id
+    chained = calculation(
+        [first_record],
+        formula={"expression": "chained", "operation": "sum"},
+        units=units,
+        approved_workbook_sha256=result.workbook_sha256,
+    )
+    assert chained.input_ids == [first_record.id]
 
 def test_xlsx_reader_skips_blank_and_title_rows_before_data_header(tmp_path):
     source = tmp_path / "titled-range.xlsx"

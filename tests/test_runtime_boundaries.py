@@ -4,12 +4,15 @@ import time
 from types import SimpleNamespace
 import pytest
 
-from agent_framework import Agent, ChatResponse, ChatResponseUpdate, Content, FunctionTool, Message, ResponseStream
+from agent_framework import Agent, BaseChatClient, ChatResponse, ChatResponseUpdate, Content, FunctionTool, Message, ResponseStream
+from agent_framework._middleware import ChatMiddlewareLayer
+from agent_framework._tools import FunctionInvocationLayer
 from foresight_os.controller.recipes import ExecutionPattern, RecipeName, ExecutionRecipe, RecipeStage, make_recipe
 from foresight_os.runtime.metrics import BudgetExceededError, FailureClass, RunMetrics
 from foresight_os.runtime.capabilities import CapabilityDefinition, CapabilityUnavailableError, ExecutionMode, ForesightFunctionMiddleware, ScopeOwnership, CapabilityScope, instrument_tool
 from foresight_os.controller.budgets import BudgetState
 from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
+from foresight_os.runtime.executors import AnalystExecutor, ReviewerExecutor, run_agent_with_tool_fallback
 from foresight_os.runtime.workflow import run_recipe_async
 from foresight_os.runtime.local_toolbelt import data_analysis, spreadsheet_read
 
@@ -34,6 +37,30 @@ class FakeClient:
 
     def as_agent(self, **kwargs):
         return Agent(self, **kwargs)
+
+
+class LoopingFunctionClient(FunctionInvocationLayer, ChatMiddlewareLayer, BaseChatClient):
+    def __init__(self):
+        self.calls = 0
+        FunctionInvocationLayer.__init__(self)
+
+    async def _inner_get_response(self, *, messages, stream, options, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            return ChatResponse(
+                messages=[
+                    Message(
+                        "assistant",
+                        [Content.from_function_call("call-1", "retrieve", arguments={"query": "capacity"})],
+                    )
+                ],
+                finish_reason="tool_calls",
+            )
+        return ChatResponse(messages=[Message("assistant", ["done"])], finish_reason="stop")
+
+
+async def retrieve_capacity(query: str) -> str:
+    return f"result for {query}"
 
 
 def _limited_recipe(**limits):
@@ -81,6 +108,55 @@ def test_run_recipe_returns_typed_metrics_and_real_executor_calls():
     assert result.metrics.runtime_status == "SETTLED"
     assert result.metrics.persistence_status == "NOT_STARTED"
     assert result.metrics.analysis_status == "NOT_STARTED"
+
+
+def test_tool_result_fallback_reserves_retry_call_budget():
+    class ToolResponse:
+        messages = [type("Message", (), {"role": "tool", "contents": [type("Content", (), {"result": {"value": 1}})()]})()]
+        value = None
+        text = ""
+
+    class Agent:
+        def __init__(self):
+            self.calls = 0
+
+        async def run(self, prompt, **kwargs):
+            self.calls += 1
+            return ToolResponse()
+
+    agent = Agent()
+    remaining = {"calls": 1}
+
+    def reserve_call():
+        if remaining["calls"] < 1:
+            return False
+        remaining["calls"] -= 1
+        return True
+
+    with pytest.raises(BudgetExceededError, match="agent calls"):
+        asyncio.run(run_agent_with_tool_fallback(agent, "prompt", reserve_call=reserve_call))
+    assert agent.calls == 1
+
+
+def test_framework_function_continuation_reserves_each_provider_dispatch():
+    client = LoopingFunctionClient()
+    agent = Agent(client, tools=[retrieve_capacity])
+    budget = BudgetState(5, 1, 1)
+    metrics = RunMetrics("function-loop", "DIRECT", "direct")
+
+    with pytest.raises(BudgetExceededError, match="agent calls"):
+        asyncio.run(
+            run_agent_with_tool_fallback(
+                agent,
+                "inspect capacity",
+                reserve_call=budget.call,
+                on_call=lambda: setattr(metrics, "model_calls", metrics.model_calls + 1),
+            )
+        )
+
+    assert client.calls == 1
+    assert budget.total_agent_calls == 1
+    assert metrics.model_calls == 1
 
 
 def test_budget_failure_is_rejected_before_dispatch_and_keeps_metrics():
@@ -153,6 +229,75 @@ def test_agent_factory_preserves_participant_identity_and_profile_options():
     assert client.kwargs["id"] == "scout"
     assert client.kwargs["default_options"]["model"] == "configured-model"
     assert client.kwargs["default_options"]["response_format"] == {"type": "json"}
+
+
+@pytest.mark.parametrize("executor_type", (AnalystExecutor, ReviewerExecutor))
+def test_executor_passes_structured_output_schema_at_runtime(executor_type):
+    schema = {"type": "json_schema", "json_schema": {"name": "stage", "schema": {"type": "object"}}}
+    seen = {}
+
+    class CapturingAgent:
+        async def run(self, prompt, **kwargs):
+            seen.update(kwargs)
+            return SimpleNamespace(value={"status": "ready"}, text="")
+
+    class CapturingClient:
+        def as_agent(self, **kwargs):
+            return CapturingAgent()
+
+    executor = executor_type(
+        CapturingClient(),
+        participant=ParticipantConfig("participant", "participant", "test"),
+        run_context={"require_structured_output": True, "structured_output_schema": schema},
+    )
+
+    result = asyncio.run(executor.execute("prompt"))
+
+    assert result == {"status": "ready"}
+    assert seen["options"]["response_format"] == schema
+
+
+def test_tool_result_fallback_retries_without_tools_when_provider_returns_empty_final():
+    calls = []
+
+    class Agent:
+        async def run(self, prompt, **kwargs):
+            calls.append((prompt, kwargs))
+            if len(calls) == 1:
+                return SimpleNamespace(
+                    value=None,
+                    text="",
+                    messages=[
+                        SimpleNamespace(role="tool", contents=[SimpleNamespace(result={"cell": "B2"})]),
+                    ],
+                )
+            return SimpleNamespace(value={"status": "ready"}, text="", messages=[])
+
+    result = asyncio.run(run_agent_with_tool_fallback(Agent(), "inspect workbook", {"response_format": {"type": "json"}}))
+
+    assert result == {"status": "ready"}
+    assert calls[0][1]["options"] == {"response_format": {"type": "json"}}
+    assert calls[1][1]["tools"] == []
+    assert "B2" in calls[1][0]
+
+
+def test_tool_result_fallback_treats_provider_json_parse_errors_as_text():
+    class Response:
+        text = "{\"status\":\"ready\"}{\"extra\":true}"
+
+        @property
+        def value(self):
+            raise ValueError("invalid JSON")
+
+        messages = []
+
+    class Agent:
+        async def run(self, prompt, **kwargs):
+            return Response()
+
+    result = asyncio.run(run_agent_with_tool_fallback(Agent(), "prompt", {"response_format": {"type": "json"}}))
+
+    assert result == Response.text
 
 
 def test_agent_factory_applies_stage_model_and_reasoning_controls():

@@ -32,6 +32,7 @@ class StageInput:
     expected_result: str
     relevant_constraints: tuple[str, ...] = ()
     dependency_outputs: tuple[tuple[str, object], ...] = ()
+    research_needs: tuple[object, ...] = ()
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -41,6 +42,7 @@ class StageInput:
             "expected_result": self.expected_result,
             "relevant_constraints": self.relevant_constraints,
             "dependency_outputs": {stage_id: output for stage_id, output in self.dependency_outputs},
+            "research_needs": self.research_needs,
         }
 
     def __str__(self) -> str:
@@ -77,6 +79,7 @@ class RecipeStage:
     reuse_policy: str = "reuse only committed, provenance-complete matching receipts"
     adaptation_policy: tuple[str, ...] = ()
     result_contract: str = "analysis-stage-result/v1"
+    synthesis_policy: str = "aggregate-typed-results"
 
     def to_dict(self) -> dict[str, Any]:
         value = {
@@ -108,6 +111,7 @@ class RecipeStage:
             "reuse_policy": self.reuse_policy,
             "adaptation_policy": list(self.adaptation_policy),
             "result_contract": self.result_contract,
+            "synthesis_policy": self.synthesis_policy,
         }
         return value
 
@@ -142,6 +146,7 @@ class RecipeStage:
             reuse_policy=str(value.get("reuse_policy", "reuse only committed, provenance-complete matching receipts")),
             adaptation_policy=tuple(value.get("adaptation_policy", ())),
             result_contract=str(value.get("result_contract", "analysis-stage-result/v1")),
+            synthesis_policy=str(value.get("synthesis_policy", "aggregate-typed-results")),
         )
 
 

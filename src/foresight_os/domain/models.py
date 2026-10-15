@@ -30,6 +30,11 @@ class RevisionStatus(StrEnum):
     SUPERSEDED = "SUPERSEDED"
 
 
+class CalculationVerificationStatus(StrEnum):
+    VERIFIED = "VERIFIED"
+    NOT_VERIFIED = "NOT_VERIFIED"
+
+
 class ResearchNeedKind(StrEnum):
     EXTERNAL_FACT = "EXTERNAL_FACT"
     SOURCE_DETAIL = "SOURCE_DETAIL"
@@ -125,6 +130,7 @@ class CalculationRecord:
     output: float
     units: str
     source_locators: list[str]
+    verification_status: CalculationVerificationStatus = CalculationVerificationStatus.NOT_VERIFIED
 
 
 @dataclass(frozen=True)
@@ -150,6 +156,7 @@ class Artifact:
     path: str
     lifecycle: Lifecycle = Lifecycle.CURRENT
     relationship_ids: list[str] = field(default_factory=list)
+    delivery_receipt: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

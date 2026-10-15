@@ -34,6 +34,10 @@ def migrate_analysis_dict(value: dict[str, Any]) -> dict[str, Any]:
         migrated.setdefault("calculations", [])
         migrated.setdefault("pending_token", None)
         migrated.setdefault("review_records", [])
+    for calculation in migrated.get("calculations", ()):
+        calculation.setdefault("verification_status", "NOT_VERIFIED")
+    for artifact in migrated.get("artifacts", ()):
+        artifact.setdefault("delivery_receipt", None)
     return migrated
 
 

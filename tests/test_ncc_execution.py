@@ -4,6 +4,7 @@ from openpyxl import load_workbook
 import pytest
 
 from foresight_os.domain.models import AnalysisState, Artifact, Lifecycle, Revision, RevisionStatus
+from foresight_os.artifacts.brief import deliverable_status
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.wayfinding import create_work_brief
 
@@ -64,3 +65,10 @@ def test_ncc_deliverables_require_durable_artifacts_and_review(tmp_path: Path):
         "conditional growth bridge": "NOT_STARTED",
     }
     assert "status" not in runtime_summary
+
+
+def test_unknown_deliverable_is_not_verified_and_verified_calculation_is_typed():
+    state = AnalysisState("ncc", 1, revisions=[Revision("revision-1", 1, "test", [])])
+
+    assert deliverable_status("conditional growth bridge", state) == "NOT_VERIFIED"
+    assert deliverable_status("verified calculations", state) == "NOT_STARTED"
