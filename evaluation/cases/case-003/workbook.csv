@@ -1,7 +1,7 @@
 region,period,measure,value,units,status
 Northern Europe,2024,demand_index,100,index,observed
 Northern Europe,2030,demand_index,140,index,forecast
-Northern Europe,2030,capacity_index,115,index,forecast
+Northern Europe,2030,capacity_index,160,index,forecast
 Southern Europe,2024,demand_index,100,index,observed
-Southern Europe,2030,demand_index,112,index,forecast
+Southern Europe,2030,demand_index,80,index,forecast
 Southern Europe,2030,capacity_index,120,index,forecast

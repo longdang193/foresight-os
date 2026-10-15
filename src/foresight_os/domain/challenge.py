@@ -4,7 +4,7 @@ import hashlib
 import json
 from typing import Any
 
-from .models import AnalysisState, AnalyticalRecord, CalculationRecord, Evidence
+from .models import AnalysisState, AnalyticalRecord, Assessment, CalculationRecord, Evidence
 from .relationships import RelationIndex, relationship_rule
 
 
@@ -121,6 +121,18 @@ class FindingView:
     unresolved_issues: tuple[str, ...] = ()
     implications: tuple[str, ...] = ()
     monitoring_indicators: tuple[str, ...] = ()
+
+
+def finding_summary_status(finding: FindingView) -> str:
+    if finding.unresolved_issues:
+        return "correction-needed"
+    if finding.review_status != ReviewValidity.CURRENT.value or finding.review_outcome != ReviewOutcome.ACCEPTED.value:
+        return "human-review-pending"
+    if finding.assessment != Assessment.SUPPORTED.value:
+        return "correction-needed" if finding.assessment in {Assessment.CONTESTED.value, Assessment.REFUTED.value} else "uncertain"
+    if finding.limitations or finding.uncertainty or finding.counterevidence_ids or not finding.accepted:
+        return "uncertain"
+    return "supported"
 
 
 @dataclass(frozen=True)

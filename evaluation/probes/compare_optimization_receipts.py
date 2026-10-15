@@ -125,6 +125,21 @@ def _pct(release: float, baseline: float) -> float:
     return round((release / baseline - 1) * 100, 3)
 
 
+def _safe_pct(release: float, baseline: float) -> float | None:
+    if baseline == 0:
+        return 0.0 if release == 0 else None
+    return _pct(release, baseline)
+
+
+def _comparison_metric(baseline: float, release: float) -> dict[str, float | None]:
+    return {
+        "baseline": baseline,
+        "release": release,
+        "delta": round(release - baseline, 6),
+        "pct": _safe_pct(release, baseline),
+    }
+
+
 def validate_stability(baseline_repeat: list[dict], release_repeat: list[dict]) -> dict:
     errors: list[str] = []
     if len(baseline_repeat) != 2 or len(release_repeat) != 2:
@@ -140,13 +155,17 @@ def validate_stability(baseline_repeat: list[dict], release_repeat: list[dict]) 
         if first.get("revision") != second.get("revision"):
             errors.append(f"{label}.revision differs between repeats")
         try:
-            drift = abs(_pct(
+            drift = _safe_pct(
                 float(second["maf_patterns"]["CHALLENGE_RECOMMENDATION"]["latency"]["wall_time_ms_p95"]),
                 float(first["maf_patterns"]["CHALLENGE_RECOMMENDATION"]["latency"]["wall_time_ms_p95"]),
-            ))
+            )
         except (KeyError, TypeError, ValueError, ZeroDivisionError):
             errors.append(f"{label}.group_chat_p95 is unavailable")
         else:
+            if drift is None:
+                errors.append(f"{label}.group_chat_p95 is unavailable")
+                continue
+            drift = abs(drift)
             if drift > 10:
                 errors.append(f"{label}.group_chat_p95 drift exceeds 10%: {drift}")
     if len(baseline_repeat) == 2 and len(release_repeat) == 2:
@@ -198,30 +217,54 @@ def compare(baseline: dict, release: dict) -> dict:
         for field in ECONOMIC_FIELDS
     }
     pattern_regressions = {}
+    pattern_comparisons = {}
     for name in sorted(REQUIRED_PATTERNS):
         baseline_latency = float(baseline["maf_patterns"][name]["latency"]["wall_time_ms_p95"])
         release_latency = float(release["maf_patterns"][name]["latency"]["wall_time_ms_p95"])
         pattern_regressions[name] = _pct(release_latency, baseline_latency)
+        pattern_comparisons[name] = _comparison_metric(baseline_latency, release_latency)
     p95_regression = _pct(float(release["xlsx"]["p95_ms"]), float(baseline["xlsx"]["p95_ms"]))
     allocation_regression = _pct(float(release["xlsx"]["peak_allocation_bytes"]), float(baseline["xlsx"]["peak_allocation_bytes"]))
     rss_regression = _pct(float(release["resource"]["rss_bytes"]), float(baseline["resource"]["rss_bytes"]))
+    absolute = {
+        "xlsx": {
+            "p95_ms": _comparison_metric(float(baseline["xlsx"]["p95_ms"]), float(release["xlsx"]["p95_ms"])),
+            "peak_allocation_bytes": _comparison_metric(float(baseline["xlsx"]["peak_allocation_bytes"]), float(release["xlsx"]["peak_allocation_bytes"])),
+        },
+        "resource": {
+            "rss_bytes": _comparison_metric(float(baseline["resource"]["rss_bytes"]), float(release["resource"]["rss_bytes"])),
+        },
+        "maf_patterns": pattern_comparisons,
+        "economics_per_accepted_finding": {
+            field: _comparison_metric(
+                float(baseline_economics["per_accepted_finding"][field]),
+                float(release_economics["per_accepted_finding"][field]),
+            )
+            for field in ECONOMIC_FIELDS
+        },
+    }
     reused_stage_new_calls = [
         metric["stage_id"]
         for metric in release.get("stage_metrics", ())
         if int(metric.get("reused_stages", 0) or 0) > 0 and (int(metric.get("model_calls", 0) or 0) > 0 or int(metric.get("tool_calls_total", 0) or 0) > 0)
     ]
+    non_regressive_economics = all(
+        float(release_economics["per_accepted_finding"][field]) <= float(baseline_economics["per_accepted_finding"][field])
+        for field in {"model_calls", "tool_calls_total", "local_tool_calls", "mcp_tool_calls", "external_http_requests"}
+    )
     accepted = (
         p95_regression <= 20
         and allocation_regression <= 15
         and rss_regression <= 15
         and all(value <= 20 for value in pattern_regressions.values())
-        and all(value <= float(baseline_economics["per_accepted_finding"][field]) for field, value in ((field, float(release_economics["per_accepted_finding"][field])) for field in ECONOMIC_FIELDS if field in {"model_calls", "tool_calls_total", "local_tool_calls", "mcp_tool_calls", "external_http_requests"}))
+        and non_regressive_economics
         and not reused_stage_new_calls
     )
     return {
         "accepted": accepted,
         "baseline": {"p95_ms": baseline["xlsx"]["p95_ms"], "peak_allocation_bytes": baseline["xlsx"]["peak_allocation_bytes"], "economics_per_accepted_finding": baseline_economics["per_accepted_finding"]},
         "release": {"p95_ms": release["xlsx"]["p95_ms"], "peak_allocation_bytes": release["xlsx"]["peak_allocation_bytes"], "economics_per_accepted_finding": release_economics["per_accepted_finding"]},
+        "absolute": absolute,
         "regression": {"p95_pct": p95_regression, "peak_allocation_pct": allocation_regression, "rss_pct": rss_regression, "pattern_p95_pct": pattern_regressions, "economics_per_accepted_finding_delta": economic_regressions},
         "accepted_finding_count": {"baseline": baseline_count, "release": int(release["accepted_finding_count"])},
         "workload": baseline["workload"],

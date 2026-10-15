@@ -151,6 +151,14 @@ provider-backed evaluation is a separate manual job using the protected
 
 ## Optimization pass evidence
 
+`run_case_portability_probe.py` is the staged portability entry point. It runs
+the first three local case shapes from fixture/configuration only, records
+source identity, production-file changes, setup and approval observations,
+validation escalation, recovery, allocation, and runtime-branch evidence, and
+labels model/provider dimensions as `not_measured` when the deterministic
+harness does not expose them. It does not claim model quality or human
+acceptance beyond the explicit simulated local acceptance boundary.
+
 `run_optimization_probe.py` is the release-level measurement entry point. It compares cold/warm XLSX reads and all five native MAF patterns, proves a credential-free native Streamable HTTP MCP discovery path, records separate model/local/MCP/external economics, token counters, accepted-finding-normalized values, per-pattern latency components, portable RSS/resource snapshots, and runs a 100-run resource soak. Baseline and release receipts share the schema owned by `optimization_measurement.py`; missing required evidence, workload/schema mismatches, zero denominators, resource growth, or threshold regressions fail comparison closed.
 
 `run_selective_reuse_probe.py` validates fresh-process reuse and sidecar receipt provenance. `run_strategic_exercise.py` stages participant-visible workbooks without the validator key and proves filesystem scope denial. `run_clean_wheel_smoke.py` builds and installs only the new wheel in a disposable environment outside the repository tree.

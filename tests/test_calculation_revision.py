@@ -25,6 +25,17 @@ def test_workbook_mutation_changes_calculation_backed_claim(tmp_path: Path):
     assert "999" in changed.claims[1].statement
 
 
+def test_capacity_surplus_rewrites_gap_narrative_instead_of_claiming_a_shortfall(tmp_path: Path):
+    surplus = tmp_path / "workbook.csv"
+    surplus.write_text(WORKBOOK.read_text(encoding="utf-8").replace(",115,", ",160,"), encoding="utf-8")
+
+    draft = draft_analysis(extract_evidence(surplus, read_workbook(surplus)))
+
+    assert "above forecast demand" in draft.claims[1].statement
+    assert "no capacity gap is evidenced" in draft.claims[1].statement
+    assert draft.implications[0].statement == "No capacity constraint is evidenced for Northern Europe at the 2030 forecast point."
+
+
 def test_loaded_analysis_has_explicit_schema_and_revision_status(tmp_path: Path):
     outcome = run_vertical_slice(WORKBOOK, tmp_path / "case-001", human_accept=True)
     state = AnalysisStore(tmp_path / "case-001").load_analysis()
