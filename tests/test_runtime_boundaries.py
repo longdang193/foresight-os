@@ -4,7 +4,9 @@ import time
 from types import SimpleNamespace
 import pytest
 
-from agent_framework import Agent, ChatResponse, ChatResponseUpdate, Content, FunctionTool, Message, ResponseStream
+from agent_framework import Agent, BaseChatClient, ChatResponse, ChatResponseUpdate, Content, FunctionTool, Message, ResponseStream
+from agent_framework._middleware import ChatMiddlewareLayer
+from agent_framework._tools import FunctionInvocationLayer
 from foresight_os.controller.recipes import ExecutionPattern, RecipeName, ExecutionRecipe, RecipeStage, make_recipe
 from foresight_os.runtime.metrics import BudgetExceededError, FailureClass, RunMetrics
 from foresight_os.runtime.capabilities import CapabilityDefinition, CapabilityUnavailableError, ExecutionMode, ForesightFunctionMiddleware, ScopeOwnership, CapabilityScope, instrument_tool
@@ -35,6 +37,30 @@ class FakeClient:
 
     def as_agent(self, **kwargs):
         return Agent(self, **kwargs)
+
+
+class LoopingFunctionClient(FunctionInvocationLayer, ChatMiddlewareLayer, BaseChatClient):
+    def __init__(self):
+        self.calls = 0
+        FunctionInvocationLayer.__init__(self)
+
+    async def _inner_get_response(self, *, messages, stream, options, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            return ChatResponse(
+                messages=[
+                    Message(
+                        "assistant",
+                        [Content.from_function_call("call-1", "retrieve", arguments={"query": "capacity"})],
+                    )
+                ],
+                finish_reason="tool_calls",
+            )
+        return ChatResponse(messages=[Message("assistant", ["done"])], finish_reason="stop")
+
+
+async def retrieve_capacity(query: str) -> str:
+    return f"result for {query}"
 
 
 def _limited_recipe(**limits):
@@ -110,6 +136,27 @@ def test_tool_result_fallback_reserves_retry_call_budget():
     with pytest.raises(BudgetExceededError, match="agent calls"):
         asyncio.run(run_agent_with_tool_fallback(agent, "prompt", reserve_call=reserve_call))
     assert agent.calls == 1
+
+
+def test_framework_function_continuation_reserves_each_provider_dispatch():
+    client = LoopingFunctionClient()
+    agent = Agent(client, tools=[retrieve_capacity])
+    budget = BudgetState(5, 1, 1)
+    metrics = RunMetrics("function-loop", "DIRECT", "direct")
+
+    with pytest.raises(BudgetExceededError, match="agent calls"):
+        asyncio.run(
+            run_agent_with_tool_fallback(
+                agent,
+                "inspect capacity",
+                reserve_call=budget.call,
+                on_call=lambda: setattr(metrics, "model_calls", metrics.model_calls + 1),
+            )
+        )
+
+    assert client.calls == 1
+    assert budget.total_agent_calls == 1
+    assert metrics.model_calls == 1
 
 
 def test_budget_failure_is_rejected_before_dispatch_and_keeps_metrics():

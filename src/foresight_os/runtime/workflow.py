@@ -11,7 +11,14 @@ from typing import Any
 from agent_framework import FunctionExecutor, WorkflowBuilder, WorkflowContext
 
 from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, StageInput
-from foresight_os.runtime.executors import AnalystExecutor, ReviewerExecutor, run_agent_with_tool_fallback
+from foresight_os.runtime.executors import (
+    AnalystExecutor,
+    ReviewerExecutor,
+    _ReservedChatClient,
+    _ReservedProviderCallMiddleware,
+    _supports_function_invocation,
+    run_agent_with_tool_fallback,
+)
 from foresight_os.controller.budgets import BudgetState
 from foresight_os.domain.validation import ValidationError
 from foresight_os.domain.challenge import derive_finding_views
@@ -42,28 +49,6 @@ CanonicalResultCommitter = Callable[
 
 class StaleReuseError(RuntimeError):
     """Raised when approved execution refuses to refresh a stale stage receipt."""
-
-
-class _ReservedChatClient:
-    def __init__(
-        self,
-        client: Any,
-        reserve_call: Callable[[], bool] | None,
-        on_call: Callable[[], None] | None,
-    ) -> None:
-        self._client = client
-        self._reserve_call = reserve_call
-        self._on_call = on_call
-
-    def get_response(self, *args: Any, **kwargs: Any) -> Any:
-        if self._reserve_call is not None and not self._reserve_call():
-            raise BudgetExceededError("maximum agent calls exceeded before dispatch")
-        if self._on_call is not None:
-            self._on_call()
-        return self._client.get_response(*args, **kwargs)
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._client, name)
 
 
 def _positive_limit(value: object, *, default: int | None = None, label: str) -> int:
@@ -130,6 +115,7 @@ async def _run_native_stage(
     max_rounds = _positive_limit(context.get("max_rounds"), default=4, label="max_rounds")
     reserve_call = context.get("reserve_agent_call")
     on_call = None if metrics is None else lambda: setattr(metrics, "model_calls", metrics.model_calls + 1)
+    context["provider_call_middleware"] = _ReservedProviderCallMiddleware(reserve_call, on_call)
     for index, role in enumerate(roles or [{"purpose": "participant"}], 1):
         participant = ParticipantConfig.from_mapping(role, f"participant-{index}")
         agent = factory.create(participant, context)
@@ -141,6 +127,9 @@ async def _run_native_stage(
         for agent in agents:
             client_instance = getattr(agent, "client", None)
             if client_instance is None or not hasattr(client_instance, "get_response"):
+                continue
+            if _supports_function_invocation(client_instance):
+                wrapped_agent_ids.add(getattr(agent, "id", ""))
                 continue
             client_key = id(client_instance)
             wrapped_client = wrapped_clients.get(client_key)
@@ -675,6 +664,9 @@ async def run_recipe_async(
         stage_context["selected_skills_by_participant"] = selected_skills_by_participant
         stage_context["reserve_agent_call"] = lambda: budget.call()
         stage_context["record_agent_call"] = lambda: setattr(metrics, "model_calls", metrics.model_calls + 1)
+        stage_context["provider_call_middleware"] = _ReservedProviderCallMiddleware(
+            stage_context["reserve_agent_call"], stage_context["record_agent_call"]
+        )
         dependency_records: dict[str, object] = {}
         for dependency in tuple(getattr(stage, "dependencies", ())):
             dependency_receipt = context.get("stage_receipts", {}).get(str(dependency))

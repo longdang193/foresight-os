@@ -618,6 +618,8 @@ def spreadsheet_read(
     """Read a bounded workbook using JSON-compatible source, selection, and limits."""
     selection = _coerce_sheet_selection(selection)
     limits = _coerce_toolbelt_limits(limits)
+    if limits.max_cells > _AUTHORITATIVE_RECORD_LIMIT:
+        raise ToolbeltError("workbook cell limit exceeds authoritative retention capacity")
     source = Path(source)
     _check_cancel(cancel_check)
     cache_key = None

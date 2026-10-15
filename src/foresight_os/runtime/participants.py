@@ -117,6 +117,9 @@ class AgentFactory:
             kwargs.setdefault("default_options", {})["response_format"] = context["structured_output_schema"]
         tools = context.get("tools_by_participant", {}).get(config.id)
         middleware = []
+        provider_middleware = context.get("provider_call_middleware")
+        if provider_middleware is not None:
+            middleware.append(provider_middleware)
         if tools is None and required_capabilities and context.get("capability_resolver") is not None:
             participant_context = dict(context)
             participant_context["participant_data_scope"] = config.data_scope

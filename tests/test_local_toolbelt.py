@@ -510,6 +510,14 @@ def test_supported_measurement_volume_remains_authoritative(tmp_path):
     assert record.verification_status.value == "VERIFIED"
 
 
+def test_explicit_read_capacity_above_authoritative_retention_is_rejected(tmp_path):
+    source = tmp_path / "bounded.csv"
+    source.write_text("Region,Value\nNorth,10\n", encoding="utf-8")
+
+    with pytest.raises(ToolbeltError, match="authoritative retention capacity"):
+        spreadsheet_read(source, limits=ToolbeltLimits(max_cells=250_001))
+
+
 def test_run_local_workbook_cache_reuses_deterministic_analysis(workbook_path):
     cache = WorkbookReadCache()
     table = spreadsheet_read(workbook_path, _cache=cache).tables[0]

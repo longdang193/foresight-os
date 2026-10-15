@@ -3,7 +3,11 @@ import inspect
 import json
 from typing import Any, Callable, Mapping
 
+from agent_framework import ChatMiddleware
+from agent_framework._tools import FunctionInvocationLayer
+
 from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
+from foresight_os.runtime.metrics import BudgetExceededError
 
 
 async def _close_agent(agent: object) -> None:
@@ -62,6 +66,66 @@ def _reserve_agent_call(reserve_call: Callable[[], bool] | None) -> None:
         raise BudgetExceededError("maximum agent calls exceeded before dispatch")
 
 
+class _ReservedChatClient:
+    _foresight_reserved = True
+
+    def __init__(
+        self,
+        client: Any,
+        reserve_call: Callable[[], bool] | None,
+        on_call: Callable[[], None] | None,
+    ) -> None:
+        self._client = client
+        self._reserve_call = reserve_call
+        self._on_call = on_call
+
+    def get_response(self, *args: Any, **kwargs: Any) -> Any:
+        if self._reserve_call is not None and not self._reserve_call():
+            raise BudgetExceededError("maximum agent calls exceeded before dispatch")
+        if self._on_call is not None:
+            self._on_call()
+        return self._client.get_response(*args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
+
+class _ReservedProviderCallMiddleware(ChatMiddleware):
+    _foresight_provider_budget = True
+
+    def __init__(self, reserve_call: Callable[[], bool] | None, on_call: Callable[[], None] | None) -> None:
+        self._reserve_call = reserve_call
+        self._on_call = on_call
+
+    async def process(self, context: Any, call_next: Callable[[], Any]) -> None:
+        if self._reserve_call is not None and not self._reserve_call():
+            raise BudgetExceededError("maximum agent calls exceeded before dispatch")
+        if self._on_call is not None:
+            self._on_call()
+        await call_next()
+
+
+def _supports_function_invocation(client: Any) -> bool:
+    return isinstance(client, FunctionInvocationLayer)
+
+
+def _install_provider_budget_middleware(
+    agent: Any,
+    reserve_call: Callable[[], bool] | None,
+    on_call: Callable[[], None] | None,
+) -> bool:
+    client = getattr(agent, "client", None)
+    if not _supports_function_invocation(client):
+        return False
+    middleware = list(getattr(agent, "middleware", ()) or ())
+    if not any(getattr(item, "_foresight_provider_budget", False) for item in middleware):
+        middleware.append(_ReservedProviderCallMiddleware(reserve_call, on_call))
+        agent.middleware = middleware
+        if hasattr(agent, "_cached_agent_middleware_pipeline"):
+            agent._cached_agent_middleware_pipeline = None
+    return True
+
+
 async def run_agent_with_tool_fallback(
     agent: Any,
     prompt: str,
@@ -71,9 +135,22 @@ async def run_agent_with_tool_fallback(
     on_call: Callable[[], None] | None = None,
 ) -> Any:
     run_options = dict(options or {})
-    _reserve_agent_call(reserve_call)
-    if on_call is not None:
-        on_call()
+    client = getattr(agent, "client", None)
+    provider_boundary = _install_provider_budget_middleware(agent, reserve_call, on_call)
+    if not provider_boundary and client is not None and hasattr(client, "get_response") and not getattr(client, "_foresight_reserved", False):
+        agent.client = _ReservedChatClient(client, reserve_call, on_call)
+        provider_boundary = True
+    elif getattr(client, "_foresight_reserved", False):
+        provider_boundary = True
+
+    def reserve_fallback_call() -> None:
+        if provider_boundary:
+            return
+        _reserve_agent_call(reserve_call)
+        if on_call is not None:
+            on_call()
+
+    reserve_fallback_call()
     response = await agent.run(prompt, options=run_options) if run_options else await agent.run(prompt)
     value = _response_value(response)
     if value is not None:
@@ -87,9 +164,7 @@ async def run_agent_with_tool_fallback(
         "Use the following tool results as the only source material and return the required result now:\n"
         f"{json.dumps(results, ensure_ascii=False)}"
     )
-    _reserve_agent_call(reserve_call)
-    if on_call is not None:
-        on_call()
+    reserve_fallback_call()
     retry = await agent.run(retry_prompt, tools=[], options=run_options) if run_options else await agent.run(retry_prompt, tools=[])
     return _response_value(retry) or ""
 
