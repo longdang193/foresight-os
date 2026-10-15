@@ -686,7 +686,7 @@ def normalize_stage_result(
     def resolve_relationships(record_id: str, label: str) -> list[str]:
         resolved: list[str] = []
         for reference in record_inputs[record_id]["relationship_ids"]:
-            relationship_id = relationship_aliases.get(reference) or known_relationship_aliases.get(reference)
+            relationship_id = known_relationship_aliases.get(reference) or relationship_aliases.get(reference)
             if relationship_id is None:
                 raise ValidationError(f"unknown reference: {label} -> {reference}")
             resolved.append(relationship_id)
