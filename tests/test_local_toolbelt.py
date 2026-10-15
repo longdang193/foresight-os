@@ -492,6 +492,24 @@ def test_overlapping_workbook_reads_preserve_measurement_authority(workbook_path
     assert record.verification_status.value == "VERIFIED"
 
 
+def test_supported_measurement_volume_remains_authoritative(tmp_path):
+    source = tmp_path / "large.csv"
+    rows = ["Region,V1,V2,V3,V4"]
+    rows.extend(f"R{index},{index},{index + 1},{index + 2},{index + 3}" for index in range(25_002))
+    source.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    result = spreadsheet_read(str(source))
+    measurement = next(item for item in result.measurements if item.provenance.coordinate == "B2")
+    record = calculation(
+        [measurement],
+        formula={"expression": "large!B2", "operation": "sum"},
+        units={"units": "units"},
+        approved_workbook_sha256=result.workbook_sha256,
+    )
+
+    assert record.verification_status.value == "VERIFIED"
+
+
 def test_run_local_workbook_cache_reuses_deterministic_analysis(workbook_path):
     cache = WorkbookReadCache()
     table = spreadsheet_read(workbook_path, _cache=cache).tables[0]

@@ -294,7 +294,7 @@ class TypedTable:
 
 _AUTHORITATIVE_MEASUREMENTS: dict[tuple[str, str, str], TypedMeasurement] = {}
 _AUTHORITATIVE_CALCULATIONS: dict[tuple[str, str], CalculationRecord] = {}
-_AUTHORITATIVE_RECORD_LIMIT = 100_000
+_AUTHORITATIVE_RECORD_LIMIT = ToolbeltLimits().max_cells
 
 
 def _remember_authoritative_measurements(measurements: Iterable[TypedMeasurement]) -> None:

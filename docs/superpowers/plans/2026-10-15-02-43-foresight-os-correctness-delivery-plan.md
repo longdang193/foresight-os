@@ -622,4 +622,3 @@ The plan is ready for completion verification when:
    `skill-verification-before-completion` returns `verified`.
 
 A checked task box records progress only; it is not completion evidence.
-

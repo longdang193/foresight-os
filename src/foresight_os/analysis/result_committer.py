@@ -271,6 +271,24 @@ class StageAnalyticalResult:
     def to_payload(self) -> dict[str, Any]:
         return json.loads(json.dumps(asdict(self), default=lambda value: value.value if hasattr(value, "value") else str(value)))
 
+    def to_contract_payload(self) -> dict[str, Any]:
+        payload = self.to_payload()
+        field_sets = {
+            "evidence": _EVIDENCE_FIELDS,
+            "calculations": _CALCULATION_FIELDS,
+            "claims": _ANALYTICAL_RECORD_FIELDS,
+            "implications": _ANALYTICAL_RECORD_FIELDS,
+            "recommendations": _ANALYTICAL_RECORD_FIELDS,
+            "artifacts": _ARTIFACT_FIELDS,
+            "relationships": _RELATIONSHIP_FIELDS,
+        }
+        for collection, fields in field_sets.items():
+            payload[collection] = [
+                {key: value for key, value in item.items() if key in fields}
+                for item in payload[collection]
+            ]
+        return payload
+
     def canonical_records(self) -> dict[str, object]:
         payload = self.to_payload()
         records: dict[str, object] = {}

@@ -12,7 +12,7 @@ from foresight_os.persistence.ids import canonical_json_hash
 from foresight_os.domain.validation import ValidationError
 from foresight_os.analysis.result_committer import decode_stage_output
 from foresight_os.runtime.workflow import CanonicalStageResult, _canonical_result_hash, _close_agents, _run_native_stage, _synthesize_stage_outputs, _workflow_output_value, run_recipe_async
-from foresight_os.runtime.metrics import RunMetrics
+from foresight_os.runtime.metrics import BudgetExceededError, RunMetrics
 
 
 class FakeChatClient:
@@ -35,6 +35,15 @@ class FakeChatClient:
 
     def as_agent(self, **kwargs):
         return Agent(self, **kwargs)
+
+
+class CountingChatClient(FakeChatClient):
+    def __init__(self):
+        self.calls = 0
+
+    def get_response(self, messages, **kwargs):
+        self.calls += 1
+        return super().get_response(messages, **kwargs)
 
 
 def _recipe(patterns: tuple[ExecutionPattern, ...]) -> ExecutionRecipe:
@@ -62,6 +71,27 @@ def test_native_sequential_concurrent_and_group_chat_execute_with_installed_buil
     for pattern in (ExecutionPattern.SEQUENTIAL, ExecutionPattern.CONCURRENT, ExecutionPattern.GROUP_CHAT):
         outputs = asyncio.run(_run_native_stage(pattern, "hello", client, [{"purpose": "one"}, {"purpose": "two"}]))
         assert outputs
+
+
+def test_native_provider_budget_is_reserved_before_model_dispatch():
+    client = CountingChatClient()
+    metrics = RunMetrics("budget-boundary", "SEQUENTIAL", "sequential")
+    budget = BudgetState(5, 1, 0)
+
+    with pytest.raises(BudgetExceededError, match="agent calls"):
+        asyncio.run(
+            _run_native_stage(
+                ExecutionPattern.SEQUENTIAL,
+                "hello",
+                client,
+                [{"purpose": "one"}],
+                metrics,
+                {"budget": budget, "reserve_agent_call": budget.call},
+            )
+        )
+
+    assert client.calls == 0
+    assert metrics.model_calls == 0
 
 
 def test_native_workflow_unwraps_structured_agent_response_values():

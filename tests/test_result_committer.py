@@ -17,7 +17,8 @@ from foresight_os.persistence.ids import canonical_json_hash
 from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, RecipeStage, RecipeName, StageInput, make_recipe
 from foresight_os.domain.models import AnalysisState, Revision, SourceLocator, Evidence
 from foresight_os.runtime.metrics import BudgetExceededError
-from foresight_os.runtime.workflow import CanonicalStageResult, _stage_cache_key, run_recipe_async
+import foresight_os.runtime.workflow as workflow_module
+from foresight_os.runtime.workflow import CanonicalStageResult, _stage_cache_key, _synthesize_stage_outputs, run_recipe_async
 
 
 def _payload(**overrides):
@@ -182,6 +183,68 @@ def test_artifact_relationship_aliases_are_resolved():
     result = normalize_stage_result(payload)
 
     assert result.artifacts[0].relationship_ids == [result.relationships[0].id]
+
+
+def test_synthesized_artifact_payload_remains_provider_compatible(tmp_path):
+    stage = RecipeStage("stage-1", ExecutionPattern.CONCURRENT, ({"id": "one"}, {"id": "two"}), "prompt", "typed-result", {})
+    artifact = {"id": "provider-artifact", "kind": "report", "path": "work/report.md", "relationship_ids": []}
+    payload = _payload(evidence=[], claims=[], relationships=[], artifacts=[artifact])
+    synthesized = _synthesize_stage_outputs(stage, [payload, payload])
+
+    committer = CanonicalResultCommitter(AnalysisStore(tmp_path / "case"), "case")
+    result = committer(stage, synthesized, {})
+
+    assert result.result_references
+
+
+def test_multi_participant_validation_uses_correction_budget(monkeypatch):
+    base = make_recipe(RecipeName.DIRECT)
+    stage = RecipeStage("stage-1", ExecutionPattern.CONCURRENT, ({"id": "one"}, {"id": "two"}), "prompt", "typed-result", {})
+    recipe = ExecutionRecipe(
+        base.name,
+        base.pattern,
+        base.roles,
+        base.max_agent_steps,
+        base.max_correction_rounds,
+        4,
+        base.completion,
+        base.escalation,
+        base.partial_result,
+        stages=(stage,),
+    )
+    synthesis_calls = 0
+    native_calls = 0
+
+    async def fake_native(*args, **kwargs):
+        nonlocal native_calls
+        native_calls += 1
+        return [{"status": "raw"}, {"status": "raw"}]
+
+    def fake_synthesis(*args, **kwargs):
+        nonlocal synthesis_calls
+        synthesis_calls += 1
+        if synthesis_calls == 1:
+            raise ValidationError("invalid aggregate")
+        return {"status": "ready"}
+
+    monkeypatch.setattr(workflow_module, "_run_native_stage", fake_native)
+    monkeypatch.setattr(workflow_module, "_synthesize_stage_outputs", fake_synthesis)
+
+    def committer(stage, output, context):
+        return CanonicalStageResult(("result",), (canonical_json_hash(output),), output)
+
+    result = asyncio.run(
+        run_recipe_async(
+            recipe,
+            "question",
+            client=object(),
+            run_id="aggregate-correction",
+            run_context={"canonical_result_committer": committer},
+        )
+    )
+
+    assert result.metrics.correction_rounds == 1
+    assert native_calls == 2
 
 
 def test_schema_is_strict_and_binds_contract():

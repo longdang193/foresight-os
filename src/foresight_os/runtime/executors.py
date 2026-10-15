@@ -68,9 +68,12 @@ async def run_agent_with_tool_fallback(
     options: Mapping[str, Any] | None = None,
     *,
     reserve_call: Callable[[], bool] | None = None,
+    on_call: Callable[[], None] | None = None,
 ) -> Any:
     run_options = dict(options or {})
     _reserve_agent_call(reserve_call)
+    if on_call is not None:
+        on_call()
     response = await agent.run(prompt, options=run_options) if run_options else await agent.run(prompt)
     value = _response_value(response)
     if value is not None:
@@ -85,6 +88,8 @@ async def run_agent_with_tool_fallback(
         f"{json.dumps(results, ensure_ascii=False)}"
     )
     _reserve_agent_call(reserve_call)
+    if on_call is not None:
+        on_call()
     retry = await agent.run(retry_prompt, tools=[], options=run_options) if run_options else await agent.run(retry_prompt, tools=[])
     return _response_value(retry) or ""
 
@@ -103,7 +108,13 @@ class AnalystExecutor:
         participant = self.participant or ParticipantConfig("analyst", "analyst", "structured analytical proposal")
         agent = factory.create(participant, self.run_context or {})
         options = _run_options(participant, self.run_context)
-        return await run_agent_with_tool_fallback(agent, prompt, options, reserve_call=(self.run_context or {}).get("reserve_agent_call"))
+        return await run_agent_with_tool_fallback(
+            agent,
+            prompt,
+            options,
+            reserve_call=(self.run_context or {}).get("reserve_agent_call"),
+            on_call=(self.run_context or {}).get("record_agent_call"),
+        )
 
 
 @dataclass
@@ -120,4 +131,10 @@ class ReviewerExecutor:
         participant = self.participant or ParticipantConfig("reviewer", "reviewer", "structured review of the proposal")
         agent = factory.create(participant, self.run_context or {})
         options = _run_options(participant, self.run_context)
-        return await run_agent_with_tool_fallback(agent, prompt, options, reserve_call=(self.run_context or {}).get("reserve_agent_call"))
+        return await run_agent_with_tool_fallback(
+            agent,
+            prompt,
+            options,
+            reserve_call=(self.run_context or {}).get("reserve_agent_call"),
+            on_call=(self.run_context or {}).get("record_agent_call"),
+        )

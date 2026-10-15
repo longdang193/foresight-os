@@ -129,10 +129,26 @@ async def _run_native_stage(
     context["handoff"] = pattern == ExecutionPattern.HANDOFF
     max_rounds = _positive_limit(context.get("max_rounds"), default=4, label="max_rounds")
     reserve_call = context.get("reserve_agent_call")
+    on_call = None if metrics is None else lambda: setattr(metrics, "model_calls", metrics.model_calls + 1)
     for index, role in enumerate(roles or [{"purpose": "participant"}], 1):
         participant = ParticipantConfig.from_mapping(role, f"participant-{index}")
         agent = factory.create(participant, context)
         agents.append(agent)
+    tools_enabled = any(getattr(agent, "default_options", {}).get("tools") for agent in agents)
+    wrapped_agent_ids: set[str] = set()
+    if not (tools_enabled and context.get("require_structured_output")):
+        wrapped_clients: dict[int, _ReservedChatClient] = {}
+        for agent in agents:
+            client_instance = getattr(agent, "client", None)
+            if client_instance is None or not hasattr(client_instance, "get_response"):
+                continue
+            client_key = id(client_instance)
+            wrapped_client = wrapped_clients.get(client_key)
+            if wrapped_client is None:
+                wrapped_client = _ReservedChatClient(client_instance, reserve_call, on_call)
+                wrapped_clients[client_key] = wrapped_client
+            agent.client = wrapped_client
+            wrapped_agent_ids.add(getattr(agent, "id", ""))
     if pattern == ExecutionPattern.SEQUENTIAL:
         workflow = SequentialBuilder(participants=agents, output_from="all").build()
     elif pattern == ExecutionPattern.CONCURRENT:
@@ -159,16 +175,35 @@ async def _run_native_stage(
             max_rounds=max_rounds,
             output_from="all",
         ).build()
-    else:
-        if reserve_call is not None and not reserve_call():
+    if pattern not in {
+        ExecutionPattern.SEQUENTIAL,
+        ExecutionPattern.CONCURRENT,
+        ExecutionPattern.HANDOFF,
+        ExecutionPattern.GROUP_CHAT,
+    }:
+        client_instance = getattr(agents[0], "client", None)
+        if getattr(agents[0], "id", "") not in wrapped_agent_ids and client_instance is not None and hasattr(client_instance, "get_response"):
+            agents[0].client = _ReservedChatClient(client_instance, reserve_call, on_call)
+        elif getattr(agents[0], "id", "") not in wrapped_agent_ids and reserve_call is not None and not reserve_call():
             raise BudgetExceededError("maximum agent calls exceeded before dispatch")
+        if getattr(agents[0], "id", "") not in wrapped_agent_ids and (client_instance is None or not hasattr(client_instance, "get_response")):
+            if on_call is not None:
+                on_call()
         return [await agents[0].run(prompt)]
-    tools_enabled = any(getattr(agent, "default_options", {}).get("tools") for agent in agents)
     if tools_enabled and context.get("require_structured_output"):
         options = {"response_format": context.get("structured_output_schema")}
         if pattern == ExecutionPattern.CONCURRENT:
             results = await asyncio.gather(
-                *[run_agent_with_tool_fallback(agent, prompt, options, reserve_call=reserve_call) for agent in agents]
+                *[
+                    run_agent_with_tool_fallback(
+                        agent,
+                        prompt,
+                        options,
+                        reserve_call=reserve_call,
+                        on_call=on_call,
+                    )
+                    for agent in agents
+                ]
             )
             return list(results)
         if pattern == ExecutionPattern.GROUP_CHAT:
@@ -176,7 +211,13 @@ async def _run_native_stage(
             current_prompt = prompt
             for round_index in range(max_rounds):
                 agent = agents[round_index % len(agents)]
-                result = await run_agent_with_tool_fallback(agent, current_prompt, options, reserve_call=reserve_call)
+                result = await run_agent_with_tool_fallback(
+                    agent,
+                    current_prompt,
+                    options,
+                    reserve_call=reserve_call,
+                    on_call=on_call,
+                )
                 results.append(result)
                 current_prompt = f"Challenge this proposal and return the required structured result:\n{result}"
                 if metrics is not None:
@@ -185,24 +226,18 @@ async def _run_native_stage(
         results = []
         current_prompt = prompt
         for index, agent in enumerate(agents):
-            result = await run_agent_with_tool_fallback(agent, current_prompt, options, reserve_call=reserve_call)
+            result = await run_agent_with_tool_fallback(
+                agent,
+                current_prompt,
+                options,
+                reserve_call=reserve_call,
+                on_call=on_call,
+            )
             results.append(result)
             if index + 1 < len(agents):
                 current_prompt = f"Review this proposal and return the required structured result:\n{result}"
         return results
     if tools_enabled:
-        on_call = None if metrics is None else lambda: setattr(metrics, "model_calls", metrics.model_calls + 1)
-        wrapped_clients: dict[int, _ReservedChatClient] = {}
-        for agent in agents:
-            client_instance = getattr(agent, "client", None)
-            if client_instance is None:
-                continue
-            client_key = id(client_instance)
-            wrapped_client = wrapped_clients.get(client_key)
-            if wrapped_client is None:
-                wrapped_client = _ReservedChatClient(client_instance, reserve_call, on_call)
-                wrapped_clients[client_key] = wrapped_client
-            agent.client = wrapped_client
         result = await workflow.run(prompt)
         if pattern == ExecutionPattern.GROUP_CHAT:
             observed_rounds = {
@@ -230,9 +265,9 @@ async def _run_native_stage(
                     and event.executor_id in agent_ids
                     and getattr(getattr(event, "data", None), "should_respond", True)
                 ):
-                    if reserve_call is not None and not reserve_call():
+                    if event.executor_id not in wrapped_agent_ids and reserve_call is not None and not reserve_call():
                         raise BudgetExceededError("maximum agent calls exceeded before dispatch")
-                    if metrics is not None:
+                    if event.executor_id not in wrapped_agent_ids and metrics is not None:
                         metrics.model_calls += 1
                 elif event.type == "handoff_sent":
                     if metrics is not None:
@@ -300,7 +335,7 @@ def _synthesize_stage_outputs(
                     output,
                     expected_stage_id=str(getattr(stage, "stage_id", "stage")),
                     existing_records=existing_records,
-                ).to_payload()
+                ).to_contract_payload()
             )
         else:
             normalized_outputs.append(output)
@@ -639,6 +674,7 @@ async def run_recipe_async(
         stage_context["selected_skills"] = selected_skills
         stage_context["selected_skills_by_participant"] = selected_skills_by_participant
         stage_context["reserve_agent_call"] = lambda: budget.call()
+        stage_context["record_agent_call"] = lambda: setattr(metrics, "model_calls", metrics.model_calls + 1)
         dependency_records: dict[str, object] = {}
         for dependency in tuple(getattr(stage, "dependencies", ())):
             dependency_receipt = context.get("stage_receipts", {}).get(str(dependency))
@@ -789,14 +825,15 @@ async def run_recipe_async(
             )
         committer = context.get("canonical_result_committer")
         correction_prompt: str | None = None
+        canonical = None
         while True:
-            if max_timeout is not None:
-                stage_outputs, current = await asyncio.wait_for(invoke(correction_prompt), float(max_timeout))
-            else:
-                stage_outputs, current = await invoke(correction_prompt)
-            if committer is None:
-                break
             try:
+                if max_timeout is not None:
+                    stage_outputs, current = await asyncio.wait_for(invoke(correction_prompt), float(max_timeout))
+                else:
+                    stage_outputs, current = await invoke(correction_prompt)
+                if committer is None:
+                    break
                 canonical = committer(
                     stage,
                     current,
