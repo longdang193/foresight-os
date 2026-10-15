@@ -8,7 +8,7 @@
   "properties": {
     "investigation_id": { "type": "string", "minLength": 1 },
     "revision": { "type": "integer", "minimum": 1 },
-    "schema_version": { "type": "integer", "const": 1 },
+    "schema_version": { "type": "integer", "enum": [1, 2] },
     "revision_status": { "enum": ["DRAFT", "PENDING_REVIEW", "ACCEPTED", "REJECTED", "SUPERSEDED"] },
     "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } },
     "calculations": { "type": "array", "items": { "$ref": "#/$defs/calculation" } },
@@ -115,6 +115,36 @@
         ,"policy_id": { "type": "string" }
         ,"policy_version": { "type": "string" }
         ,"skill_hashes": { "type": "array", "items": { "type": "string" } }
+        ,"check_id": { "type": "string" }
+        ,"reviewer_id": { "type": "string" }
+        ,"execution_id": { "type": "string" }
+        ,"attempt_id": { "type": "string" }
+        ,"method": { "type": "string" }
+        ,"source_fingerprints": { "type": "array", "items": { "type": "string" } }
+        ,"dependency_fingerprints": { "type": "array", "items": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "string" } } }
+        ,"slot_key": { "type": "string" }
+        ,"supersedes_review_id": { "type": ["string", "null"] }
+        ,"superseded_by_review_id": { "type": ["string", "null"] }
+        ,"conflict_review_ids": { "type": "array", "items": { "type": "string" } }
+        ,"check_results": { "type": "array", "items": { "$ref": "#/$defs/review_check_result" } }
+        ,"legacy": { "type": "boolean" }
+      }
+    },
+    "review_check_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["check_id", "status", "source_ids", "input_ids", "limitations"],
+      "properties": {
+        "check_id": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["PASS", "FAIL", "PENDING", "STALE", "CONFLICT"] },
+        "expected": {},
+        "actual": {},
+        "delta": {},
+        "tolerance": {},
+        "source_ids": { "type": "array", "items": { "type": "string" } },
+        "input_ids": { "type": "array", "items": { "type": "string" } },
+        "interpretation": { "type": "string" },
+        "limitations": { "type": "array", "items": { "type": "string" } }
       }
     },
     "artifact": {

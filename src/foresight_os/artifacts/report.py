@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from foresight_os.domain.challenge import accepted_consequential_recommendation, derive_finding_views
+from foresight_os.domain.challenge import accepted_consequential_recommendation, derive_finding_views, review_category_statuses
 from foresight_os.domain.models import AnalysisState, Assessment, RevisionStatus
 
 
@@ -26,6 +26,10 @@ def render_report(state: AnalysisState, *, provisional: bool = False) -> str:
         "## Findings",
     ]
     findings = {item.target_id: item for item in derive_finding_views(state)}
+    category_statuses = [(record.id, status) for record in [*state.claims, *state.implications, *state.recommendations] for status in review_category_statuses(state, record.id)]
+    if category_statuses:
+        lines.extend(["", "## Review category status"])
+        lines.extend(f"- `{target_id}` `{check_id}`: {status} ({validity})" for target_id, (check_id, status, validity) in category_statuses)
     if provisional:
         for finding in derive_finding_views(state):
             if finding.limitations:

@@ -1,6 +1,14 @@
 from dataclasses import dataclass
 
-from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, RecipeName, RecipeStage, make_recipe
+from foresight_os.controller.recipes import (
+    INDEPENDENT_VALIDATION_POLICY,
+    ExecutionPattern,
+    ExecutionRecipe,
+    RecipeName,
+    RecipeStage,
+    ReviewCheckKind,
+    make_recipe,
+)
 from foresight_os.controller.task_shape import TaskShape
 from foresight_os.domain.models import ResearchNeed, ResearchNeedKind, WorkBrief
 
@@ -10,9 +18,15 @@ class ReviewPolicy:
     policy_id: str
     version: str
     required_skill_ids: tuple[str, ...]
+    required_check_ids: tuple[str, ...] = ()
+    reviewer_capability_ids: tuple[str, ...] = ()
     acceptable_outcomes: tuple[str, ...] = ("ACCEPTED",)
     blocking_objection_kinds: tuple[str, ...] = ()
     unresolved_classification_issue: str | None = None
+
+    @property
+    def reviewer_skill_ids(self) -> tuple[str, ...]:
+        return self.required_skill_ids
 
 
 class ReviewPolicyResolver:
@@ -25,6 +39,7 @@ class ReviewPolicyResolver:
         target_kind: str | None = None,
         research_needs: tuple[object, ...] | list[object] = (),
         consequence_level: str | None = None,
+        typed: bool = False,
     ) -> ReviewPolicy:
         level = consequence_level if consequence_level is not None else getattr(brief, "consequence_level", "standard")
         level = str(level or "standard").lower()
@@ -40,6 +55,14 @@ class ReviewPolicyResolver:
         if level not in {"standard", "high"}:
             unresolved = f"unknown consequence classification: {level}"
             level = "standard"
+        if typed:
+            return self._resolve_typed(
+                brief,
+                target_value=target_value,
+                research_needs=research_needs,
+                consequence_level=level,
+                unresolved_classification_issue=unresolved,
+            )
         if level == "high":
             return ReviewPolicy("review-policy-high-consequence-v1", "1", ("key-assumptions-check", "red-team-claim", "abstain-or-escalate"), blocking_objection_kinds=("FAILURE_MODE", "UNSUPPORTED_ASSUMPTION"), unresolved_classification_issue=unresolved)
         if quantitative:
@@ -49,6 +72,90 @@ class ReviewPolicyResolver:
         elif target_value not in {"CLAIM", "IMPLICATION", "RECOMMENDATION", ResearchNeedKind.QUANTITATIVE_ANALYSIS.value}:
             unresolved = unresolved or f"unknown target classification: {target_kind}"
         return ReviewPolicy("review-policy-standard-v1", "1", ("source-appraisal", "red-team-claim"), blocking_objection_kinds=("SOURCE_CONTRADICTION",), unresolved_classification_issue=unresolved)
+
+    def _resolve_typed(
+        self,
+        brief: WorkBrief | None,
+        *,
+        target_value: str,
+        research_needs: tuple[object, ...] | list[object],
+        consequence_level: str,
+        unresolved_classification_issue: str | None,
+    ) -> ReviewPolicy:
+        needs = [*research_needs]
+        if brief is not None:
+            needs.extend(
+                stage_need
+                for stage in getattr(brief, "stages", ())
+                for stage_need in getattr(stage, "research_needs", ())
+            )
+        need_kinds = {
+            str(getattr(item, "kind", item))
+            for item in needs
+            if item is not None
+        }
+        source_kinds = {
+            ResearchNeedKind.EXTERNAL_FACT.value,
+            ResearchNeedKind.SOURCE_DETAIL.value,
+            ResearchNeedKind.DOCUMENT_REVIEW.value,
+            ResearchNeedKind.STRUCTURED_DATA.value,
+            ResearchNeedKind.EXISTING_EVIDENCE.value,
+            ResearchNeedKind.VALIDATION.value,
+        }
+        quantitative = bool(
+            target_value == ResearchNeedKind.QUANTITATIVE_ANALYSIS.value
+            or ResearchNeedKind.QUANTITATIVE_ANALYSIS.value in need_kinds
+            or ResearchNeedKind.STRUCTURED_DATA.value in need_kinds
+        )
+        material_source = bool(
+            need_kinds.intersection(source_kinds)
+            or getattr(brief, "open_dependencies", ())
+            or getattr(brief, "scope", ())
+        )
+        checks: list[str] = []
+        if material_source or target_value in {"CLAIM", "IMPLICATION", "RECOMMENDATION"}:
+            checks.append(ReviewCheckKind.SOURCE_FIDELITY.value)
+        if brief is not None or target_value in {"IMPLICATION", "RECOMMENDATION"} or consequence_level == "high":
+            checks.append(ReviewCheckKind.SCOPE_RECONCILIATION.value)
+        if quantitative:
+            checks.append(ReviewCheckKind.CALCULATION_RECONCILIATION.value)
+        if consequence_level == "high" or target_value in {"IMPLICATION", "RECOMMENDATION"}:
+            checks.append(ReviewCheckKind.DECISION_CHALLENGE.value)
+        if not checks:
+            checks.append(ReviewCheckKind.SCOPE_RECONCILIATION.value)
+
+        skill_by_check = {
+            ReviewCheckKind.SOURCE_FIDELITY.value: "source-appraisal",
+            ReviewCheckKind.SCOPE_RECONCILIATION.value: "key-assumptions-check",
+            ReviewCheckKind.CALCULATION_RECONCILIATION.value: "quantitative-sanity-check",
+            ReviewCheckKind.DECISION_CHALLENGE.value: "red-team-claim",
+        }
+        capability_by_need = {
+            ResearchNeedKind.EXTERNAL_FACT.value: ("web_search",),
+            ResearchNeedKind.SOURCE_DETAIL.value: ("page_retrieval",),
+            ResearchNeedKind.DOCUMENT_REVIEW.value: ("document_read",),
+            ResearchNeedKind.STRUCTURED_DATA.value: ("spreadsheet_read",),
+            ResearchNeedKind.QUANTITATIVE_ANALYSIS.value: ("data_analysis", "calculation"),
+            ResearchNeedKind.EXISTING_EVIDENCE.value: ("graph_context",),
+            ResearchNeedKind.VALIDATION.value: ("domain_validation",),
+        }
+        capabilities = list(checks)
+        if ReviewCheckKind.SOURCE_FIDELITY.value in checks or ReviewCheckKind.CALCULATION_RECONCILIATION.value in checks:
+            for kind in sorted(need_kinds):
+                capabilities.extend(capability_by_need.get(kind, ()))
+        skills = [skill_by_check[check] for check in checks]
+        if consequence_level == "high" and "abstain-or-escalate" not in skills:
+            skills.append("abstain-or-escalate")
+        blocking = ("CALCULATION_ERROR",) if quantitative else ("SOURCE_CONTRADICTION", "UNSUPPORTED_ASSUMPTION")
+        return ReviewPolicy(
+            INDEPENDENT_VALIDATION_POLICY,
+            "1",
+            tuple(dict.fromkeys(skills)),
+            tuple(dict.fromkeys(checks)),
+            tuple(dict.fromkeys(capabilities)),
+            blocking_objection_kinds=blocking,
+            unresolved_classification_issue=unresolved_classification_issue,
+        )
 
 
 @dataclass(frozen=True)
@@ -142,12 +249,12 @@ def _recipe_for_patterns(
         ResearchNeedKind.ARTIFACT_OUTPUT.value: ("artifact_generation",),
     }
     intent = getattr(brief, "execution_intent", None)
-    required_capabilities = tuple(str(item) for item in getattr(intent, "required_capabilities", ()))
+    required_capabilities = tuple(str(item) for item in getattr(intent, "required_capabilities", ()) if str(item) not in {item.value for item in ReviewCheckKind})
     required_participants = tuple(str(item) for item in getattr(intent, "required_participants", ()) if str(item))
 
     def stage_requirements(stage: object) -> tuple[tuple[str, ...], tuple[str, ...]]:
         stage_intent = getattr(stage, "execution_intent", None)
-        stage_capabilities = tuple(str(item) for item in getattr(stage_intent, "required_capabilities", ()))
+        stage_capabilities = tuple(str(item) for item in getattr(stage_intent, "required_capabilities", ()) if str(item) not in {item.value for item in ReviewCheckKind})
         stage_participants = tuple(str(item) for item in getattr(stage_intent, "required_participants", ()) if str(item))
         return (
             tuple(dict.fromkeys((*required_capabilities, *stage_capabilities))),
@@ -171,6 +278,19 @@ def _recipe_for_patterns(
         required_stage_capabilities, _ = stage_requirements(stage)
         return tuple(dict.fromkeys((*capabilities, *required_stage_capabilities))), tuple(unresolved)
 
+    review_needs = tuple(
+        need
+        for stage in work_stages
+        for need in getattr(stage, "research_needs", ())
+    )
+    review_policy = ReviewPolicyResolver().resolve(
+        brief,
+        target_kind="RECOMMENDATION" if review_required else None,
+        research_needs=review_needs,
+        consequence_level=getattr(brief, "consequence_level", None) if brief is not None else None,
+        typed=review_required,
+    )
+
     stage_count = len(work_stages) or len(patterns)
     max_total_agent_calls = max(base.max_total_agent_calls, stage_count)
     if work_stages and source == "explicit_override" and len(patterns) not in (1, len(work_stages)):
@@ -185,8 +305,11 @@ def _recipe_for_patterns(
         )
 
     def review_capabilities(stage: object) -> tuple[str, ...]:
-        capabilities, _ = stage_capabilities(stage)
-        return capabilities
+        return review_policy.reviewer_capability_ids
+
+    def review_runtime_capabilities(stage: object) -> tuple[str, ...]:
+        declared = set(review_policy.reviewer_capability_ids)
+        return tuple(item for item in ("web_search", "page_retrieval", "document_read", "spreadsheet_read", "data_analysis", "calculation", "graph_context", "internal_knowledge", "domain_validation", "artifact_generation") if item in declared)
 
     def stage_roles(stage: object, pattern: ExecutionPattern, is_last: bool) -> list[dict[str, object]]:
         _, required_stage_participants = stage_requirements(stage)
@@ -234,8 +357,11 @@ def _recipe_for_patterns(
             tuple(
                 {
                     **role,
-                    "capability_ids": stage_capabilities(work_stages[index - 1])[0] if index <= len(work_stages) and role.get("purpose") != "review" else (review_capabilities(work_stages[index - 1]) if index <= len(work_stages) and role.get("purpose") == "review" else required_capabilities),
+                    "capability_ids": review_runtime_capabilities(work_stages[index - 1] if index <= len(work_stages) else object()) if role.get("purpose") == "review" and review_required else (stage_capabilities(work_stages[index - 1])[0] if index <= len(work_stages) else required_capabilities),
+                    "reviewer_capability_ids": review_capabilities(work_stages[index - 1] if index <= len(work_stages) else object()) if role.get("purpose") == "review" and review_required else tuple(role.get("reviewer_capability_ids", ())),
                     "unresolved_capabilities": stage_capabilities(work_stages[index - 1])[1] if index <= len(work_stages) and role.get("purpose") != "review" else (),
+                    "skill_ids": review_policy.reviewer_skill_ids if role.get("purpose") == "review" and review_required else tuple(role.get("skill_ids", ())),
+                    "review_check_ids": review_policy.required_check_ids if role.get("purpose") == "review" and review_required else tuple(role.get("review_check_ids", ())),
                 }
                 for role in stage_roles(work_stages[index - 1] if index <= len(work_stages) else object(), stage_patterns[index - 1], index == stage_count)
             ),
@@ -276,7 +402,7 @@ def _recipe_for_patterns(
                 {"participant_id": str(role.get("id", "")), "responsibility": str(role.get("purpose", "execute"))}
                 for role in stage_roles(work_stages[index - 1] if index <= len(work_stages) else object(), stage_patterns[index - 1], index == stage_count)
             ),
-            review_checks=("independent review" if review_required and index == stage_count else "stage output validation",),
+            review_checks=review_policy.required_check_ids if review_required and index == stage_count else (),
             completion_rule="stage output matches expected result and required checks pass",
             escalation_rule="escalate unresolved capability, contradiction, or budget exhaustion",
             partial_result_rule="preserve completed evidence and mark incomplete stage explicitly",
@@ -320,7 +446,7 @@ def _recipe_for_patterns(
         purpose=base.purpose,
         stages=stages,
         rationale=rationale,
-        review_policy="required review policy applies at the final stage" if review_required else "stage output validation",
+        review_policy=review_policy.policy_id if review_required else "stage output validation",
         reuse_policy="reuse only committed, provenance-complete matching receipts",
         adaptation_policy=("bounded_retry", "reduced_concurrency", "dependency_safe_topology_reduction"),
     )
@@ -328,7 +454,7 @@ def _recipe_for_patterns(
 
 def select_recipe(brief: WorkBrief, task_shape: TaskShape | None = None, override=None) -> ExecutionRecipe:
     intent = getattr(brief, "execution_intent", None)
-    required_capabilities = tuple(str(item) for item in getattr(intent, "required_capabilities", ()))
+    required_capabilities = tuple(str(item) for item in getattr(intent, "required_capabilities", ()) if str(item) not in {item.value for item in ReviewCheckKind})
     required_participants = tuple(str(item) for item in getattr(intent, "required_participants", ()) if str(item))
     if override is None and intent is not None and intent.required_patterns:
         override = list(intent.required_patterns)

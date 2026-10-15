@@ -37,8 +37,47 @@ from foresight_os.runtime.local_toolbelt import (
 )
 
 
-def attach_review_record(state: AnalysisState, review: ReviewResult, review_id: str) -> AnalysisState:
-    target_ids = tuple(item.id for collection in (state.claims, state.implications, state.recommendations) for item in collection)
+def attach_review_record(
+    state: AnalysisState,
+    review: ReviewResult,
+    review_id: str,
+    *,
+    target_ids: tuple[str, ...] | list[str] | None = None,
+    check_id: str | None = None,
+    reviewer_id: str | None = None,
+    execution_id: str | None = None,
+    attempt_id: str | None = None,
+    method: str | None = None,
+    source_fingerprints: tuple[str, ...] | list[str] = (),
+    dependency_fingerprints: tuple[tuple[str, str], ...] | list[tuple[str, str]] = (),
+    slot_key: str | None = None,
+    supersedes_review_id: str | None = None,
+) -> AnalysisState:
+    legacy_scope = target_ids is None
+    if legacy_scope:
+        if any((check_id, reviewer_id, execution_id, attempt_id, method)) or review.check_id:
+            raise ValueError("typed review attachment requires explicit target_ids")
+        target_ids = tuple(item.id for collection in (state.claims, state.implications, state.recommendations) for item in collection)
+    target_ids = tuple(dict.fromkeys(str(item) for item in target_ids or ()))
+    if not target_ids:
+        raise ValueError("review attachment requires at least one target_id")
+    known_ids = {
+        item.id
+        for collection in (state.evidence, state.claims, state.implications, state.recommendations, state.calculations)
+        for item in collection
+    }
+    if not set(target_ids).issubset(known_ids):
+        raise ValueError("review attachment references unknown target_ids")
+    resolved_check_id = str(check_id or review.check_id or "")
+    resolved_reviewer_id = str(reviewer_id or "")
+    resolved_execution_id = str(execution_id or "")
+    resolved_attempt_id = str(attempt_id or "")
+    resolved_method = str(method or review.method or "")
+    source_fingerprints = tuple(source_fingerprints or review.source_fingerprints)
+    dependency_fingerprints = tuple(dependency_fingerprints or review.dependency_fingerprints)
+    typed_metadata = any((resolved_check_id, resolved_reviewer_id, resolved_execution_id, resolved_attempt_id, resolved_method))
+    if typed_metadata and not all((resolved_check_id, resolved_reviewer_id, resolved_execution_id, resolved_attempt_id, resolved_method)):
+        raise ValueError("typed review attachment requires check, reviewer, execution, attempt, and method identity")
     record = ReviewRecord(
         review_id=review_id,
         target_ids=target_ids,
@@ -50,6 +89,8 @@ def attach_review_record(state: AnalysisState, review: ReviewResult, review_id: 
             review.skill_versions,
             review.skill_hashes,
             (review.policy_id, review.policy_version) if review.policy_id and review.policy_version else None,
+            source_fingerprints,
+            dependency_fingerprints,
         ),
         skill_ids=review.skill_ids,
         skill_versions=review.skill_versions,
@@ -59,8 +100,44 @@ def attach_review_record(state: AnalysisState, review: ReviewResult, review_id: 
         policy_id=review.policy_id,
         policy_version=review.policy_version,
         skill_hashes=review.skill_hashes,
+        check_id=resolved_check_id,
+        reviewer_id=resolved_reviewer_id,
+        execution_id=resolved_execution_id,
+        attempt_id=resolved_attempt_id,
+        method=resolved_method,
+        source_fingerprints=tuple(source_fingerprints),
+        dependency_fingerprints=tuple(tuple(item) for item in dependency_fingerprints),
+        slot_key=str(slot_key or ""),
+        supersedes_review_id=supersedes_review_id,
+        check_results=review.check_results,
+        legacy=legacy_scope or not typed_metadata,
     )
-    return replace(state, review_records=[*state.review_records, record])
+    for existing in state.review_records:
+        if existing.review_id == review_id:
+            if existing == record:
+                return state
+            raise ValueError(f"review_id already exists with different content: {review_id}")
+    active_slot = record.effective_slot_key if typed_metadata else ""
+    updated_records = list(state.review_records)
+    if active_slot:
+        same_slot = [
+            existing
+            for existing in updated_records
+            if existing.effective_slot_key == active_slot and existing.superseded_by_review_id is None
+        ]
+        for existing in same_slot:
+            existing_index = updated_records.index(existing)
+            if supersedes_review_id == existing.review_id or (
+                existing.reviewer_id == record.reviewer_id
+                and existing.method == record.method
+            ):
+                updated_records[existing_index] = replace(existing, superseded_by_review_id=review_id)
+            else:
+                conflict_ids = tuple(dict.fromkeys((*existing.conflict_review_ids, review_id)))
+                updated_records[existing_index] = replace(existing, conflict_review_ids=conflict_ids)
+                record = replace(record, conflict_review_ids=tuple(dict.fromkeys((*record.conflict_review_ids, existing.review_id))))
+    updated_records.append(record)
+    return replace(state, review_records=updated_records)
 
 @dataclass(frozen=True)
 class EvidenceWorkflowResult:

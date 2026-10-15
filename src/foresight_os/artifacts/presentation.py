@@ -11,6 +11,7 @@ from foresight_os.domain.challenge import (
     accepted_consequential_recommendation,
     collect_material_inputs,
     derive_finding_views,
+    review_category_statuses,
 )
 from foresight_os.domain.models import AnalysisState, Artifact, Relationship, RevisionStatus
 
@@ -150,6 +151,7 @@ def _slide_for(
         ]
         + ([f"Calculation IDs: {', '.join(calculation_ids)}."] if calculation_ids else [])
         + list(_citation_notes(state, evidence_ids))
+        + [f"Review {check_id}: {status} ({validity})." for finding_id in finding_ids for check_id, status, validity in review_category_statuses(state, finding_id)]
     )
     return SlideSpec(number, title, purpose, bullets, finding_ids, evidence_ids, calculation_ids, counterevidence_ids, uncertainty, disconfirmation, notes)
 

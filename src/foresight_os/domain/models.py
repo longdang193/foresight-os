@@ -194,7 +194,7 @@ class AnalysisState:
     relationships: list[Relationship] = field(default_factory=list)
     revisions: list[Revision] = field(default_factory=list)
     invalidation: Invalidation = field(default_factory=Invalidation)
-    schema_version: int = 1
+    schema_version: int = 2
     revision_status: RevisionStatus = RevisionStatus.ACCEPTED
     calculations: list[CalculationRecord] = field(default_factory=list)
     pending_token: str | None = None

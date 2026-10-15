@@ -50,7 +50,15 @@
           "provider": { "type": "string" },
           "model": { "type": "string" },
           "reasoning_controls": { "type": "object" },
-          "review_checks": { "type": "array", "items": { "type": "string" } },
+          "review_checks": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                { "$ref": "#/$defs/review_check_kind" },
+                { "type": "string", "minLength": 1 }
+              ]
+            }
+          },
           "completion_rule": { "type": "string" },
           "escalation_rule": { "type": "string" },
           "partial_result_rule": { "type": "string" },
@@ -59,6 +67,17 @@
           ,"synthesis_policy": { "type": "string", "enum": ["single-output", "aggregate-typed-results"] }
         }
       }
+    }
+  },
+  "$defs": {
+    "review_check_kind": {
+      "type": "string",
+      "enum": [
+        "source_fidelity",
+        "scope_reconciliation",
+        "calculation_reconciliation",
+        "decision_challenge"
+      ]
     }
   }
 }

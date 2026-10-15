@@ -24,6 +24,45 @@ class ExecutionPattern(StrEnum):
     GROUP_CHAT = "group_chat"
 
 
+class ReviewCheckKind(StrEnum):
+    SOURCE_FIDELITY = "source_fidelity"
+    SCOPE_RECONCILIATION = "scope_reconciliation"
+    CALCULATION_RECONCILIATION = "calculation_reconciliation"
+    DECISION_CHALLENGE = "decision_challenge"
+
+
+INDEPENDENT_VALIDATION_POLICY = "independent-validation/v1"
+TYPED_REVIEW_CHECK_IDS = tuple(item.value for item in ReviewCheckKind)
+DEFAULT_REVIEW_CHECK_IDS = (
+    ReviewCheckKind.SOURCE_FIDELITY.value,
+    ReviewCheckKind.SCOPE_RECONCILIATION.value,
+    ReviewCheckKind.DECISION_CHALLENGE.value,
+)
+DEFAULT_REVIEWER_CAPABILITY_IDS = DEFAULT_REVIEW_CHECK_IDS
+DEFAULT_REVIEWER_SKILL_IDS = (
+    "source-appraisal",
+    "key-assumptions-check",
+    "red-team-claim",
+)
+
+
+def _normalize_role(value: object) -> object:
+    if not isinstance(value, dict):
+        return value
+    normalized = dict(value)
+    for key in (
+        "capability_ids",
+        "handoff_targets",
+        "review_check_ids",
+        "reviewer_capability_ids",
+        "skill_ids",
+        "unresolved_capabilities",
+    ):
+        if key in normalized:
+            normalized[key] = tuple(normalized[key])
+    return normalized
+
+
 @dataclass(frozen=True)
 class StageInput:
     decision_question: str
@@ -81,6 +120,10 @@ class RecipeStage:
     result_contract: str = "analysis-stage-result/v1"
     synthesis_policy: str = "aggregate-typed-results"
 
+    @property
+    def typed_review_checks(self) -> tuple[str, ...]:
+        return tuple(item for item in self.review_checks if item in TYPED_REVIEW_CHECK_IDS)
+
     def to_dict(self) -> dict[str, Any]:
         value = {
             "stage_id": self.stage_id,
@@ -120,7 +163,7 @@ class RecipeStage:
         return cls(
             stage_id=str(value["stage_id"]),
             pattern=ExecutionPattern(value["pattern"]),
-            participants=tuple(value.get("participants", ())),
+            participants=tuple(_normalize_role(item) for item in value.get("participants", ())),
             input_type=str(value.get("input_type", "prompt")),
             output_type=str(value.get("output_type", "typed-result")),
             limits=dict(value.get("limits", {})),
@@ -194,7 +237,7 @@ class ExecutionRecipe:
         return cls(
             name=RecipeName(value["name"]),
             pattern=str(value["pattern"]),
-            roles=[dict(role) for role in value.get("roles", ())],
+            roles=[_normalize_role(role) for role in value.get("roles", ())],
             max_agent_steps=int(value.get("max_agent_steps", 0)),
             max_correction_rounds=int(value.get("max_correction_rounds", 0)),
             max_total_agent_calls=int(value.get("max_total_agent_calls", 0)),
@@ -221,7 +264,14 @@ def make_recipe(name: RecipeName) -> ExecutionRecipe:
         pattern = "sequential"
         roles = [
             {"purpose": "execute", "profile": Profile.NORMAL.value},
-            {"purpose": "review", "profile": Profile.NORMAL.value},
+            {
+                "purpose": "review",
+                "profile": Profile.NORMAL.value,
+                "capability_ids": (),
+                "reviewer_capability_ids": DEFAULT_REVIEWER_CAPABILITY_IDS,
+                "review_check_ids": DEFAULT_REVIEW_CHECK_IDS,
+                "skill_ids": DEFAULT_REVIEWER_SKILL_IDS,
+            },
         ]
     if name == RecipeName.CONCURRENT:
         pattern = "concurrent"
@@ -254,6 +304,7 @@ def make_recipe(name: RecipeName) -> ExecutionRecipe:
         "prompt",
         "typed-result",
         {"max_agent_steps": guardrail.max_agent_steps, "max_total_agent_calls": guardrail.max_total_agent_calls},
+        review_checks=(DEFAULT_REVIEW_CHECK_IDS if name == RecipeName.ANALYZE_REVIEW else ()),
     )
     return ExecutionRecipe(
         name,
@@ -267,4 +318,5 @@ def make_recipe(name: RecipeName) -> ExecutionRecipe:
         "no accepted recommendation; preserve partial state",
         purpose=name.value,
         stages=(stage,),
+        review_policy=INDEPENDENT_VALIDATION_POLICY if name == RecipeName.ANALYZE_REVIEW else "",
     )

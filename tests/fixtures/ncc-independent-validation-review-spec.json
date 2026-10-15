@@ -1,0 +1,70 @@
+{
+  "case_id": "ncc-2022-cosluxe-vietnam-fixture",
+  "policy_id": "independent-validation/v1",
+  "review_checks": [
+    {
+      "check_id": "source_fidelity",
+      "method": "bounded-workbook-read",
+      "capabilities": ["spreadsheet_read"],
+      "source_scope": ["offline", "ecommerce"],
+      "requires": ["workbook_sha256", "sheet", "range", "period", "units"]
+    },
+    {
+      "check_id": "scope_reconciliation",
+      "method": "channel-and-period-reconciliation",
+      "capabilities": ["spreadsheet_read"],
+      "source_scope": ["offline", "ecommerce"],
+      "comparability": ["same_definition", "same_period", "same_units", "same_denominator"]
+    },
+    {
+      "check_id": "calculation_reconciliation",
+      "method": "independent-raw-cell-arithmetic",
+      "capabilities": ["spreadsheet_read", "calculation"],
+      "source_scope": ["offline", "ecommerce"],
+      "requires": ["expected", "analyst_actual", "delta", "tolerance", "source_cells"]
+    },
+    {
+      "check_id": "decision_challenge",
+      "method": "human-or-authorized-reviewer-challenge",
+      "capabilities": ["decision_challenge"],
+      "status_when_not_authorized": "NOT_RUN"
+    }
+  ],
+  "planning_thresholds": {
+    "target_growth_rate": 0.08,
+    "label": "planning math, not observed performance"
+  },
+  "source": {
+    "sheets": ["Offline", "Ecommerce"],
+    "ranges": [["Offline", "A1:C3"], ["Ecommerce", "A1:C3"]],
+    "periods": {"baseline": "2022", "current": "2024"},
+    "allowed_categories": ["Core", "Premium"]
+  },
+  "calculations": [
+    {
+      "calculation_id": "ncc-offline-growth-core",
+      "sheet": "Offline",
+      "category": "Core",
+      "metric": "growth_rate",
+      "baseline_period": "2022",
+      "current_period": "2024",
+      "periods": 2,
+      "source_cells": ["Offline!C2", "Offline!C3"],
+      "tolerance": 1e-09
+    },
+    {
+      "calculation_id": "ncc-offline-planning-threshold",
+      "sheet": "Offline",
+      "category": "Core",
+      "metric": "planning_threshold",
+      "baseline_period": "2022",
+      "initial": 100,
+      "annual_rate": 0.08,
+      "periods": 2,
+      "source_cells": ["Offline!C2"],
+      "tolerance": 1e-09
+    }
+  ],
+  "conditional_missing_inputs": ["margin", "capacity", "distribution", "cannibalization"],
+  "channel_rule": "Do not compare offline and ecommerce measures until definitions, periods, units, and denominators are reconciled."
+}

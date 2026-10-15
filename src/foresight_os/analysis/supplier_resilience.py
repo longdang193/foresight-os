@@ -7,8 +7,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from foresight_os.analysis.evidence_workflow import attach_review_record
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
+from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
 from foresight_os.persistence.analysis_store import AnalysisStore
@@ -233,14 +233,12 @@ def run_supplier_resilience_workflow(store: AnalysisStore, source: Path, *, huma
         supplier = analyze_supplier_resilience(Path(source))
         pending = store.save_pending(supplier.state)
         review = review_analysis_state(pending)
-        decision = human_decision.upper()
-        if decision in {"PENDING", "PENDING_REVIEW"}:
-            return SupplierWorkflowResult("pending", pending, replace(supplier, state=pending), review, None)
-        if decision != "ACCEPT" or not review.accepted:
-            rejected = store.commit_revision(pending, expected_revision=pending.revision, accepted=False)
-            return SupplierWorkflowResult("rejected", rejected, replace(supplier, state=rejected), review, None, "explicit acceptance was not granted")
-        reviewed = attach_review_record(pending, review, f"review-{pending.investigation_id}-{pending.revision}")
-        committed = store.commit_revision(reviewed, expected_revision=reviewed.revision, accepted=True)
+        acceptance = review_and_accept_pending_analysis(store, pending, review, f"review-{pending.investigation_id}-{pending.revision}", human_decision=human_decision)
+        if acceptance.status == "pending":
+            return SupplierWorkflowResult("pending", acceptance.state, replace(supplier, state=acceptance.state), review, None, acceptance.failure)
+        if acceptance.status != "accepted":
+            return SupplierWorkflowResult("rejected", acceptance.state, replace(supplier, state=acceptance.state), review, None, acceptance.failure)
+        committed = acceptance.state
         final = replace(supplier, state=committed)
         report_path = (Path(output_dir) if output_dir is not None else store.root / "artifacts") / "executive-report.md"
         write_supplier_report(report_path, final, committed)

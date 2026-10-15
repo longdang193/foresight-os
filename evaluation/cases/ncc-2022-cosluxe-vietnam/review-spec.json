@@ -1,0 +1,91 @@
+{
+  "case_id": "ncc-2022-cosluxe-vietnam",
+  "policy_id": "independent-validation/v1",
+  "review_checks": [
+    {
+      "check_id": "source_fidelity",
+      "method": "bounded-workbook-read",
+      "capabilities": ["spreadsheet_read"],
+      "source_scope": ["macro", "offline", "modern_trade", "ecommerce"],
+      "requires": ["workbook_sha256", "sheet", "range", "period", "units"]
+    },
+    {
+      "check_id": "scope_reconciliation",
+      "method": "channel-and-period-reconciliation",
+      "capabilities": ["spreadsheet_read"],
+      "source_scope": ["macro", "offline", "modern_trade", "ecommerce"],
+      "comparability": ["same_definition", "same_period", "same_units", "same_denominator"]
+    },
+    {
+      "check_id": "calculation_reconciliation",
+      "method": "independent-raw-cell-arithmetic",
+      "capabilities": ["spreadsheet_read", "calculation"],
+      "source_scope": ["macro", "offline", "modern_trade", "ecommerce"],
+      "requires": ["expected", "analyst_actual", "delta", "tolerance", "source_cells"]
+    },
+    {
+      "check_id": "decision_challenge",
+      "method": "human-or-authorized-reviewer-challenge",
+      "capabilities": ["decision_challenge"],
+      "status_when_not_authorized": "NOT_RUN"
+    }
+  ],
+  "planning_thresholds": {
+    "target_growth_rate": 0.08,
+    "label": "planning math, not observed performance"
+  },
+  "source": {
+    "sheets": ["Macro & FMCG", "Personal Care", "Modern Trade", "Ecommerce"],
+    "ranges": [["Macro & FMCG", "A1:G24"], ["Personal Care", "A1:U18"], ["Modern Trade", "A1:O58"], ["Ecommerce", "A1:Q65"]],
+    "periods": {"baseline": "MAT YA", "current": "MAT TY"},
+    "allowed_categories": ["Vietnam"]
+  },
+  "calculations": [
+    {
+      "calculation_id": "calculation-7565aae148a47ac1",
+      "operation": "growth_rate",
+      "category": "Vietnam",
+      "metric": "growth_rate",
+      "periods": 1,
+      "source_cells": ["Personal Care!E7", "Personal Care!F7"],
+      "tolerance": 1e-04
+    },
+    {
+      "calculation_id": "calculation-031969028188bcb6",
+      "operation": "growth_rate",
+      "category": "Vietnam",
+      "metric": "growth_rate",
+      "periods": 1,
+      "source_cells": ["Ecommerce!D48", "Ecommerce!E48"],
+      "tolerance": 1e-04
+    },
+    {
+      "calculation_id": "calculation-e9a520a76ccccd6d",
+      "operation": "growth_rate",
+      "category": "Vietnam",
+      "metric": "growth_rate",
+      "periods": 1,
+      "source_cells": ["Ecommerce!D50", "Ecommerce!E50"],
+      "tolerance": 1e-04
+    },
+    {
+      "calculation_id": "calculation-9426f0538155b24b",
+      "operation": "ratio",
+      "category": "Vietnam",
+      "metric": "survival_rate",
+      "source_cells": ["Ecommerce!H58", "Ecommerce!E58"],
+      "tolerance": 1e-04
+    },
+    {
+      "calculation_id": "calculation-239b06ebd0bc3b08",
+      "operation": "growth_rate",
+      "category": "Vietnam",
+      "metric": "growth_rate",
+      "periods": 1,
+      "source_cells": ["Modern Trade!C6", "Modern Trade!O6"],
+      "tolerance": 1e-04
+    }
+  ],
+  "conditional_missing_inputs": ["margin", "capacity", "distribution", "cannibalization"],
+  "channel_rule": "Do not compare offline and ecommerce measures until definitions, periods, units, and denominators are reconciled."
+}

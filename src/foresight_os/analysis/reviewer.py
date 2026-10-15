@@ -5,7 +5,7 @@ from typing import Any
 
 from foresight_os.controller.policy import ReviewPolicyResolver
 from foresight_os.controller.skills import SkillRegistry
-from foresight_os.domain.challenge import ChallengeObjection, ObjectionDisposition, ReviewOutcome
+from foresight_os.domain.challenge import ChallengeObjection, ObjectionDisposition, ReviewCheckResult, ReviewOutcome
 from foresight_os.domain.models import AnalyticalRecord, CalculationRecord, Evidence
 from foresight_os.runtime.executors import ReviewerExecutor
 from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
@@ -23,6 +23,11 @@ class ReviewResult:
     skill_ids: tuple[str, ...] = ()
     skill_versions: tuple[str, ...] = ()
     skill_hashes: tuple[str, ...] = ()
+    check_id: str = ""
+    method: str = ""
+    check_results: tuple[ReviewCheckResult, ...] = ()
+    source_fingerprints: tuple[str, ...] = ()
+    dependency_fingerprints: tuple[tuple[str, str], ...] = ()
 
 
 def _review_objection(value: Any, default_target_id: str) -> ChallengeObjection:

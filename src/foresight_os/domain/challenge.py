@@ -25,6 +25,14 @@ class ReviewValidity(StrEnum):
     STALE = "STALE"
 
 
+class ReviewSlotStatus(StrEnum):
+    PASS = "PASS"
+    FAIL = "FAIL"
+    PENDING = "PENDING"
+    STALE = "STALE"
+    CONFLICT = "CONFLICT"
+
+
 @dataclass(frozen=True)
 class ChallengeObjection:
     kind: str
@@ -44,6 +52,20 @@ class ChallengeObjection:
 
 
 @dataclass(frozen=True)
+class ReviewCheckResult:
+    check_id: str
+    status: ReviewSlotStatus | str
+    expected: Any = None
+    actual: Any = None
+    delta: Any = None
+    tolerance: Any = None
+    source_ids: tuple[str, ...] = ()
+    input_ids: tuple[str, ...] = ()
+    interpretation: str = ""
+    limitations: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class ReviewRecord:
     review_id: str
     target_ids: tuple[str, ...]
@@ -58,6 +80,27 @@ class ReviewRecord:
     policy_id: str = ""
     policy_version: str = ""
     skill_hashes: tuple[str, ...] = ()
+    check_id: str = ""
+    reviewer_id: str = ""
+    execution_id: str = ""
+    attempt_id: str = ""
+    method: str = ""
+    source_fingerprints: tuple[str, ...] = ()
+    dependency_fingerprints: tuple[tuple[str, str], ...] = ()
+    slot_key: str = ""
+    supersedes_review_id: str | None = None
+    superseded_by_review_id: str | None = None
+    conflict_review_ids: tuple[str, ...] = ()
+    check_results: tuple[ReviewCheckResult, ...] = ()
+    legacy: bool = False
+
+    @property
+    def is_legacy(self) -> bool:
+        return self.legacy or not all((self.check_id, self.reviewer_id, self.execution_id, self.attempt_id, self.method))
+
+    @property
+    def effective_slot_key(self) -> str:
+        return self.slot_key or "|".join((self.check_id, self.policy_id, self.policy_version, self.input_fingerprint, self.method))
 
 
 @dataclass(frozen=True)
@@ -183,6 +226,8 @@ def build_material_fingerprint(
     skill_versions: tuple[str, ...] | list[str] = (),
     skill_hashes: tuple[str, ...] | list[str] = (),
     policy_identity: tuple[str, str] | None = None,
+    source_fingerprints: tuple[str, ...] | list[str] = (),
+    dependency_fingerprints: tuple[tuple[str, str], ...] | list[tuple[str, str]] = (),
 ) -> str:
     material = collect_material_inputs(state, target_ids)
     payload = {
@@ -198,6 +243,8 @@ def build_material_fingerprint(
         "skill_ids": tuple(sorted(set(skill_ids))),
         "skill_versions": tuple(sorted(set(skill_versions))),
         "skill_hashes": tuple(sorted(set(skill_hashes))),
+        "source_fingerprints": tuple(sorted(set(source_fingerprints))),
+        "dependency_fingerprints": tuple(sorted(set(tuple(item) for item in dependency_fingerprints))),
     }
     if policy_identity is not None:
         payload["policy_identity"] = policy_identity
@@ -213,29 +260,138 @@ def review_validity(state: AnalysisState, review: ReviewRecord) -> ReviewValidit
         review.skill_versions,
         review.skill_hashes,
         (review.policy_id, review.policy_version) if review.policy_id and review.policy_version else None,
+        review.source_fingerprints,
+        review.dependency_fingerprints,
     )
     return ReviewValidity.CURRENT if current == review.input_fingerprint else ReviewValidity.STALE
 
 
-def select_review_record(state: AnalysisState, target_ids: tuple[str, ...] | list[str], skill_ids: tuple[str, ...] | list[str] = ()) -> ReviewRecord | None:
+def select_review_record(
+    state: AnalysisState,
+    target_ids: tuple[str, ...] | list[str],
+    skill_ids: tuple[str, ...] | list[str] = (),
+    *,
+    check_id: str | None = None,
+    policy_id: str | None = None,
+    policy_version: str | None = None,
+    reviewer_id: str | None = None,
+    include_legacy: bool = True,
+) -> ReviewRecord | None:
     target_key = set(target_ids)
     candidates = [
         review
         for review in state.review_records
         if target_key.issubset(set(review.target_ids))
         and (not skill_ids or tuple(sorted(review.skill_ids)) == tuple(sorted(set(skill_ids))))
+        and (check_id is None or review.check_id == check_id)
+        and (policy_id is None or review.policy_id == policy_id)
+        and (policy_version is None or review.policy_version == policy_version)
+        and (reviewer_id is None or review.reviewer_id == reviewer_id)
+        and (include_legacy or not review.is_legacy)
+        and review.superseded_by_review_id is None
+        and not review.conflict_review_ids
         and review_validity(state, review) == ReviewValidity.CURRENT
     ]
     return min(candidates, key=lambda item: (-item.reviewed_state_revision, item.review_id), default=None)
+
+
+@dataclass(frozen=True)
+class ReviewCoverage:
+    target_id: str
+    required_check_ids: tuple[str, ...]
+    statuses: tuple[tuple[str, ReviewSlotStatus], ...]
+
+    @property
+    def complete(self) -> bool:
+        return all(status == ReviewSlotStatus.PASS for _, status in self.statuses)
+
+    @property
+    def blocking(self) -> bool:
+        return any(status in {ReviewSlotStatus.FAIL, ReviewSlotStatus.CONFLICT} for _, status in self.statuses)
+
+
+def derive_review_coverage(
+    state: AnalysisState,
+    target_ids: tuple[str, ...] | list[str],
+    required_check_ids: tuple[str, ...] | list[str],
+    *,
+    policy_id: str = "",
+    policy_version: str = "",
+) -> tuple[ReviewCoverage, ...]:
+    coverages = []
+    for target_id in target_ids:
+        statuses = []
+        for check_id in required_check_ids:
+            records = [
+                review
+                for review in state.review_records
+                if target_id in review.target_ids
+                and review.check_id == check_id
+                and not review.is_legacy
+                and (not policy_id or review.policy_id == policy_id)
+                and (not policy_version or review.policy_version == policy_version)
+                and review.superseded_by_review_id is None
+            ]
+            if any(review.conflict_review_ids for review in records):
+                status = ReviewSlotStatus.CONFLICT
+            elif not records:
+                status = ReviewSlotStatus.PENDING
+            else:
+                current = [review for review in records if review_validity(state, review) == ReviewValidity.CURRENT]
+                if not current:
+                    status = ReviewSlotStatus.STALE
+                elif any(
+                    review.outcome == ReviewOutcome.ACCEPTED
+                    and not review.unresolved_issues
+                    and _check_result_status(review, check_id) == ReviewSlotStatus.PASS
+                    for review in current
+                ):
+                    status = ReviewSlotStatus.PASS
+                elif any(
+                    review.outcome == ReviewOutcome.REJECTED
+                    or review.unresolved_issues
+                    or _check_result_status(review, check_id) == ReviewSlotStatus.FAIL
+                    for review in current
+                ):
+                    status = ReviewSlotStatus.FAIL
+                else:
+                    status = ReviewSlotStatus.PENDING
+            statuses.append((check_id, status))
+        coverages.append(ReviewCoverage(str(target_id), tuple(required_check_ids), tuple(statuses)))
+    return tuple(coverages)
+
+
+def _check_result_status(review: ReviewRecord, check_id: str) -> ReviewSlotStatus:
+    result = next((item for item in review.check_results if item.check_id == check_id), None)
+    if result is None:
+        return ReviewSlotStatus.PASS if review.outcome == ReviewOutcome.ACCEPTED and not review.unresolved_issues else ReviewSlotStatus.FAIL
+    try:
+        return ReviewSlotStatus(result.status)
+    except ValueError:
+        return ReviewSlotStatus.PENDING
 
 
 def derive_finding_views(
     state: AnalysisState,
     target_ids: tuple[str, ...] | list[str] | None = None,
     skill_ids: tuple[str, ...] | list[str] = (),
+    required_check_ids: tuple[str, ...] | list[str] = (),
+    *,
+    policy_id: str = "",
+    policy_version: str = "",
 ) -> tuple[FindingView, ...]:
     records = [*state.claims, *state.implications, *state.recommendations]
     selected = set(target_ids) if target_ids is not None else {record.id for record in records}
+    coverage_by_target = {
+        item.target_id: item
+        for item in derive_review_coverage(
+            state,
+            tuple(selected),
+            tuple(required_check_ids),
+            policy_id=policy_id,
+            policy_version=policy_version,
+        )
+    } if required_check_ids else {}
     views = []
     for record in records:
         if record.id not in selected:
@@ -252,6 +408,13 @@ def derive_finding_views(
             and not unresolved
             and not review.unresolved_issues
         )
+        coverage = coverage_by_target.get(record.id)
+        coverage_issues = tuple(
+            f"required review check {check_id} is {status.value}"
+            for check_id, status in coverage.statuses
+            if status != ReviewSlotStatus.PASS
+        ) if coverage else ()
+        accepted = accepted and (coverage.complete if coverage else True)
         views.append(
             FindingView(
                 target_id=record.id,
@@ -267,12 +430,23 @@ def derive_finding_views(
                 counterevidence_ids=tuple(material_counterevidence(state, (record.id,))),
                 confidence_rationale=record.confidence_rationale,
                 disconfirmation_conditions=record.disconfirmation_conditions,
-                unresolved_issues=tuple(review.unresolved_issues) if review else tuple(material_missing_inputs(state, (record.id,))),
+                unresolved_issues=(tuple(review.unresolved_issues) if review else tuple(material_missing_inputs(state, (record.id,)))) + coverage_issues,
                 implications=tuple(item.id for item in state.implications if any(record.id == source for source in _relationship_sources(state, item.id, "informs"))),
                 monitoring_indicators=record.monitoring_indicators,
             )
         )
     return tuple(views)
+
+
+def review_category_statuses(state: AnalysisState, target_id: str) -> tuple[tuple[str, str, str], ...]:
+    statuses: list[tuple[str, str, str]] = []
+    for review in state.review_records:
+        if review.is_legacy or target_id not in review.target_ids or review.superseded_by_review_id is not None:
+            continue
+        status = _check_result_status(review, review.check_id).value
+        validity = review_validity(state, review).value
+        statuses.append((review.check_id, status if validity == ReviewValidity.CURRENT.value else ReviewSlotStatus.STALE.value, validity))
+    return tuple(sorted(statuses, key=lambda item: (item[0], item[2], item[1])))
 
 
 def material_counterevidence(state: AnalysisState, target_ids: tuple[str, ...] | list[str]) -> tuple[str, ...]:

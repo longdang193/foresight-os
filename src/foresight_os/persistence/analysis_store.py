@@ -35,7 +35,7 @@ from foresight_os.domain.models import (
 from foresight_os.domain.approval import ApprovalRecord
 from foresight_os.artifacts.brief import render_work_brief_markdown
 from foresight_os.controller.recipes import ExecutionRecipe
-from foresight_os.domain.challenge import ChallengeObjection, ObjectionDisposition, ReviewOutcome, ReviewRecord
+from foresight_os.domain.challenge import ChallengeObjection, ObjectionDisposition, ReviewCheckResult, ReviewOutcome, ReviewRecord, ReviewSlotStatus
 from foresight_os.domain.validation import migrate_analysis_dict, validate_analysis, validate_approval_record, validate_execution_recipe, validate_work_brief
 
 
@@ -333,6 +333,19 @@ class AnalysisStore:
                 self._remember_consumed_pending_token(existing_pending.pending_token)
         return pending
 
+    def update_pending(self, state: AnalysisState) -> AnalysisState:
+        if state.revision_status != RevisionStatus.PENDING_REVIEW or not state.pending_token:
+            raise ValueError("pending update requires a pending review state")
+        with FileLock(str(self.lock_path)):
+            pending = self._load_path(self.pending_analysis_path) if self.pending_analysis_path.exists() else None
+            if pending is None:
+                raise ValueError("no pending analysis to update")
+            if pending.revision != state.revision or pending.pending_token != state.pending_token:
+                raise ValueError("stale pending identity")
+            updated = replace(state, revision_status=RevisionStatus.PENDING_REVIEW)
+            self._write_validated(validate_analysis(updated), self.pending_analysis_path)
+            return updated
+
     def load_pending(self) -> AnalysisState:
         return self.load_analysis()
 
@@ -414,6 +427,33 @@ class AnalysisStore:
                 policy_id=item.get("policy_id", ""),
                 policy_version=item.get("policy_version", ""),
                 skill_hashes=tuple(item.get("skill_hashes", ())),
+                check_id=item.get("check_id", ""),
+                reviewer_id=item.get("reviewer_id", ""),
+                execution_id=item.get("execution_id", ""),
+                attempt_id=item.get("attempt_id", ""),
+                method=item.get("method", ""),
+                source_fingerprints=tuple(item.get("source_fingerprints", ())),
+                dependency_fingerprints=tuple(tuple(value) for value in item.get("dependency_fingerprints", ())),
+                slot_key=item.get("slot_key", ""),
+                supersedes_review_id=item.get("supersedes_review_id"),
+                superseded_by_review_id=item.get("superseded_by_review_id"),
+                conflict_review_ids=tuple(item.get("conflict_review_ids", ())),
+                check_results=tuple(
+                    ReviewCheckResult(
+                        check_id=str(result["check_id"]),
+                        status=ReviewSlotStatus(result["status"]),
+                        expected=result.get("expected"),
+                        actual=result.get("actual"),
+                        delta=result.get("delta"),
+                        tolerance=result.get("tolerance"),
+                        source_ids=tuple(result.get("source_ids", ())),
+                        input_ids=tuple(result.get("input_ids", ())),
+                        interpretation=result.get("interpretation", ""),
+                        limitations=tuple(result.get("limitations", ())),
+                    )
+                    for result in item.get("check_results", ())
+                ),
+                legacy=bool(item.get("legacy", False)),
             )
             for item in value.get("review_records", ())
         ]

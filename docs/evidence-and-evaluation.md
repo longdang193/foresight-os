@@ -26,11 +26,54 @@ Use the following statuses consistently in probes, receipts, and reports:
 | `FAILED` | The operation ran, but a required check, contract, provider operation, or acceptance condition failed. |
 | `BLOCKED_INPUT` | Approved inputs or fixtures are absent, incomplete, or outside the allowed scope, so the operation cannot be judged. |
 | `BLOCKED_EXTERNAL` | An external provider, credential, network boundary, or protected integration is unavailable or intentionally not exercised. |
+| `NOT_VERIFIED` | Deterministic checks may have passed, but required review coverage, decision challenge, or human acceptance is incomplete. |
 | `not_measured` | A metric requires human judgment or a measurement that was not collected; it is not a passing value. |
 
 `BLOCKED_EXTERNAL` is a truthful boundary result, not a substitute for
 provider success. In the same way, `BLOCKED_INPUT` must not be turned into a
 zero score or a successful empty run.
+
+## Independent validation and acceptance
+
+The independent-validation workflow separates five facts that must not be
+collapsed into one green flag:
+
+- **Source fidelity** records workbook SHA-256, sheets, selected ranges,
+  periods, units, and channel boundaries.
+- **Scope reconciliation** checks that the declared category, period, unit,
+  denominator, and source ranges are aligned before cross-channel comparison.
+- **Calculation reconciliation** derives expected growth, shares, survival
+  ratios, and planning thresholds from raw cells before comparing the persisted
+  analyst result. A planning threshold such as 8% is planning math, not
+  observed performance.
+- **Decision challenge** is a separate human or authorized-reviewer check. A
+  deterministic probe reports `NOT_RUN` when it is not authorized to perform
+  that challenge.
+- **Human acceptance** is an explicit decision over the reviewed analytical
+  package. It never follows automatically from a passing probe; missing
+  required coverage, stale inputs, conflicts, or unresolved blocking
+  objections keep the package pending or rejected.
+
+For the provider-free fixture, run:
+
+```text
+python evaluation/probes/run_ncc_independent_validation.py --workbook tests/fixtures/ncc-independent-validation.xlsx --analysis-dir <persisted-analysis-directory> --review-spec tests/fixtures/ncc-independent-validation-review-spec.json --output-root work/ncc-independent-validation-20261015/final
+```
+
+For the external NCC workbook, run the maintained case specification with a
+matching persisted analysis directory:
+
+```text
+python evaluation/probes/run_ncc_independent_validation.py --workbook "data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx" --analysis-dir <persisted-ncc-analysis-directory> --review-spec evaluation/cases/ncc-2022-cosluxe-vietnam/review-spec.json --output-root work/ncc-independent-validation-20261015/real
+```
+
+The maintained NCC review specification targets the external 2022 workbook's
+`Macro & FMCG`, `Personal Care`, `Modern Trade`, and `Ecommerce` ranges. The
+probe derives selected growth and ratio expectations directly from raw cell
+coordinates and compares them with the persisted calculations. The real NCC
+workbook remains an external local fixture. Receipts may record its hash and
+sanitized source metadata, but workbook bytes and raw provider payloads must
+not enter Git or durable analytical state.
 
 ## Evaluation levels
 

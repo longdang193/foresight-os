@@ -6,7 +6,7 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from .models import AnalysisState, EvidenceCandidate, ExecutionIntent, MethodProvenance, ResearchNeed, ResearchNeedKind, WorkBrief
-from foresight_os.controller.recipes import ExecutionRecipe
+from foresight_os.controller.recipes import INDEPENDENT_VALIDATION_POLICY, ExecutionRecipe, TYPED_REVIEW_CHECK_IDS
 from foresight_os.domain.approval import ApprovalProjection, ApprovalRecord, AdaptationEnvelope
 from .relationships import RecordKind, relationship_rule
 
@@ -15,7 +15,7 @@ class ValidationError(ValueError):
     """Raised when a durable Foresight OS record violates its trust boundary."""
 
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 
 def migrate_analysis_dict(value: dict[str, Any]) -> dict[str, Any]:
@@ -23,7 +23,7 @@ def migrate_analysis_dict(value: dict[str, Any]) -> dict[str, Any]:
     version = migrated.get("schema_version", 0)
     if version > CURRENT_SCHEMA_VERSION:
         raise ValidationError(f"unsupported future analysis schema version: {version}")
-    if version == 0:
+    if version in {0, 1}:
         migrated["schema_version"] = CURRENT_SCHEMA_VERSION
         migrated.setdefault("revision_status", "ACCEPTED")
         migrated.setdefault("calculations", [])
@@ -38,6 +38,20 @@ def migrate_analysis_dict(value: dict[str, Any]) -> dict[str, Any]:
         calculation.setdefault("verification_status", "NOT_VERIFIED")
     for artifact in migrated.get("artifacts", ()):
         artifact.setdefault("delivery_receipt", None)
+    for review in migrated.get("review_records", ()):
+        review.setdefault("check_id", "")
+        review.setdefault("reviewer_id", "")
+        review.setdefault("execution_id", "")
+        review.setdefault("attempt_id", "")
+        review.setdefault("method", "")
+        review.setdefault("source_fingerprints", [])
+        review.setdefault("dependency_fingerprints", [])
+        review.setdefault("slot_key", "")
+        review.setdefault("supersedes_review_id", None)
+        review.setdefault("superseded_by_review_id", None)
+        review.setdefault("conflict_review_ids", [])
+        review.setdefault("check_results", [])
+        review.setdefault("legacy", True)
     return migrated
 
 
@@ -63,6 +77,20 @@ def validate_work_brief(brief: WorkBrief | dict[str, Any]) -> dict[str, Any]:
 def validate_execution_recipe(recipe: ExecutionRecipe | dict[str, Any]) -> dict[str, Any]:
     value = recipe.to_dict() if isinstance(recipe, ExecutionRecipe) else dict(recipe)
     _validate_schema(value, "execution_recipe.schema.json")
+    if value.get("review_policy") == INDEPENDENT_VALIDATION_POLICY:
+        typed_checks = [
+            check
+            for stage in value.get("stages", ())
+            for check in stage.get("review_checks", ())
+        ]
+        unknown_checks = sorted(set(typed_checks) - set(TYPED_REVIEW_CHECK_IDS))
+        if unknown_checks:
+            raise ValidationError(
+                "independent-validation/v1 does not support review check(s): "
+                + ", ".join(unknown_checks)
+            )
+        if not typed_checks:
+            raise ValidationError("independent-validation/v1 requires at least one typed review check")
     stage_ids = [stage["stage_id"] for stage in value.get("stages", [])]
     if len(stage_ids) != len(set(stage_ids)):
         raise ValidationError("recipe stage IDs must be unique")
@@ -258,6 +286,13 @@ def validate_analysis(state: AnalysisState | dict[str, Any]) -> dict[str, Any]:
     for review in value.get("review_records", []):
         if not set(review["target_ids"]).issubset(record_ids):
             raise ValidationError("reviews must reference existing target records")
+        if review.get("check_id") and review.get("check_id") not in {
+            "source_fidelity",
+            "scope_reconciliation",
+            "calculation_reconciliation",
+            "decision_challenge",
+        }:
+            raise ValidationError(f"unsupported review check: {review['check_id']}")
 
     revision_numbers = [revision["number"] for revision in value["revisions"]]
     if revision_numbers != list(range(1, len(revision_numbers) + 1)):

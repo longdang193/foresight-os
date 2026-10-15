@@ -30,7 +30,7 @@ def test_loaded_analysis_has_explicit_schema_and_revision_status(tmp_path: Path)
     state = AnalysisStore(tmp_path / "case-001").load_analysis()
 
     assert outcome.accepted
-    assert state.schema_version == 1
+    assert state.schema_version == 2
     assert state.revision_status == RevisionStatus.ACCEPTED
 
 
