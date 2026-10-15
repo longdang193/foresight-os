@@ -32,6 +32,13 @@ def _required_capability_ids(recipe: ExecutionRecipe) -> tuple[str, ...]:
     return tuple(dict.fromkeys(item for item in values if item))
 
 
+def _local_capability_context(store: AnalysisStore, run_context: dict[str, Any] | None) -> dict[str, Any]:
+    context = dict(run_context or {})
+    context.setdefault("local_workspace", store.root)
+    context.setdefault("document_roots", (store.root, Path.cwd()))
+    return context
+
+
 def _assert_store_writable(store: AnalysisStore) -> None:
     try:
         store.root.mkdir(parents=True, exist_ok=True)
@@ -125,7 +132,7 @@ class ExecutionGate:
                 raise ExecutionAdmissionError("persisted recipe no longer matches the approved snapshot")
             if approval.investigation_id != brief.investigation_id:
                 raise ExecutionAdmissionError("approval investigation does not match the WorkBrief")
-            _preflight_recipe(self.store, recipe, dict(run_context or {}))
+            _preflight_recipe(self.store, recipe, _local_capability_context(self.store, run_context))
             return ApprovedExecution(
                 work_dir=self.store.root,
                 prompt=prompt,
@@ -154,7 +161,7 @@ class ExecutionGate:
                 raise ExecutionAdmissionError("approval was superseded before dispatch")
         if client is None:
             raise ExecutionAdmissionError("approved execution requires a configured client")
-        context = dict(run_context or {})
+        context = _local_capability_context(self.store, run_context)
         context.update({
             "execution_admitted": True,
             "approved_recipe_fingerprint": admission.recipe_fingerprint,

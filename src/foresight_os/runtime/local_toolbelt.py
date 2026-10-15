@@ -3,12 +3,13 @@ from __future__ import annotations
 import ast
 import csv
 import hashlib
+from itertools import zip_longest
 import operator
 import posixpath
 import re
 import zipfile
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from datetime import date, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -16,7 +17,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import openpyxl
 
-from foresight_os.domain.models import CalculationRecord, CalculationVerificationStatus, Evidence, MeasurementKey, SourceLocator
+from foresight_os.domain.models import CalculationRecord, CalculationVerificationStatus, Evidence, EvidenceCandidate, MeasurementKey, SourceLocator
 from foresight_os.domain.validation import validate_analysis, validate_evidence_candidate
 
 
@@ -165,8 +166,10 @@ def _coerce_sheet_selection(value: SheetSelection | Mapping[str, Any] | None) ->
         entries = value.get(name, ()) or ()
         if not entries and value.get(singular_name) is not None:
             entries = (value[singular_name],)
+        if isinstance(entries, (str, bytes)) or not isinstance(entries, Sequence):
+            raise ToolbeltError(f"spreadsheet selection {name} must be a list of pairs")
         for item in entries:
-            if not isinstance(item, Sequence) or len(item) != 2:
+            if isinstance(item, (str, bytes)) or not isinstance(item, Sequence) or len(item) != 2:
                 raise ToolbeltError(f"spreadsheet selection {name} entries must contain two values")
             result.append((str(item[0]), str(item[1])))
         return tuple(result)
@@ -174,6 +177,10 @@ def _coerce_sheet_selection(value: SheetSelection | Mapping[str, Any] | None) ->
     sheet_names = value.get("sheet_names", ()) or ()
     if not sheet_names and value.get("sheet") is not None:
         sheet_names = (value["sheet"],)
+    if isinstance(sheet_names, str):
+        sheet_names = (sheet_names,)
+    elif isinstance(sheet_names, (bytes, bool)) or not isinstance(sheet_names, Sequence):
+        raise ToolbeltError("spreadsheet selection sheet_names must be a list of sheet names")
     return SheetSelection(
         sheet_names=tuple(str(item) for item in sheet_names),
         ranges=pairs("ranges", "range"),
@@ -445,7 +452,12 @@ def _formula_references(formula: str | None) -> tuple[tuple[str, str], ...]:
 
 
 def _in_selection(sheet: str, selection: SheetSelection | None) -> bool:
-    return selection is None or not selection.sheet_names or sheet in selection.sheet_names
+    if selection is None:
+        return True
+    if selection.sheet_names:
+        return sheet in selection.sheet_names
+    selected_sheets = {selected_sheet for selected_sheet, _ in (*selection.ranges, *selection.tables)}
+    return not selected_sheets or sheet in selected_sheets
 
 
 def _implicit_xlsx_bounds(ws) -> tuple[int, int, int, int] | None:
@@ -685,18 +697,20 @@ def spreadsheet_read(
                 row_measurements: list[tuple[TypedMeasurement, ...]] = []
                 source_rows = ws.iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col)
                 cached_rows = cached[ws.title].iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col)
-                for source_row, cached_row in zip(source_rows, cached_rows, strict=True):
+                for source_row, cached_row in zip_longest(source_rows, cached_rows, fillvalue=()):
                     _check_cancel(cancel_check)
+                    if not source_row:
+                        raise ToolbeltError("cached workbook contains rows without source values")
                     row = source_row[0].row
                     if row in hidden_rows and not (selection and selection.include_hidden_rows):
                         continue
                     values: list[Any] = []
                     provenance: list[CellProvenance] = []
                     row_cells: list[TypedMeasurement] = []
-                    for cell, cached_cell in zip(source_row, cached_row, strict=True):
+                    for cell, cached_cell in zip_longest(source_row, cached_row, fillvalue=None):
                         _check_cancel(cancel_check)
                         formula = cell.value if isinstance(cell.value, str) and cell.value.startswith("=") else None
-                        cached_value = _coerce(cached_cell.value) if formula else None
+                        cached_value = _coerce(cached_cell.value) if formula and cached_cell is not None else None
                         raw_value = cached_value if formula and cached_value is not None else cell.value
                         value = _coerce(raw_value)
                         if formula:
@@ -1152,10 +1166,22 @@ def graph_context(graph: Any, record_id: str, limit: int = 50) -> dict[str, Any]
 def domain_validation(value: Any) -> dict[str, Any]:
     if isinstance(value, Evidence):
         return {"valid": bool(value.id and value.excerpt and value.source_locator.file_version), "kind": "evidence"}
+    if isinstance(value, Mapping) and "stage_id" in value:
+        raise ToolbeltError("stage result payloads are not valid domain_validation inputs")
     if isinstance(value, dict) and {"evidence", "claims"}.issubset(value):
         validate_analysis(value)
         return {"valid": True, "kind": "analysis"}
-    candidate = validate_evidence_candidate(value)
+    if isinstance(value, Mapping):
+        allowed_fields = {item.name for item in fields(EvidenceCandidate)}
+        unsupported_fields = sorted(set(value) - allowed_fields)
+        if unsupported_fields:
+            raise ToolbeltError(
+                "unsupported evidence candidate fields: " + ", ".join(unsupported_fields)
+            )
+    try:
+        candidate = validate_evidence_candidate(value)
+    except TypeError as error:
+        raise ToolbeltError(f"invalid evidence candidate: {error}") from error
     return {"valid": True, "kind": "candidate", "candidate_id": candidate.candidate_id}
 
 
