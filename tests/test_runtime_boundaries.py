@@ -499,6 +499,47 @@ def test_instrumented_callable_adapters_use_capability_names():
     assert document.__name__ != artifact.__name__
 
 
+def test_instrumented_public_only_workbook_adapters_do_not_receive_private_kwargs(tmp_path):
+    source = tmp_path / "public-adapter.csv"
+    source.write_text("Metric,Value\nA,10\n", encoding="utf-8")
+
+    def public_spreadsheet(source, selection=None, limits=None):
+        return source, selection, limits
+
+    def public_analysis(table, operation, limits=None):
+        return table, operation, limits
+
+    def public_calculation(measurement):
+        return measurement
+
+    async def scenario():
+        scope = CapabilityScope(ownership=ScopeOwnership.RUN)
+        try:
+            spreadsheet = instrument_tool(
+                public_spreadsheet,
+                CapabilityDefinition("spreadsheet_read", "local_deterministic", execution_mode=ExecutionMode.BLOCKING),
+                {"scope": scope},
+            )
+            analysis = instrument_tool(
+                public_analysis,
+                CapabilityDefinition("data_analysis", "local_deterministic"),
+                {"scope": scope},
+            )
+            calculation = instrument_tool(
+                public_calculation,
+                CapabilityDefinition("calculation", "local_deterministic"),
+                {"scope": scope},
+            )
+
+            assert (await spreadsheet(str(source)))[0] == str(source)
+            assert (await analysis({"rows": []}, {"kind": "duplicates"}))[0] == {"rows": []}
+            assert await calculation(3) == 3
+        finally:
+            await scope.close()
+
+    asyncio.run(scenario())
+
+
 def test_tool_semaphore_enforces_declared_parallelism():
     active = 0
     peak = 0

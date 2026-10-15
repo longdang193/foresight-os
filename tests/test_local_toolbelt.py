@@ -4,6 +4,7 @@ import re
 import threading
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import get_type_hints
@@ -798,6 +799,91 @@ def test_workbook_context_distinguishes_pinned_reads_currentness_and_new_capture
     assert refreshed.read().workbook_sha256 == refreshed.snapshot.sha256
     assert context.stats.capture_count == 2
     context.close()
+
+
+def test_typed_table_recomputes_material_fingerprint_for_cache_identity(tmp_path):
+    source = tmp_path / "cache-identity.csv"
+    source.write_text("Metric,Value\nA,10\n", encoding="utf-8")
+    table = spreadsheet_read(source).tables[0]
+    operation = AnalysisOperation("duplicates")
+    cache = WorkbookReadCache()
+
+    first = data_analysis(table, operation, _cache=cache)
+    mutated = replace(table, rows=table.rows + (table.rows[0],))
+    second = data_analysis(mutated, operation, _cache=cache)
+
+    assert mutated.material_fingerprint != table.material_fingerprint
+    assert second.rows != first.rows
+    assert cache._analysis_entries
+
+
+def test_workbook_session_analysis_and_context_close_do_not_deadlock(tmp_path):
+    source = tmp_path / "deadlock.csv"
+    source.write_text("Metric,Value\nA,10\n", encoding="utf-8")
+    context = WorkbookContext()
+    session = context.session_for_source(source)
+    table = session.read().tables[0]
+    budget_called = threading.Event()
+    release_budget = threading.Event()
+
+    def blocking_budget_check():
+        budget_called.set()
+        release_budget.wait(timeout=2)
+        context._check_budget()
+
+    session.budget_check = blocking_budget_check
+    errors = []
+
+    def analyze():
+        try:
+            session.analyze(table, AnalysisOperation("duplicates"))
+        except BaseException as error:
+            errors.append(error)
+
+    analysis_thread = threading.Thread(target=analyze, daemon=True)
+    close_thread = threading.Thread(target=context.close, daemon=True)
+    analysis_thread.start()
+    assert budget_called.wait(timeout=2)
+    close_thread.start()
+    release_budget.set()
+    analysis_thread.join(timeout=2)
+    close_thread.join(timeout=2)
+
+    assert not analysis_thread.is_alive()
+    assert not close_thread.is_alive()
+    assert not errors
+
+
+def test_workbook_context_rejects_capture_before_retaining_over_budget_source(tmp_path):
+    source = tmp_path / "over-budget.csv"
+    source.write_text("Metric,Value\nA,10\n", encoding="utf-8")
+    context = WorkbookContext(max_total_bytes=source.stat().st_size - 1)
+
+    with pytest.raises(ToolbeltError, match="retained-resource budget"):
+        context.session_for_source(source)
+    assert context.sessions == {}
+    assert context._source_sessions == {}
+    assert context.stats.capture_count == 0
+
+    with pytest.raises(ToolbeltError, match="retained-resource budget"):
+        context.session_for_source(source)
+    assert context.sessions == {}
+    assert context._source_sessions == {}
+    context.close()
+
+
+def test_closed_workbook_session_cannot_publish_analysis_results(tmp_path):
+    source = tmp_path / "closed-analysis.csv"
+    source.write_text("Metric,Value\nA,10\n", encoding="utf-8")
+    context = WorkbookContext()
+    session = context.session_for_source(source)
+    table = session.read().tables[0]
+    operation = AnalysisOperation("duplicates")
+    context.close()
+
+    with pytest.raises(ToolbeltError, match="workbook session is closed"):
+        data_analysis(table, operation, workbook_session=session)
+    assert session.cache._analysis_entries == {}
 
 
 def test_workbook_context_authority_survives_derived_cache_clear(workbook_path):

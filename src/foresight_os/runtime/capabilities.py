@@ -382,6 +382,23 @@ def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, cont
         semaphores = context.setdefault("_capability_semaphores", {})  # type: ignore[attr-defined]
     semaphore = semaphores.setdefault(definition.id, asyncio.Semaphore(max(1, definition.max_parallelism)))
     mode = definition.execution_mode
+    try:
+        dispatch_parameters = inspect.signature(dispatch).parameters
+    except (TypeError, ValueError):
+        dispatch_parameters = {}
+    accepts_arbitrary_kwargs = any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in dispatch_parameters.values()
+    )
+    accepted_keyword_names = {
+        name
+        for name, parameter in dispatch_parameters.items()
+        if parameter.kind
+        in {inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY}
+    }
+
+    def accepts_keyword(name: str) -> bool:
+        return accepts_arbitrary_kwargs or name in accepted_keyword_names
 
     def workbook_kwargs(args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
         if scope is None or definition.id not in {"spreadsheet_read", "data_analysis", "calculation"}:
@@ -392,27 +409,26 @@ def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, cont
         effective_kwargs = dict(kwargs)
         if definition.id == "spreadsheet_read" and "workbook_session" not in effective_kwargs:
             source = args[0] if args else effective_kwargs.get("source")
-            if source is not None:
+            if source is not None and accepts_keyword("workbook_session"):
                 effective_kwargs["workbook_session"] = workbook_context.session_for_source(source)
         elif definition.id == "data_analysis":
             table = args[0] if args else effective_kwargs.get("table")
             session = workbook_context.session_for_table(table) if table is not None and not isinstance(table, Mapping) else None
-            effective_kwargs.setdefault("_cache", workbook_context.derived_cache)
-            effective_kwargs.setdefault("_stats", workbook_context.stats)
-            if isinstance(session, WorkbookSession):
+            if accepts_keyword("_cache"):
+                effective_kwargs.setdefault("_cache", workbook_context.derived_cache)
+            if accepts_keyword("_stats"):
+                effective_kwargs.setdefault("_stats", workbook_context.stats)
+            if isinstance(session, WorkbookSession) and accepts_keyword("workbook_session"):
                 effective_kwargs.setdefault("workbook_session", session)
         elif definition.id == "calculation":
-            effective_kwargs.setdefault("_authority", workbook_context.authority)
+            if accepts_keyword("_authority"):
+                effective_kwargs.setdefault("_authority", workbook_context.authority)
         return effective_kwargs
 
     def blocking_call(args: tuple[Any, ...], kwargs: dict[str, Any], cancel_event: asyncio.Event | None) -> Any:
         effective_kwargs = workbook_kwargs(args, kwargs)
         if cancel_event is not None:
-            try:
-                parameters = inspect.signature(dispatch).parameters
-            except (TypeError, ValueError):
-                parameters = {}
-            if "cancel_check" in parameters:
+            if accepts_keyword("cancel_check"):
                 effective_kwargs.setdefault("cancel_check", cancel_event.is_set)
         result = dispatch(*args, **effective_kwargs)
         if inspect.isawaitable(result):

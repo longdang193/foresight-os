@@ -388,7 +388,6 @@ class WorkbookSession:
                 cancel_check=cancel_check,
                 _cache=self.cache,
                 _stats=self.stats,
-                workbook_session=self,
             )
         if self.budget_check is not None:
             self.budget_check()
@@ -429,11 +428,19 @@ class WorkbookContext:
                 raise ToolbeltError("workbook context is closed")
             if not new_capture and canonical in self._source_sessions:
                 return self._source_sessions[canonical]
+            source_path = Path(canonical)
+            if not source_path.is_file():
+                raise ToolbeltError(f"source does not exist: {source_path}")
+            self._check_budget(extra_bytes=source_path.stat().st_size)
             snapshot = SourceSnapshot.capture(canonical, cancel_check=cancel_check, stats=self.stats)
+            try:
+                self._check_budget(extra_bytes=snapshot.byte_size)
+            except BaseException:
+                snapshot.close()
+                raise
             session = WorkbookSession(snapshot, self.limits, authority=self.authority, stats=self.stats, budget_check=self._check_budget)
             self.sessions[snapshot.snapshot_id] = session
             self._source_sessions[canonical] = session
-            self._check_budget()
             return session
 
     def session_for_snapshot(self, snapshot: SourceSnapshot) -> WorkbookSession:
@@ -442,10 +449,14 @@ class WorkbookContext:
                 raise ToolbeltError("workbook context is closed")
             if snapshot.snapshot_id in self.sessions:
                 return self.sessions[snapshot.snapshot_id]
+            try:
+                self._check_budget(extra_bytes=snapshot.byte_size)
+            except BaseException:
+                snapshot.close()
+                raise
             session = WorkbookSession(snapshot, self.limits, authority=self.authority, stats=self.stats, budget_check=self._check_budget)
             self.sessions[snapshot.snapshot_id] = session
             self._source_sessions[snapshot.source] = session
-            self._check_budget()
             return session
 
     def session_for_table(self, table: TypedTable) -> WorkbookSession | None:
@@ -456,13 +467,13 @@ class WorkbookContext:
                     return session
         return None
 
-    def _check_budget(self) -> None:
+    def _check_budget(self, *, extra_bytes: int = 0) -> None:
         with self._lock:
             if self._closed:
                 return
             retained = sum(session.snapshot.byte_size + session.cache.bytes_used for session in self.sessions.values())
             retained += self.derived_cache.bytes_used + self.authority.bytes_used
-        if retained > self.max_total_bytes:
+        if retained + max(0, int(extra_bytes)) > self.max_total_bytes:
             raise ToolbeltError("workbook context retained-resource budget exceeded")
 
     def close(self) -> None:
@@ -572,8 +583,6 @@ class TypedTable:
     material_fingerprint: str = ""
 
     def __post_init__(self) -> None:
-        if self.material_fingerprint:
-            return
         identity = (
             tuple(item.workbook_sha256 for row in self.row_provenance for item in row),
             self.sheet,
@@ -1204,6 +1213,21 @@ def data_analysis(
     _stats: WorkbookSessionStats | None = None,
     workbook_session: WorkbookSession | None = None,
 ) -> AnalysisResult:
+    if workbook_session is not None:
+        with workbook_session._lock:
+            if workbook_session._closed:
+                raise ToolbeltError("workbook session is closed")
+            result = data_analysis(
+                table,
+                operation,
+                limits,
+                cancel_check=cancel_check,
+                _cache=_cache or workbook_session.cache,
+                _stats=_stats or workbook_session.stats,
+            )
+        if workbook_session.budget_check is not None:
+            workbook_session.budget_check()
+        return result
     table = _coerce_typed_table(table)
     operation = _coerce_analysis_operation(operation)
     limits = _coerce_toolbelt_limits(limits)
@@ -1217,8 +1241,6 @@ def data_analysis(
         if cached_result is not None:
             if _stats is not None:
                 _stats.analysis_cache_hits += 1
-            if workbook_session is not None and workbook_session.budget_check is not None:
-                workbook_session.budget_check()
             return cached_result
     rows = _rows(table)
     kind = operation.kind.lower()
@@ -1324,8 +1346,6 @@ def data_analysis(
         _cache.put_analysis(analysis_cache_key, analysis_result)
         if _stats is not None:
             _stats.published_results += 1
-        if workbook_session is not None and workbook_session.budget_check is not None:
-            workbook_session.budget_check()
     return analysis_result
 
 
