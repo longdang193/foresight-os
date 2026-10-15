@@ -90,6 +90,46 @@ def _workflow_output_value(output: object) -> object:
     return decode_stage_output(output)
 
 
+def _expand_dependency_records(
+    dependency_records: Mapping[str, object],
+    canonical_records: Mapping[str, object],
+) -> dict[str, object]:
+    expanded = dict(dependency_records)
+    pending = list(expanded.values())
+    while pending:
+        record = pending.pop()
+        references: list[str] = []
+        for field_name in ("evidence_ids", "relationship_ids", "input_ids", "from_id", "to_id"):
+            value = record.get(field_name) if isinstance(record, Mapping) else getattr(record, field_name, None)
+            if isinstance(value, str):
+                references.append(value)
+            elif isinstance(value, (list, tuple)):
+                references.extend(item for item in value if isinstance(item, str))
+        for reference in references:
+            if reference in expanded or reference not in canonical_records:
+                continue
+            referenced_record = canonical_records[reference]
+            expanded[reference] = referenced_record
+            pending.append(referenced_record)
+    return expanded
+
+
+def _dependency_stage_ids(stage: Any, stages_by_id: Mapping[str, Any]) -> tuple[str, ...]:
+    ordered: list[str] = []
+    pending = list(getattr(stage, "dependencies", ()) or ())
+    seen: set[str] = set()
+    while pending:
+        stage_id = str(pending.pop(0))
+        if stage_id in seen:
+            continue
+        seen.add(stage_id)
+        ordered.append(stage_id)
+        ancestor = stages_by_id.get(stage_id)
+        if ancestor is not None:
+            pending.extend(str(item) for item in getattr(ancestor, "dependencies", ()) or ())
+    return tuple(ordered)
+
+
 async def _run_native_stage(
     pattern: ExecutionPattern,
     prompt: str,
@@ -310,6 +350,8 @@ def _synthesize_stage_outputs(
     *,
     allow_legacy_fallback: bool = False,
     existing_records: Mapping[str, object] | None = None,
+    tolerate_invalid_relationships: bool = False,
+    tolerate_conflicting_records: bool = False,
 ) -> object:
     if len(outputs) == 1 and not failures:
         return outputs[0]
@@ -327,6 +369,7 @@ def _synthesize_stage_outputs(
                     output,
                     expected_stage_id=str(getattr(stage, "stage_id", "stage")),
                     existing_records=existing_records,
+                    tolerate_invalid_relationships=tolerate_invalid_relationships,
                 ).to_contract_payload()
             )
         else:
@@ -355,6 +398,8 @@ def _synthesize_stage_outputs(
                     merged.append(entry)
                     continue
                 if _canonical_result_hash(existing) != _canonical_result_hash(entry):
+                    if tolerate_conflicting_records:
+                        continue
                     raise ValidationError(f"conflicting canonical record for {key}:{record_id}")
         return merged
 
@@ -617,6 +662,10 @@ async def run_recipe_async(
             required_capabilities.update(ParticipantConfig.from_mapping(participant).capability_ids)
     context["selected_skills_by_stage"] = selected_skills_by_stage
     context = prepare_capability_context(tuple(sorted(required_capabilities)), context, scope=scope)
+    stages_by_id = {
+        str(getattr(stage, "stage_id", "")): stage
+        for stage in recipe.stages or ()
+    }
 
     def classify(error: BaseException) -> FailureClass:
         if isinstance(error, BudgetExceededError):
@@ -660,23 +709,41 @@ async def run_recipe_async(
             for skill in selected_skills_by_participant.get(participant.id, ())
         )
         stage_skill_hashes = tuple(skill.content_sha256 for skill in selected_skills)
+        limits = dict(getattr(stage, "limits", {}) or {})
+        stage_call_limit = limits.get("max_total_agent_calls")
+        if stage_call_limit is not None:
+            stage_call_limit = _positive_limit(stage_call_limit, label="stage max_total_agent_calls")
+        stage_calls = 0
+
+        def reserve_stage_call() -> bool:
+            nonlocal stage_calls
+            if stage_call_limit is not None and stage_calls >= stage_call_limit:
+                return False
+            if not budget.call():
+                return False
+            stage_calls += 1
+            return True
+
         context.setdefault("skill_hashes_by_stage", {})[getattr(stage, "stage_id", "")] = stage_skill_hashes
         stage_context = dict(context)
         stage_context["stage_id"] = str(getattr(stage, "stage_id", "stage"))
         stage_context["selected_skills"] = selected_skills
         stage_context["selected_skills_by_participant"] = selected_skills_by_participant
-        stage_context["reserve_agent_call"] = lambda: budget.call()
+        stage_context["reserve_agent_call"] = reserve_stage_call
         stage_context["record_agent_call"] = lambda: setattr(metrics, "model_calls", metrics.model_calls + 1)
         stage_context["provider_call_middleware"] = _ReservedProviderCallMiddleware(
             stage_context["reserve_agent_call"], stage_context["record_agent_call"]
         )
         dependency_records: dict[str, object] = {}
-        for dependency in tuple(getattr(stage, "dependencies", ())):
+        for dependency in _dependency_stage_ids(stage, stages_by_id):
             dependency_receipt = context.get("stage_receipts", {}).get(str(dependency))
             for reference in tuple(getattr(dependency_receipt, "result_references", ())):
                 if reference in context.get("canonical_records", {}):
                     dependency_records[reference] = context["canonical_records"][reference]
-        stage_context["dependency_records"] = dependency_records
+        stage_context["dependency_records"] = _expand_dependency_records(
+            dependency_records,
+            context.get("canonical_records", {}),
+        )
         cache_key = _stage_cache_key(stage, stage_input, stage_skill_ids, selected_skills_by_participant)
         semantic_fingerprint, execution_policy_fingerprint = _stage_fingerprints(
             stage,
@@ -729,9 +796,8 @@ async def run_recipe_async(
                 metrics.reused_stages += 1
                 return [cached_output], cached_output
         metrics.reassessed_stages += 1
-        limits = dict(getattr(stage, "limits", {}) or {})
         max_timeout = limits.get("max_timeout_seconds", limits.get("timeout_seconds"))
-        for field_name in ("max_agent_steps", "max_total_agent_calls", "max_branches", "max_handoffs", "max_tool_calls"):
+        for field_name in ("max_agent_steps", "max_branches", "max_handoffs", "max_tool_calls"):
             value = limits.get(field_name)
             if value is not None:
                 existing_budget = getattr(budget, field_name)
@@ -747,6 +813,8 @@ async def run_recipe_async(
                 if budget.max_total_agent_calls is None
                 else budget.max_total_agent_calls - budget.total_agent_calls
             )
+            if stage_call_limit is not None:
+                remaining_calls = stage_call_limit if remaining_calls is None else min(remaining_calls, stage_call_limit)
             if remaining_calls is not None:
                 if remaining_calls < 1:
                     raise BudgetExceededError("maximum agent calls exceeded before group chat dispatch")
@@ -775,6 +843,8 @@ async def run_recipe_async(
                     native_outputs,
                     allow_legacy_fallback=context.get("analysis_store") is None,
                     existing_records=context.get("canonical_records"),
+                    tolerate_invalid_relationships=bool(stage_context.get("tolerate_invalid_relationships")),
+                    tolerate_conflicting_records=bool(stage_context.get("tolerate_conflicting_records")),
                 )
             if pattern == ExecutionPattern.DIRECT:
                 stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(prompt_value)]
@@ -794,6 +864,8 @@ async def run_recipe_async(
                     failures,
                     allow_legacy_fallback=context.get("analysis_store") is None,
                     existing_records=context.get("canonical_records"),
+                    tolerate_invalid_relationships=bool(stage_context.get("tolerate_invalid_relationships")),
+                    tolerate_conflicting_records=bool(stage_context.get("tolerate_conflicting_records")),
                 )
             elif pattern == ExecutionPattern.GROUP_CHAT:
                 stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(prompt_value)]
@@ -817,6 +889,8 @@ async def run_recipe_async(
                 stage_outputs,
                 allow_legacy_fallback=context.get("analysis_store") is None,
                 existing_records=context.get("canonical_records"),
+                tolerate_invalid_relationships=bool(stage_context.get("tolerate_invalid_relationships")),
+                tolerate_conflicting_records=bool(stage_context.get("tolerate_conflicting_records")),
             )
         committer = context.get("canonical_result_committer")
         correction_prompt: str | None = None
@@ -841,10 +915,24 @@ async def run_recipe_async(
                 if not budget.correct():
                     raise
                 metrics.correction_rounds += 1
+                if (
+                    "invalid endpoints for relationship" in str(error)
+                    or "relationship endpoints must have known record kinds" in str(error)
+                    or "unknown reference: relationships[" in str(error)
+                ):
+                    stage_context["tolerate_invalid_relationships"] = True
+                if "conflicting canonical record" in str(error):
+                    stage_context["tolerate_conflicting_records"] = True
                 correction_prompt = (
                     f"{stage_input}\n\n"
                     "The previous structured result was rejected by canonical validation. "
-                    f"Correct only the validation issue and return the complete result again: {error}"
+                    "Correct only the validation issue and return the complete result again. "
+                    "For invalid relationship endpoints, remove the invalid relationship and its "
+                    "ID from every relationship_ids list; do not replace it with a guessed edge. "
+                    "For same-ID/different-content conflicts, preserve the exact canonical record "
+                    "content and do not rewrite an existing record under the same ID; when two "
+                    "participants conflict, preserve the first participant's record verbatim. "
+                    f"Validation issue: {error}"
                 )
         if committer is None:
             return stage_outputs, current

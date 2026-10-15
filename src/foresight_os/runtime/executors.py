@@ -3,11 +3,14 @@ import inspect
 import json
 from typing import Any, Callable, Mapping
 
-from agent_framework import ChatMiddleware
+from agent_framework import Agent, ChatMiddleware
 from agent_framework._tools import FunctionInvocationLayer
 
+from foresight_os.analysis.result_committer import decode_stage_output
 from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
 from foresight_os.runtime.metrics import BudgetExceededError
+
+_MAX_REINJECTED_TOOL_RESULT_CHARS = 12_000
 
 
 async def _close_agent(agent: object) -> None:
@@ -47,7 +50,12 @@ def _tool_results(response: Any) -> list[str]:
         if getattr(message, "role", None) != "tool":
             continue
         for content in getattr(message, "contents", ()) or ():
-            result = getattr(content, "result", None)
+            result = None
+            for field in ("result", "output", "stdout"):
+                candidate = getattr(content, field, None)
+                if candidate not in (None, ""):
+                    result = candidate
+                    break
             if result is None:
                 continue
             if hasattr(result, "to_dict"):
@@ -57,6 +65,39 @@ def _tool_results(response: Any) -> list[str]:
             else:
                 results.append(json.dumps(result, default=str, ensure_ascii=False))
     return results
+
+
+def _bounded_tool_results(results: list[str]) -> str:
+    payload = json.dumps(results, ensure_ascii=False)
+    if len(payload) <= _MAX_REINJECTED_TOOL_RESULT_CHARS:
+        return payload
+    return payload[:_MAX_REINJECTED_TOOL_RESULT_CHARS] + '...[tool results truncated; use the existing tool conversation]'
+
+
+def _toolless_retry_agent(agent: Any) -> Any:
+    client = getattr(agent, "client", None)
+    if client is None:
+        return agent
+    default_options = getattr(agent, "default_options", None)
+    if isinstance(default_options, Mapping):
+        default_options = dict(default_options)
+        default_options.pop("tools", None)
+        default_options.pop("tool_choice", None)
+    return Agent(
+        client,
+        instructions=getattr(agent, "instructions", None),
+        id=getattr(agent, "id", None),
+        name=getattr(agent, "name", None),
+        description=getattr(agent, "description", None),
+        default_options=default_options,
+        context_providers=getattr(agent, "context_providers", None),
+        middleware=getattr(agent, "middleware", None),
+        require_per_service_call_history_persistence=getattr(
+            agent,
+            "require_per_service_call_history_persistence",
+            False,
+        ),
+    )
 
 
 def _reserve_agent_call(reserve_call: Callable[[], bool] | None) -> None:
@@ -152,21 +193,23 @@ async def run_agent_with_tool_fallback(
 
     reserve_fallback_call()
     response = await agent.run(prompt, options=run_options) if run_options else await agent.run(prompt)
-    value = _response_value(response)
+    value = decode_stage_output(response)
     if value is not None:
         return value
     results = _tool_results(response)
-    if not results:
+    if not results and "response_format" not in run_options:
         return ""
     retry_prompt = (
         f"{prompt}\n\n"
-        "The local analysis tools completed, but the provider did not return a final message. "
-        "Use the following tool results as the only source material and return the required result now:\n"
-        f"{json.dumps(results, ensure_ascii=False)}"
+        "The local analysis tools completed, but the provider did not return a final structured message. "
+        "Return the required result now as one JSON object only. "
+        "Use the following tool results when present; otherwise use the completed tool conversation already in context:\n"
+        f"{_bounded_tool_results(results)}"
     )
     reserve_fallback_call()
-    retry = await agent.run(retry_prompt, tools=[], options=run_options) if run_options else await agent.run(retry_prompt, tools=[])
-    return _response_value(retry) or ""
+    retry_agent = _toolless_retry_agent(agent)
+    retry = await retry_agent.run(retry_prompt, tools=[], options=run_options) if run_options else await retry_agent.run(retry_prompt, tools=[])
+    return decode_stage_output(retry) or ""
 
 
 @dataclass

@@ -12,7 +12,7 @@ from foresight_os.runtime.metrics import BudgetExceededError, FailureClass, RunM
 from foresight_os.runtime.capabilities import CapabilityDefinition, CapabilityUnavailableError, ExecutionMode, ForesightFunctionMiddleware, ScopeOwnership, CapabilityScope, instrument_tool
 from foresight_os.controller.budgets import BudgetState
 from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
-from foresight_os.runtime.executors import AnalystExecutor, ReviewerExecutor, run_agent_with_tool_fallback
+from foresight_os.runtime.executors import AnalystExecutor, ReviewerExecutor, _toolless_retry_agent, run_agent_with_tool_fallback
 from foresight_os.runtime.workflow import run_recipe_async
 from foresight_os.runtime.local_toolbelt import data_analysis, spreadsheet_read
 
@@ -281,6 +281,81 @@ def test_tool_result_fallback_retries_without_tools_when_provider_returns_empty_
     assert "B2" in calls[1][0]
 
 
+def test_tool_result_fallback_retries_when_framework_hides_tool_payload():
+    calls = []
+
+    class Agent:
+        async def run(self, prompt, **kwargs):
+            calls.append((prompt, kwargs))
+            if len(calls) == 1:
+                return SimpleNamespace(value=None, text="", messages=[])
+            return SimpleNamespace(value={"status": "ready"}, text="", messages=[])
+
+    result = asyncio.run(
+        run_agent_with_tool_fallback(
+            Agent(),
+            "inspect workbook",
+            {"response_format": {"type": "json"}},
+            reserve_call=lambda: True,
+        )
+    )
+
+    assert result == {"status": "ready"}
+    assert len(calls) == 2
+    assert calls[1][1]["tools"] == []
+
+
+def test_tool_result_fallback_bounds_reinjected_tool_payload():
+    calls = []
+
+    class Agent:
+        async def run(self, prompt, **kwargs):
+            calls.append((prompt, kwargs))
+            if len(calls) == 1:
+                return SimpleNamespace(
+                    value=None,
+                    text="",
+                    messages=[
+                        SimpleNamespace(
+                            role="tool",
+                            contents=[SimpleNamespace(result={"payload": "x" * 100_000})],
+                        ),
+                    ],
+                )
+            return SimpleNamespace(value={"status": "ready"}, text="", messages=[])
+
+    result = asyncio.run(
+        run_agent_with_tool_fallback(
+            Agent(),
+            "inspect workbook",
+            {"response_format": {"type": "json"}},
+        )
+    )
+
+    assert result == {"status": "ready"}
+    assert len(calls[1][0]) < 20_000
+
+
+def test_toolless_retry_agent_drops_default_tools():
+    def retrieve(query: str) -> str:
+        return query
+
+    agent = Agent(
+        FakeClient(),
+        tools=[retrieve],
+        default_options={"response_format": {"type": "json"}},
+    )
+    agent.default_options["tools"] = ["tool"]
+    agent.default_options["tool_choice"] = "auto"
+
+    retry_agent = _toolless_retry_agent(agent)
+
+    assert retry_agent is not agent
+    assert retry_agent.default_options["tools"] == []
+    assert retry_agent.default_options["tool_choice"] == "auto"
+    assert retry_agent.default_options["response_format"] == {"type": "json"}
+
+
 def test_tool_result_fallback_treats_provider_json_parse_errors_as_text():
     class Response:
         text = "{\"status\":\"ready\"}{\"extra\":true}"
@@ -409,6 +484,19 @@ def test_instrumented_local_tool_hides_host_only_parameters_from_model_schema(to
     function_tool = FunctionTool(name=tool_name, func=wrapped)
     schema = function_tool.parameters()
     assert set(schema["properties"]) == public_parameters
+
+
+def test_instrumented_callable_adapters_use_capability_names():
+    class Adapter:
+        def __call__(self, value: str) -> str:
+            return value
+
+    document = instrument_tool(Adapter(), CapabilityDefinition("document_read", "local_deterministic"), {})
+    artifact = instrument_tool(Adapter(), CapabilityDefinition("artifact_generation", "local_deterministic"), {})
+
+    assert document.__name__ == "document_read"
+    assert artifact.__name__ == "artifact_generation"
+    assert document.__name__ != artifact.__name__
 
 
 def test_tool_semaphore_enforces_declared_parallelism():

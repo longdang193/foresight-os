@@ -69,10 +69,23 @@ def _raw_cell_check(
             limitations=tuple(f"missing raw cell input: {item}" for item in missing),
         )
     operation = str(definition.get("operation", ""))
+    scale = float(definition.get("scale", 1.0))
     if operation == "growth_rate" and len(resolved) == 2:
-        expected = growth_rate(resolved[0], resolved[1], int(definition.get("periods", 1)))
+        expected = growth_rate(resolved[0], resolved[1], int(definition.get("periods", 1))) * scale
+    elif operation in {"relative_change", "percent_change", "proportion_change"} and len(resolved) == 2 and resolved[0] != 0:
+        expected = (resolved[1] / resolved[0] - 1.0) * scale
     elif operation in {"ratio", "share"} and len(resolved) == 2 and resolved[1] != 0:
-        expected = resolved[0] / resolved[1]
+        expected = resolved[0] / resolved[1] * scale
+    elif operation == "difference" and len(resolved) == 2:
+        expected = (resolved[1] - resolved[0]) * scale
+    elif operation == "sum_relative_change" and len(resolved) >= 4:
+        split_at = int(definition.get("split_at", len(resolved) // 2))
+        baseline = sum(resolved[:split_at])
+        current = sum(resolved[split_at:])
+        expected = None if baseline == 0 else (current / baseline - 1.0) * scale
+    elif operation == "sum_difference" and len(resolved) >= 4:
+        split_at = int(definition.get("split_at", len(resolved) // 2))
+        expected = (sum(resolved[split_at:]) - sum(resolved[:split_at])) * scale
     else:
         return ReviewCheckResult(
             "calculation_reconciliation",
@@ -80,7 +93,7 @@ def _raw_cell_check(
             actual=calculation.output,
             input_ids=(calculation.id,),
             source_ids=source_cells,
-            interpretation="raw-cell calculation definition is incomplete",
+            interpretation="raw-cell calculation definition is unsupported",
             limitations=(f"unsupported operation or denominator: {operation}",),
         )
     return reconcile_calculation(

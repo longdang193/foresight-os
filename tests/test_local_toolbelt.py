@@ -19,11 +19,47 @@ from foresight_os.runtime.local_toolbelt import (
     _implicit_xlsx_bounds,
     calculation,
     data_analysis,
+    domain_validation,
     spreadsheet_read,
     WorkbookReadCache,
     bind_local_toolbelt,
 )
 from foresight_os.domain.models import Evidence, SourceLocator
+
+
+def test_domain_validation_rejects_unsupported_candidate_fields_at_tool_boundary():
+    candidate = {
+        "candidate_id": "candidate-1",
+        "capability_id": "web_search",
+        "source": "source",
+        "request": "request",
+        "excerpt": "excerpt",
+        "provenance": {"source": "source"},
+        "scorecard_weights": {"market": 0.5},
+    }
+
+    with pytest.raises(ToolbeltError, match="unsupported evidence candidate fields.*scorecard_weights"):
+        domain_validation(candidate)
+
+
+def test_domain_validation_rejects_stage_result_payloads_with_clear_boundary_error():
+    stage_result = {
+        "contract": "analysis-stage-result/v1",
+        "stage_id": "market-channel-assessment",
+        "evidence": [],
+        "claims": [],
+        "calculations": [],
+        "implications": [],
+        "recommendations": [],
+        "artifacts": [],
+        "relationships": [],
+        "assumptions": [],
+        "uncertainty": [],
+        "monitoring_indicators": [],
+    }
+
+    with pytest.raises(ToolbeltError, match="stage result payloads are not valid domain_validation inputs"):
+        domain_validation(stage_result)
 
 
 def test_provider_tool_paths_are_json_string_boundaries():
@@ -682,3 +718,61 @@ def test_xlsx_reader_skips_blank_and_title_rows_before_data_header(tmp_path):
 
     assert table.columns == ("Region", "Value", "Unit")
     assert table.rows == (("North", 10, "EUR"), ("South", 20, "EUR"))
+
+
+def test_xlsx_reader_keeps_bounded_rows_when_cached_dimension_is_shorter(tmp_path):
+    source = tmp_path / "bounded-selection.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Data"
+    sheet.append(["Region", "Value"])
+    sheet.append(["North", 10])
+    workbook.save(source)
+
+    result = spreadsheet_read(
+        source,
+        SheetSelection(ranges=(("Data", "A1:B5"),), include_hidden=True, include_hidden_rows=True),
+    )
+
+    table = next(item for item in result.tables if item.sheet == "Data")
+    assert table.source_range == "A1:B5"
+    assert table.columns == ("Region", "Value")
+    assert table.rows == (("North", 10), (None, None), (None, None), (None, None))
+
+
+def test_xlsx_reader_range_selection_restricts_selected_sheets(tmp_path):
+    source = tmp_path / "multi-sheet-selection.xlsx"
+    workbook = openpyxl.Workbook()
+    first = workbook.active
+    first.title = "First"
+    first.append(["Region", "Value"])
+    first.append(["North", 10])
+    second = workbook.create_sheet("Second")
+    second.append(["Region", "Value"])
+    second.append(["South", 20])
+    workbook.save(source)
+
+    result = spreadsheet_read(
+        source,
+        SheetSelection(ranges=(("First", "A1:B2"),), include_hidden=True, include_hidden_rows=True),
+    )
+
+    assert {item.sheet for item in result.tables} == {"First"}
+
+
+@pytest.mark.parametrize(
+    ("selection", "message"),
+    [
+        ({"sheet_names": True}, "sheet_names must be a list"),
+        ({"ranges": True}, "ranges must be a list"),
+        ({"ranges": [["Data"]]}, "ranges entries must contain two values"),
+    ],
+)
+def test_xlsx_reader_rejects_malformed_selection_shapes(selection, message, tmp_path):
+    source = tmp_path / "malformed-selection.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.save(source)
+
+    with pytest.raises(ToolbeltError, match=message):
+        spreadsheet_read(source, selection)

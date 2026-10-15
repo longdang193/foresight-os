@@ -329,6 +329,20 @@ def _recipe_for_patterns(
         declared = set(review_policy.reviewer_capability_ids)
         return tuple(item for item in ("web_search", "page_retrieval", "document_read", "spreadsheet_read", "data_analysis", "calculation", "graph_context", "internal_knowledge", "domain_validation", "artifact_generation") if item in declared)
 
+    def participant_uses_tools(stage: object, role: dict[str, object]) -> bool:
+        if role.get("capability_ids"):
+            return True
+        if role.get("purpose") == "review" and review_required:
+            return bool(review_runtime_capabilities(stage))
+        return bool(stage_capabilities(stage)[0])
+
+    def stage_call_budget(stage: object, pattern: ExecutionPattern, is_last: bool) -> int:
+        return sum(
+            (3 if participant_uses_tools(stage, role) else 1)
+            * (1 + base.max_correction_rounds)
+            for role in stage_roles(stage, pattern, is_last)
+        )
+
     def stage_roles(stage: object, pattern: ExecutionPattern, is_last: bool) -> list[dict[str, object]]:
         _, required_stage_participants = stage_requirements(stage)
         requested_ids = tuple(dict.fromkeys((
@@ -370,6 +384,17 @@ def _recipe_for_patterns(
             roles[0].setdefault("handoff_targets", (roles[1]["id"],))
         return roles
 
+    if work_stages:
+        planned_agent_calls = sum(
+            stage_call_budget(
+                work_stages[index - 1],
+                stage_patterns[index - 1],
+                index == stage_count,
+            )
+            for index in range(1, stage_count + 1)
+        )
+        max_total_agent_calls = max(max_total_agent_calls, planned_agent_calls)
+
     stages = tuple(
         RecipeStage(
             getattr(work_stages[index - 1], "stage_id", f"stage-{index}") if index <= len(work_stages) else f"stage-{index}",
@@ -394,7 +419,20 @@ def _recipe_for_patterns(
                     else {}
                 ),
                 "max_agent_steps": base.max_agent_steps,
-                "max_total_agent_calls": max_total_agent_calls,
+                "max_total_agent_calls": max(
+                    int(
+                        (
+                            getattr(work_stages[index - 1], "limits", {})
+                            if index <= len(work_stages)
+                            else {}
+                        ).get("max_total_agent_calls", base.max_total_agent_calls)
+                    ),
+                    stage_call_budget(
+                        work_stages[index - 1] if index <= len(work_stages) else object(),
+                        stage_patterns[index - 1],
+                        index == stage_count,
+                    )
+                ),
             },
             tuple(getattr(work_stages[index - 1], "skill_ids", ())) if index <= len(work_stages) else (),
             getattr(work_stages[index - 1], "objective", "") if index <= len(work_stages) else "",

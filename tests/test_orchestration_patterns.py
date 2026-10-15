@@ -11,7 +11,7 @@ from foresight_os.controller.budgets import BudgetState
 from foresight_os.persistence.ids import canonical_json_hash
 from foresight_os.domain.validation import ValidationError
 from foresight_os.analysis.result_committer import decode_stage_output
-from foresight_os.runtime.workflow import CanonicalStageResult, _canonical_result_hash, _close_agents, _run_native_stage, _synthesize_stage_outputs, _workflow_output_value, run_recipe_async
+from foresight_os.runtime.workflow import CanonicalStageResult, _canonical_result_hash, _close_agents, _dependency_stage_ids, _expand_dependency_records, _run_native_stage, _synthesize_stage_outputs, _workflow_output_value, run_recipe_async
 from foresight_os.runtime.metrics import BudgetExceededError, RunMetrics
 
 
@@ -73,6 +73,27 @@ def test_native_sequential_concurrent_and_group_chat_execute_with_installed_buil
         assert outputs
 
 
+def test_dependency_records_include_referenced_canonical_ancestors():
+    canonical_records = {
+        "evidence-1": {"id": "evidence-1"},
+        "claim-1": {"id": "claim-1", "evidence_ids": ["evidence-1"], "relationship_ids": []},
+    }
+
+    expanded = _expand_dependency_records({"claim-1": canonical_records["claim-1"]}, canonical_records)
+
+    assert set(expanded) == {"claim-1", "evidence-1"}
+
+
+def test_dependency_stage_ids_include_declared_ancestors():
+    stages = {
+        "source": SimpleNamespace(stage_id="source", dependencies=()),
+        "screen": SimpleNamespace(stage_id="screen", dependencies=("source",)),
+        "challenge": SimpleNamespace(stage_id="challenge", dependencies=("screen",)),
+    }
+
+    assert _dependency_stage_ids(stages["challenge"], stages) == ("screen", "source")
+
+
 def test_native_provider_budget_is_reserved_before_model_dispatch():
     client = CountingChatClient()
     metrics = RunMetrics("budget-boundary", "SEQUENTIAL", "sequential")
@@ -108,6 +129,12 @@ def test_native_workflow_unwraps_wrapped_json_text_and_preserves_prose():
     assert _workflow_output_value(wrapped) == {"stage_id": "stage-1"}
     assert _workflow_output_value(prose) == "plain text"
     assert decode_stage_output(wrapped) == {"stage_id": "stage-1"}
+
+
+def test_native_workflow_decodes_json_text_in_structured_value():
+    response = SimpleNamespace(value='{"stage_id": "stage-1"}', text="")
+
+    assert decode_stage_output(response) == {"stage_id": "stage-1"}
 
 
 def test_handoff_uses_native_builder_and_allowed_route():
@@ -189,6 +216,32 @@ def test_composed_native_stages_pass_outputs_and_settle_metrics():
     assert result.metrics.branches == 2
     assert result.metrics.chat_rounds == 4
     assert result.metrics.cleanup_complete
+
+
+def test_stage_call_limits_do_not_shrink_run_wide_call_budget():
+    base = make_recipe(RecipeName.DIRECT)
+    stages = (
+        RecipeStage("stage-1", ExecutionPattern.DIRECT, ({"id": "one"},), "typed-result", "typed-result", {"max_total_agent_calls": 1}),
+        RecipeStage("stage-2", ExecutionPattern.DIRECT, ({"id": "two"},), "typed-result", "typed-result", {"max_total_agent_calls": 1}),
+    )
+    recipe = ExecutionRecipe(
+        base.name,
+        base.pattern,
+        base.roles,
+        base.max_agent_steps,
+        base.max_correction_rounds,
+        2,
+        base.completion,
+        base.escalation,
+        base.partial_result,
+        stages=stages,
+    )
+    client = CountingChatClient()
+
+    result = asyncio.run(run_recipe_async(recipe, "hello", client, "stage-local-budget"))
+
+    assert result.metrics.runtime_status == "SETTLED"
+    assert client.calls == 2
 
 
 def test_multi_participant_stage_synthesizes_typed_outputs_before_commit():

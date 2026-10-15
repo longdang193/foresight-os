@@ -118,3 +118,48 @@ def test_execute_builds_configured_client_once(tmp_path: Path, capsys, monkeypat
     capsys.readouterr()
 
     assert calls == 1
+
+
+def test_execute_binds_web_search_provider_from_env_file(tmp_path: Path, capsys, monkeypatch):
+    env_file = tmp_path / "runtime.env"
+    env_file.write_text(
+        "FORESIGHT_WEB_SEARCH_PROVIDER=searxng\n"
+        "FORESIGHT_WEB_SEARCH_URL=http://127.0.0.1:8888\n",
+        encoding="utf-8",
+    )
+    seen = {}
+
+    class Metrics:
+        settled = True
+        runtime_status = "SETTLED"
+        persistence_status = "NOT_STARTED"
+        analysis_status = "NOT_STARTED"
+        deliverable_status = {}
+
+    class Result:
+        run_id = "run-web-search"
+        outputs = ()
+        metrics = Metrics()
+
+    def build_client(*args):
+        return object()
+
+    async def completed(*args, **kwargs):
+        seen.update(kwargs)
+        return Result()
+
+    monkeypatch.setattr("foresight_os.cli.build_configured_client", build_client)
+    monkeypatch.setattr("foresight_os.cli.execute_approved_investigation", completed)
+
+    assert main([
+        "execute",
+        "--work-dir",
+        str(tmp_path / "execute-command"),
+        "--prompt",
+        "run",
+        "--env-file",
+        str(env_file),
+    ]) == 0
+    capsys.readouterr()
+
+    assert type(seen["run_context"]["web_search_provider"]).__name__ == "SearxngWebSearchProvider"
