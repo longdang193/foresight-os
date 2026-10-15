@@ -36,6 +36,14 @@ until review and human acceptance, and report runtime, persistence, analysis,
 and deliverable statuses separately. Infrastructure repair may unblock work but
 must not be reported as completion of the approved analysis.
 
+Add source-grounded validation behavior to
+`.agents/skills/foresight-validation/`, not to the packaged participant
+registry. Keep the procedure thin: call the existing independent-validation,
+review, invalidation, `AnalysisStore`, and artifact projections. Detailed
+examples belong in `docs/evidence-and-evaluation.md`; new supported cases
+should be expressed through fixtures, mappings, or evaluation configuration
+before production-code changes are considered.
+
 Add presentation delivery behavior to `.agents/skills/foresight-delivery/`, not
 to the packaged participant registry. Delivery must validate accepted state,
 current presentation-spec provenance, one requested destination, and a durable

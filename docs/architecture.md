@@ -54,6 +54,11 @@ current presentation-spec hash, invokes one requested adapter, and persists a
 matching receipt through `AnalysisStore`. Provider success without local proof
 remains failed or blocked.
 
+Source-grounded validation is a separate host-facing procedure under
+`.agents/skills/foresight-validation/`. It reuses the selected deterministic
+checks, review records, dependency invalidation, and human acceptance owners;
+it does not add a second validator or durable status hierarchy.
+
 ### 2. Controller and recipe
 
 The controller resolves policy into an `ExecutionRecipe`. A recipe names the
@@ -131,7 +136,10 @@ approved committer.
 mutations are kept separately until accepted. A continuation can invalidate
 dependent findings, create a new revision, and preserve the reason for the
 change. Finding views only mark a record accepted when its current review is
-valid and no unresolved objection or missing input remains.
+valid and no unresolved objection or missing input remains. They also provide a
+compact derived summary (`supported`, `uncertain`, `correction-needed`, or
+`human-review-pending`) while retaining source, validation, and execution detail
+for progressive disclosure.
 
 ## Artifact flow
 

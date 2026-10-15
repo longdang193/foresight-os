@@ -35,6 +35,14 @@ zero score or a successful empty run.
 
 ## Independent validation and acceptance
 
+The host routing procedure for this lifecycle is
+`.agents/skills/foresight-validation/`. It is intentionally thin: the source
+reader, selected check set, review workflow, invalidation rules, and
+`AnalysisStore` remain the canonical owners. A new supported business case
+should first use an existing capability with a fixture or explicit mapping;
+production-code changes require evidence of a new format, capability,
+provider, or runtime defect.
+
 The independent-validation workflow separates five facts that must not be
 collapsed into one green flag:
 

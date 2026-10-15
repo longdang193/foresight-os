@@ -123,6 +123,16 @@ class FindingView:
     monitoring_indicators: tuple[str, ...] = ()
 
 
+def finding_summary_status(finding: FindingView) -> str:
+    if finding.unresolved_issues:
+        return "correction-needed"
+    if finding.review_status != ReviewValidity.CURRENT.value or finding.review_outcome != ReviewOutcome.ACCEPTED.value:
+        return "human-review-pending"
+    if finding.limitations or finding.uncertainty or finding.counterevidence_ids or not finding.accepted:
+        return "uncertain"
+    return "supported"
+
+
 @dataclass(frozen=True)
 class ChallengeProposal:
     agreements: tuple[str, ...] = ()

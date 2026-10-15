@@ -16,7 +16,7 @@ from foresight_os.domain.validation import ValidationError, validate_execution_r
 from foresight_os.wayfinding import create_work_brief
 
 
-def test_approved_review_recipe_uses_typed_checks_and_separate_reviewer_requirements():
+def test_default_review_recipe_uses_typed_checks_without_duplicate_reviewer_execution():
     recipe = select_recipe(create_work_brief("Should investment increase?"))
 
     assert recipe.review_policy == INDEPENDENT_VALIDATION_POLICY
@@ -25,11 +25,7 @@ def test_approved_review_recipe_uses_typed_checks_and_separate_reviewer_requirem
         ReviewCheckKind.SCOPE_RECONCILIATION.value,
         ReviewCheckKind.DECISION_CHALLENGE.value,
     )
-    reviewer = next(item for item in recipe.stages[0].participants if item["purpose"] == "review")
-    assert reviewer["reviewer_capability_ids"] == recipe.stages[0].review_checks
-    assert reviewer["review_check_ids"] == recipe.stages[0].review_checks
-    assert reviewer["skill_ids"]
-    assert reviewer["skill_ids"] != recipe.stages[0].skill_ids
+    assert all(item["purpose"] != "review" for item in recipe.stages[0].participants)
 
 
 def test_quantitative_review_adds_calculation_and_material_source_capabilities():
@@ -55,12 +51,30 @@ def test_quantitative_review_adds_calculation_and_material_source_capabilities()
     )
 
     recipe = select_recipe(brief)
+    assert ReviewCheckKind.CALCULATION_RECONCILIATION.value in recipe.stages[0].review_checks
+    assert "spreadsheet_read" in recipe.stages[0].capabilities
+
+
+def test_explicit_reviewer_requirement_preserves_reviewer_execution():
+    brief = WorkBrief(
+        "explicit-review",
+        "Should the recommendation be challenged?",
+        [],
+        ["recommendation"],
+        [],
+        [],
+        "assess",
+        "challenge",
+        stages=[WorkStage("stage-1", "challenge", participants=["reviewer"])],
+    )
+
+    recipe = select_recipe(brief)
     reviewer = next(item for item in recipe.stages[0].participants if item["purpose"] == "review")
 
-    assert ReviewCheckKind.CALCULATION_RECONCILIATION.value in recipe.stages[0].review_checks
-    assert "spreadsheet_read" in reviewer["reviewer_capability_ids"]
-    assert "calculation" in reviewer["reviewer_capability_ids"]
-    assert "spreadsheet_read" in recipe.stages[0].capabilities
+    assert reviewer["reviewer_capability_ids"] == recipe.stages[0].review_checks
+    assert reviewer["review_check_ids"] == recipe.stages[0].review_checks
+    assert reviewer["skill_ids"]
+    assert reviewer["skill_ids"] != recipe.stages[0].skill_ids
 
 
 def test_legacy_review_labels_remain_readable_but_typed_policy_rejects_them():

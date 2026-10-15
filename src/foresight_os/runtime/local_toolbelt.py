@@ -80,30 +80,43 @@ class WorkbookReadCache:
         self.max_bytes = max(1, max_bytes)
         self._entries: dict[tuple[Any, ...], tuple[WorkbookReadResult, int]] = {}
         self._analysis_entries: dict[tuple[Any, ...], tuple[AnalysisResult, int]] = {}
+        self._source_versions: dict[str, tuple[tuple[int, int, int], str]] = {}
         self._bytes = 0
 
-    def key(self, source: Path, selection: SheetSelection | None, limits: ToolbeltLimits) -> tuple[Any, ...]:
+    def source_hash(self, source: Path) -> str:
+        canonical = str(source.resolve())
+        stat = source.stat()
+        signature = (
+            int(stat.st_size),
+            int(stat.st_mtime_ns),
+            int(getattr(stat, "st_ctime_ns", 0)),
+        )
+        cached = self._source_versions.get(canonical)
+        if cached is not None and cached[0] == signature:
+            return cached[1]
+        digest = _sha256_file(source)
+        self._source_versions[canonical] = (signature, digest)
+        return digest
+
+    def key(
+        self,
+        source: Path,
+        selection: SheetSelection | None,
+        limits: ToolbeltLimits,
+        *,
+        source_hash: str | None = None,
+    ) -> tuple[Any, ...]:
         canonical = str(source.resolve())
         selection_key = repr(selection)
         limit_key = repr(limits)
-        return canonical, _sha256_file(source), selection_key, limit_key
+        return canonical, source_hash or self.source_hash(source), selection_key, limit_key
 
     def get(self, key: tuple[Any, ...]) -> WorkbookReadResult | None:
         entry = self._entries.get(key)
         return entry[0] if entry is not None else None
 
     def put(self, key: tuple[Any, ...], result: WorkbookReadResult) -> None:
-        estimated = max(1, len(repr(result)))
-        if estimated > self.max_bytes:
-            return
-        previous = self._entries.pop(key, None)
-        if previous is not None:
-            self._bytes -= previous[1]
-        while self._entries and (len(self._entries) >= self.max_entries or self._bytes + estimated > self.max_bytes):
-            _, size = self._entries.pop(next(iter(self._entries)))
-            self._bytes -= size
-        self._entries[key] = (result, estimated)
-        self._bytes += estimated
+        self._put(self._entries, key, result)
 
     def analysis_key(self, table: TypedTable, operation: AnalysisOperation, limits: ToolbeltLimits) -> tuple[Any, ...]:
         return ("analysis", table.id, repr(operation), repr(limits))
@@ -113,25 +126,38 @@ class WorkbookReadCache:
         return entry[0] if entry is not None else None
 
     def put_analysis(self, key: tuple[Any, ...], result: AnalysisResult) -> None:
+        self._put(self._analysis_entries, key, result)
+
+    def _put(self, entries: dict[tuple[Any, ...], tuple[Any, int]], key: tuple[Any, ...], result: Any) -> None:
         estimated = max(1, len(repr(result)))
         if estimated > self.max_bytes:
             return
-        previous = self._analysis_entries.pop(key, None)
+        previous = entries.pop(key, None)
         if previous is not None:
             self._bytes -= previous[1]
-        while self._analysis_entries and (len(self._analysis_entries) >= self.max_entries or self._bytes + estimated > self.max_bytes):
-            _, size = self._analysis_entries.pop(next(iter(self._analysis_entries)))
+        while self._entry_count >= self.max_entries or self._bytes + estimated > self.max_bytes:
+            oldest = self._entries if self._entries else self._analysis_entries
+            _, size = oldest.pop(next(iter(oldest)))
             self._bytes -= size
-        self._analysis_entries[key] = (result, estimated)
+        entries[key] = (result, estimated)
         self._bytes += estimated
 
     def clear(self) -> None:
         self._entries.clear()
         self._analysis_entries.clear()
+        self._source_versions.clear()
         self._bytes = 0
 
     @property
     def size(self) -> int:
+        return self._entry_count
+
+    @property
+    def bytes_used(self) -> int:
+        return self._bytes
+
+    @property
+    def _entry_count(self) -> int:
         return len(self._entries) + len(self._analysis_entries)
 
 
@@ -482,8 +508,14 @@ def _delimited_value(value: str) -> Any:
             return value
 
 
-def _read_delimited(source: Path, selection: SheetSelection | None, limits: ToolbeltLimits, cancel_check: Callable[[], bool] | None) -> WorkbookReadResult:
-    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+def _read_delimited(
+    source: Path,
+    selection: SheetSelection | None,
+    limits: ToolbeltLimits,
+    cancel_check: Callable[[], bool] | None,
+    digest: str | None = None,
+) -> WorkbookReadResult:
+    digest = digest or _sha256_file(source)
     sheet = source.stem
     if selection and selection.sheet_names and sheet not in selection.sheet_names:
         return WorkbookReadResult(str(source), digest, (), (), ())
@@ -623,8 +655,10 @@ def spreadsheet_read(
     source = Path(source)
     _check_cancel(cancel_check)
     cache_key = None
+    digest = None
     if _cache is not None:
-        cache_key = _cache.key(source, selection, limits)
+        digest = _cache.source_hash(source)
+        cache_key = _cache.key(source, selection, limits, source_hash=digest)
         cached_result = _cache.get(cache_key)
         if cached_result is not None:
             cached_result = replace(cached_result, source=str(source))
@@ -633,7 +667,9 @@ def spreadsheet_read(
     if source.stat().st_size > limits.max_bytes:
         raise ToolbeltError("workbook exceeds byte limit")
     if source.suffix.lower() in {".csv", ".tsv"}:
-        result = _read_delimited(source, selection, limits, cancel_check)
+        result = _read_delimited(source, selection, limits, cancel_check, digest)
+        if _cache is not None and cache_key is not None:
+            _cache.put(cache_key, result)
         _remember_authoritative_measurements(result.measurements)
         return result
     if source.suffix.lower() not in {".xlsx", ".xlsm", ".xltx", ".xltm"}:
@@ -646,7 +682,7 @@ def spreadsheet_read(
     if expanded_bytes > limits.max_expanded_bytes:
         raise ToolbeltError("workbook expanded content exceeds byte limit")
     _preflight_xlsx_archive(source, selection, limits, cancel_check)
-    digest = _sha256_file(source)
+    digest = digest or _sha256_file(source)
     workbook = None
     cached = None
     try:
