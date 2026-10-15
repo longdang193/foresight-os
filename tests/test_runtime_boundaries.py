@@ -84,6 +84,34 @@ def test_run_recipe_returns_typed_metrics_and_real_executor_calls():
     assert result.metrics.analysis_status == "NOT_STARTED"
 
 
+def test_tool_result_fallback_reserves_retry_call_budget():
+    class ToolResponse:
+        messages = [type("Message", (), {"role": "tool", "contents": [type("Content", (), {"result": {"value": 1}})()]})()]
+        value = None
+        text = ""
+
+    class Agent:
+        def __init__(self):
+            self.calls = 0
+
+        async def run(self, prompt, **kwargs):
+            self.calls += 1
+            return ToolResponse()
+
+    agent = Agent()
+    remaining = {"calls": 1}
+
+    def reserve_call():
+        if remaining["calls"] < 1:
+            return False
+        remaining["calls"] -= 1
+        return True
+
+    with pytest.raises(BudgetExceededError, match="agent calls"):
+        asyncio.run(run_agent_with_tool_fallback(agent, "prompt", reserve_call=reserve_call))
+    assert agent.calls == 1
+
+
 def test_budget_failure_is_rejected_before_dispatch_and_keeps_metrics():
     with pytest.raises(BudgetExceededError) as caught:
         asyncio.run(run_recipe_async(_limited_recipe(max_agent_steps=0), "analyse", FakeClient(), "budget-test"))

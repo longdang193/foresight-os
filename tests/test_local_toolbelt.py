@@ -99,6 +99,21 @@ def test_selected_sheet_does_not_inherit_unselected_sheet_row_limit(tmp_path: Pa
     assert result.tables[0].sheet == "Small"
 
 
+def test_unselected_sheet_merge_allocation_is_preflighted(tmp_path: Path):
+    workbook = openpyxl.Workbook()
+    selected = workbook.active
+    selected.title = "Selected"
+    selected.append(["value"])
+    selected.append([1])
+    unselected = workbook.create_sheet("Unselected")
+    unselected.merge_cells("A1:J1000")
+    source = tmp_path / "merged-unselected.xlsx"
+    workbook.save(source)
+
+    with pytest.raises(ToolbeltError, match="allocation exceeds cell limit"):
+        spreadsheet_read(source, {"sheet": "Selected"}, {"max_cells": 5})
+
+
 def test_workbook_read_cache_evicts_old_entries_without_unpacking_error(tmp_path: Path):
     cache = WorkbookReadCache(max_entries=1)
     first = tmp_path / "first.xlsx"
@@ -460,6 +475,21 @@ def test_run_local_workbook_cache_keeps_path_provenance(tmp_path, workbook_path)
     assert first_result.source == str(workbook_path)
     assert second_result.source == str(second)
     assert first_result.workbook_sha256 == second_result.workbook_sha256
+
+
+def test_overlapping_workbook_reads_preserve_measurement_authority(workbook_path):
+    narrow = spreadsheet_read(workbook_path, SheetSelection(ranges=(("Demand", "A2:C3"),)))
+    measurement = next(item for item in narrow.measurements if item.provenance.coordinate == "C3")
+    spreadsheet_read(workbook_path, SheetSelection(ranges=(("Demand", "A2:F4"),)))
+
+    record = calculation(
+        [json.loads(json.dumps(measurement.to_dict(), default=str))],
+        formula={"expression": "Demand!C3", "operation": "sum"},
+        units={"units": "units"},
+        approved_workbook_sha256=narrow.workbook_sha256,
+    )
+
+    assert record.verification_status.value == "VERIFIED"
 
 
 def test_run_local_workbook_cache_reuses_deterministic_analysis(workbook_path):

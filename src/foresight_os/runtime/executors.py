@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import inspect
 import json
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
 
@@ -55,8 +55,22 @@ def _tool_results(response: Any) -> list[str]:
     return results
 
 
-async def run_agent_with_tool_fallback(agent: Any, prompt: str, options: Mapping[str, Any] | None = None) -> Any:
+def _reserve_agent_call(reserve_call: Callable[[], bool] | None) -> None:
+    if reserve_call is not None and not reserve_call():
+        from foresight_os.runtime.metrics import BudgetExceededError
+
+        raise BudgetExceededError("maximum agent calls exceeded before dispatch")
+
+
+async def run_agent_with_tool_fallback(
+    agent: Any,
+    prompt: str,
+    options: Mapping[str, Any] | None = None,
+    *,
+    reserve_call: Callable[[], bool] | None = None,
+) -> Any:
     run_options = dict(options or {})
+    _reserve_agent_call(reserve_call)
     response = await agent.run(prompt, options=run_options) if run_options else await agent.run(prompt)
     value = _response_value(response)
     if value is not None:
@@ -70,6 +84,7 @@ async def run_agent_with_tool_fallback(agent: Any, prompt: str, options: Mapping
         "Use the following tool results as the only source material and return the required result now:\n"
         f"{json.dumps(results, ensure_ascii=False)}"
     )
+    _reserve_agent_call(reserve_call)
     retry = await agent.run(retry_prompt, tools=[], options=run_options) if run_options else await agent.run(retry_prompt, tools=[])
     return _response_value(retry) or ""
 
@@ -88,7 +103,7 @@ class AnalystExecutor:
         participant = self.participant or ParticipantConfig("analyst", "analyst", "structured analytical proposal")
         agent = factory.create(participant, self.run_context or {})
         options = _run_options(participant, self.run_context)
-        return await run_agent_with_tool_fallback(agent, prompt, options)
+        return await run_agent_with_tool_fallback(agent, prompt, options, reserve_call=(self.run_context or {}).get("reserve_agent_call"))
 
 
 @dataclass
@@ -105,4 +120,4 @@ class ReviewerExecutor:
         participant = self.participant or ParticipantConfig("reviewer", "reviewer", "structured review of the proposal")
         agent = factory.create(participant, self.run_context or {})
         options = _run_options(participant, self.run_context)
-        return await run_agent_with_tool_fallback(agent, prompt, options)
+        return await run_agent_with_tool_fallback(agent, prompt, options, reserve_call=(self.run_context or {}).get("reserve_agent_call"))

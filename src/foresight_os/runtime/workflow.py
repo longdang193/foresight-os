@@ -31,7 +31,7 @@ from foresight_os.persistence.ids import canonical_json_hash
 from foresight_os.artifacts.brief import deliverable_status
 from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
 from foresight_os.controller.skills import SkillRegistry
-from foresight_os.analysis.result_committer import ANALYSIS_STAGE_RESULT_CONTRACT, CanonicalStageResult, analysis_stage_result_schema, decode_stage_output
+from foresight_os.analysis.result_committer import ANALYSIS_STAGE_RESULT_CONTRACT, CanonicalStageResult, analysis_stage_result_schema, decode_stage_output, normalize_stage_result
 
 
 CanonicalResultCommitter = Callable[
@@ -42,6 +42,28 @@ CanonicalResultCommitter = Callable[
 
 class StaleReuseError(RuntimeError):
     """Raised when approved execution refuses to refresh a stale stage receipt."""
+
+
+class _ReservedChatClient:
+    def __init__(
+        self,
+        client: Any,
+        reserve_call: Callable[[], bool] | None,
+        on_call: Callable[[], None] | None,
+    ) -> None:
+        self._client = client
+        self._reserve_call = reserve_call
+        self._on_call = on_call
+
+    def get_response(self, *args: Any, **kwargs: Any) -> Any:
+        if self._reserve_call is not None and not self._reserve_call():
+            raise BudgetExceededError("maximum agent calls exceeded before dispatch")
+        if self._on_call is not None:
+            self._on_call()
+        return self._client.get_response(*args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
 
 
 def _positive_limit(value: object, *, default: int | None = None, label: str) -> int:
@@ -106,6 +128,7 @@ async def _run_native_stage(
     context.setdefault("skill_registry", SkillRegistry())
     context["handoff"] = pattern == ExecutionPattern.HANDOFF
     max_rounds = _positive_limit(context.get("max_rounds"), default=4, label="max_rounds")
+    reserve_call = context.get("reserve_agent_call")
     for index, role in enumerate(roles or [{"purpose": "participant"}], 1):
         participant = ParticipantConfig.from_mapping(role, f"participant-{index}")
         agent = factory.create(participant, context)
@@ -137,62 +160,100 @@ async def _run_native_stage(
             output_from="all",
         ).build()
     else:
+        if reserve_call is not None and not reserve_call():
+            raise BudgetExceededError("maximum agent calls exceeded before dispatch")
         return [await agents[0].run(prompt)]
     tools_enabled = any(getattr(agent, "default_options", {}).get("tools") for agent in agents)
     if tools_enabled and context.get("require_structured_output"):
         options = {"response_format": context.get("structured_output_schema")}
         if pattern == ExecutionPattern.CONCURRENT:
             results = await asyncio.gather(
-                *[run_agent_with_tool_fallback(agent, prompt, options) for agent in agents]
+                *[run_agent_with_tool_fallback(agent, prompt, options, reserve_call=reserve_call) for agent in agents]
             )
-            if metrics is not None:
-                metrics.model_calls += len(agents)
             return list(results)
         if pattern == ExecutionPattern.GROUP_CHAT:
             results: list[object] = []
             current_prompt = prompt
             for round_index in range(max_rounds):
                 agent = agents[round_index % len(agents)]
-                result = await run_agent_with_tool_fallback(agent, current_prompt, options)
+                result = await run_agent_with_tool_fallback(agent, current_prompt, options, reserve_call=reserve_call)
                 results.append(result)
                 current_prompt = f"Challenge this proposal and return the required structured result:\n{result}"
                 if metrics is not None:
-                    metrics.model_calls += 1
                     metrics.chat_rounds += 1
             return results
         results = []
         current_prompt = prompt
         for index, agent in enumerate(agents):
-            result = await run_agent_with_tool_fallback(agent, current_prompt, options)
+            result = await run_agent_with_tool_fallback(agent, current_prompt, options, reserve_call=reserve_call)
             results.append(result)
             if index + 1 < len(agents):
                 current_prompt = f"Review this proposal and return the required structured result:\n{result}"
-            if metrics is not None:
-                metrics.model_calls += 1
         return results
-    if metrics is None or tools_enabled:
+    if tools_enabled:
+        on_call = None if metrics is None else lambda: setattr(metrics, "model_calls", metrics.model_calls + 1)
+        wrapped_clients: dict[int, _ReservedChatClient] = {}
+        for agent in agents:
+            client_instance = getattr(agent, "client", None)
+            if client_instance is None:
+                continue
+            client_key = id(client_instance)
+            wrapped_client = wrapped_clients.get(client_key)
+            if wrapped_client is None:
+                wrapped_client = _ReservedChatClient(client_instance, reserve_call, on_call)
+                wrapped_clients[client_key] = wrapped_client
+            agent.client = wrapped_client
         result = await workflow.run(prompt)
-        if metrics is not None and tools_enabled:
-            metrics.model_calls += len(agents)
+        if pattern == ExecutionPattern.GROUP_CHAT:
+            observed_rounds = {
+                getattr(getattr(event, "data", None), "round_index")
+                for event in result
+                if getattr(event, "type", None) == "group_chat"
+                and type(getattr(event, "data", None)).__name__ == "GroupChatRequestSentEvent"
+            }
+            if observed_rounds:
+                budget = context.get("budget")
+                if budget is not None and not budget.reserve(rounds=len(observed_rounds)):
+                    raise BudgetExceededError("maximum group chat rounds exceeded")
+                if metrics is not None:
+                    metrics.chat_rounds += len(observed_rounds)
+    elif metrics is None and reserve_call is None:
+        result = await workflow.run(prompt)
     else:
         agent_ids = {getattr(agent, "id", None) for agent in agents}
         observed_rounds: set[int] = set()
         stream = await workflow.run(prompt, stream=True)
-        async for event in stream:
-            if event.type == "executor_invoked" and event.executor_id in agent_ids:
-                metrics.model_calls += 1
-            elif event.type == "handoff_sent":
-                metrics.handoffs += 1
-            elif pattern == ExecutionPattern.GROUP_CHAT and event.type == "group_chat":
-                data = event.data
-                if type(data).__name__ == "GroupChatRequestSentEvent":
-                    observed_rounds.add(getattr(data, "round_index", len(observed_rounds)))
-        result = await stream.get_final_response()
+        try:
+            async for event in stream:
+                if (
+                    event.type == "executor_invoked"
+                    and event.executor_id in agent_ids
+                    and getattr(getattr(event, "data", None), "should_respond", True)
+                ):
+                    if reserve_call is not None and not reserve_call():
+                        raise BudgetExceededError("maximum agent calls exceeded before dispatch")
+                    if metrics is not None:
+                        metrics.model_calls += 1
+                elif event.type == "handoff_sent":
+                    if metrics is not None:
+                        metrics.handoffs += 1
+                elif pattern == ExecutionPattern.GROUP_CHAT and event.type == "group_chat":
+                    data = event.data
+                    if type(data).__name__ == "GroupChatRequestSentEvent":
+                        observed_rounds.add(getattr(data, "round_index", len(observed_rounds)))
+            result = await stream.get_final_response()
+        finally:
+            close = getattr(stream, "close", None)
+            if close is not None:
+                closed = close()
+                if inspect.isawaitable(closed):
+                    await closed
         if pattern == ExecutionPattern.GROUP_CHAT and observed_rounds:
             budget = context.get("budget")
             if budget is not None and not budget.reserve(rounds=len(observed_rounds)):
                 raise BudgetExceededError("maximum group chat rounds exceeded")
-            metrics.chat_rounds += len(observed_rounds)
+            if metrics is not None:
+                metrics.chat_rounds += len(observed_rounds)
     outputs = [_workflow_output_value(output) for output in result.get_outputs()]
     return list(outputs) if outputs else [result]
 
@@ -215,7 +276,14 @@ def _stage_input_payload(stage_input: object) -> dict[str, object]:
     return {"decision_question": stage_input}
 
 
-def _synthesize_stage_outputs(stage: Any, outputs: list[object], failures: tuple[BaseException, ...] = (), *, allow_legacy_fallback: bool = False) -> object:
+def _synthesize_stage_outputs(
+    stage: Any,
+    outputs: list[object],
+    failures: tuple[BaseException, ...] = (),
+    *,
+    allow_legacy_fallback: bool = False,
+    existing_records: Mapping[str, object] | None = None,
+) -> object:
     if len(outputs) == 1 and not failures:
         return outputs[0]
     if str(getattr(stage, "synthesis_policy", "")) != "aggregate-typed-results":
@@ -224,6 +292,19 @@ def _synthesize_stage_outputs(stage: Any, outputs: list[object], failures: tuple
         if allow_legacy_fallback:
             return outputs[-1] if outputs else None
         raise ValidationError("typed stage synthesis requires mapping outputs")
+    normalized_outputs: list[Mapping[str, Any]] = []
+    for output in outputs:
+        if "contract" in output and "stage_id" in output:
+            normalized_outputs.append(
+                normalize_stage_result(
+                    output,
+                    expected_stage_id=str(getattr(stage, "stage_id", "stage")),
+                    existing_records=existing_records,
+                ).to_payload()
+            )
+        else:
+            normalized_outputs.append(output)
+    outputs = normalized_outputs
     first = dict(outputs[0])
     collections = ("evidence", "calculations", "claims", "implications", "recommendations", "artifacts", "relationships")
 
@@ -557,6 +638,7 @@ async def run_recipe_async(
         stage_context["stage_id"] = str(getattr(stage, "stage_id", "stage"))
         stage_context["selected_skills"] = selected_skills
         stage_context["selected_skills_by_participant"] = selected_skills_by_participant
+        stage_context["reserve_agent_call"] = lambda: budget.call()
         dependency_records: dict[str, object] = {}
         for dependency in tuple(getattr(stage, "dependencies", ())):
             dependency_receipt = context.get("stage_receipts", {}).get(str(dependency))
@@ -629,15 +711,20 @@ async def run_recipe_async(
                 raise BudgetExceededError("maximum group chat rounds exhausted before dispatch")
             remaining_rounds = None if budget.max_rounds is None else budget.max_rounds - budget.rounds
             effective_rounds = declared_rounds if remaining_rounds is None else min(declared_rounds, remaining_rounds)
+            remaining_calls = (
+                None
+                if budget.max_total_agent_calls is None
+                else budget.max_total_agent_calls - budget.total_agent_calls
+            )
+            if remaining_calls is not None:
+                if remaining_calls < 1:
+                    raise BudgetExceededError("maximum agent calls exceeded before group chat dispatch")
+                effective_rounds = min(effective_rounds, remaining_calls)
             stage_context["max_rounds"] = effective_rounds
         if limits.get("max_agent_steps") is not None and budget.agent_steps + 1 > int(limits["max_agent_steps"]):
             raise BudgetExceededError("maximum agent steps exceeded before dispatch")
-        if limits.get("max_total_agent_calls") is not None and budget.total_agent_calls + 1 > int(limits["max_total_agent_calls"]):
-            raise BudgetExceededError("maximum agent calls exceeded before dispatch")
         if not budget.step():
             raise BudgetExceededError("maximum agent steps exceeded before dispatch")
-        if not budget.call():
-            raise BudgetExceededError("maximum agent calls exceeded before dispatch")
         metrics.participant_invocations += len(participants) or 1
         if pattern == ExecutionPattern.CONCURRENT:
             branch_count = len(participants) or 2
@@ -656,6 +743,7 @@ async def run_recipe_async(
                     stage,
                     native_outputs,
                     allow_legacy_fallback=context.get("analysis_store") is None,
+                    existing_records=context.get("canonical_records"),
                 )
             if pattern == ExecutionPattern.DIRECT:
                 stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(prompt_value)]
@@ -674,6 +762,7 @@ async def run_recipe_async(
                     list(results),
                     failures,
                     allow_legacy_fallback=context.get("analysis_store") is None,
+                    existing_records=context.get("canonical_records"),
                 )
             elif pattern == ExecutionPattern.GROUP_CHAT:
                 stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(prompt_value)]
@@ -692,12 +781,11 @@ async def run_recipe_async(
                     reviewer_prompt = f"Review this proposal:\n{stage_outputs[-1]}"
                     reviewer = participants[1] if len(participants) > 1 else {"purpose": "review"}
                     stage_outputs.append(await ReviewerExecutor(client, factory, ParticipantConfig.from_mapping(reviewer, "reviewer"), stage_context).execute(reviewer_prompt))
-            if client is not None:
-                metrics.model_calls += len(stage_outputs)
             return stage_outputs, _synthesize_stage_outputs(
                 stage,
                 stage_outputs,
                 allow_legacy_fallback=context.get("analysis_store") is None,
+                existing_records=context.get("canonical_records"),
             )
         committer = context.get("canonical_result_committer")
         correction_prompt: str | None = None
@@ -718,12 +806,8 @@ async def run_recipe_async(
                     canonical = await canonical
                 break
             except ValidationError as error:
-                if budget.total_agent_calls >= budget.max_total_agent_calls:
-                    raise BudgetExceededError("maximum agent calls exceeded before correction dispatch") from error
                 if not budget.correct():
                     raise
-                if not budget.call():
-                    raise BudgetExceededError("maximum agent calls exceeded before correction dispatch") from error
                 metrics.correction_rounds += 1
                 correction_prompt = (
                     f"{stage_input}\n\n"

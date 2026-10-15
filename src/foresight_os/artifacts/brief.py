@@ -13,6 +13,20 @@ def deliverable_status(requested: str, state: Any) -> str:
     normalized = str(requested).strip().lower()
     records = state.canonical_records()
     artifacts = tuple(getattr(state, "artifacts", ()))
+    accepted_revision = getattr(state.revision_status, "value", state.revision_status) == "ACCEPTED"
+    stale_artifact_ids = set(getattr(state.invalidation, "stale_artifact_ids", ()))
+
+    def current_receipt(item: Any, destination: str) -> bool:
+        receipt = getattr(item, "delivery_receipt", None)
+        if not accepted_revision or item.id in stale_artifact_ids or item.lifecycle.value != "CURRENT" or not isinstance(receipt, dict):
+            return False
+        return (
+            receipt.get("destination") == destination
+            and receipt.get("source_revision") == state.revision
+            and receipt.get("confirmed_state") in {"CONFIRMED", "SUCCEEDED"}
+            and bool(receipt.get("presentation_spec_hash"))
+            and item.id.endswith(str(receipt["presentation_spec_hash"])[:16])
+        )
     if normalized in {"analysis", "analytical records"}:
         return "PERSISTED" if bool(records) else "NOT_STARTED"
     if normalized in {"calculation", "verified calculation", "verified calculations"}:
@@ -22,23 +36,9 @@ def deliverable_status(requested: str, state: Any) -> str:
     if normalized in {"presentation outline", "presentation-spec", "presentation spec"}:
         return "PERSISTED" if any(str(item.kind).lower() in {"presentation-outline", "presentation_spec"} and item.lifecycle.value == "CURRENT" for item in artifacts) else "NOT_STARTED"
     if normalized in {"pptx", "verified pptx"}:
-        return "PERSISTED" if any(
-            getattr(state.revision_status, "value", state.revision_status) == "ACCEPTED"
-            and item.id not in set(getattr(state.invalidation, "stale_artifact_ids", ()))
-            and item.lifecycle.value == "CURRENT"
-            and isinstance(getattr(item, "delivery_receipt", None), dict)
-            and item.delivery_receipt.get("destination") == "pptx"
-            for item in artifacts
-        ) else "NOT_STARTED"
+        return "PERSISTED" if any(current_receipt(item, "pptx") for item in artifacts) else "NOT_STARTED"
     if normalized in {"canva", "canva design", "canva receipt"}:
-        return "PERSISTED" if any(
-            getattr(state.revision_status, "value", state.revision_status) == "ACCEPTED"
-            and item.id not in set(getattr(state.invalidation, "stale_artifact_ids", ()))
-            and item.lifecycle.value == "CURRENT"
-            and isinstance(getattr(item, "delivery_receipt", None), dict)
-            and item.delivery_receipt.get("destination") == "canva"
-            for item in artifacts
-        ) else "NOT_STARTED"
+        return "PERSISTED" if any(current_receipt(item, "canva") for item in artifacts) else "NOT_STARTED"
     return "NOT_VERIFIED"
 
 

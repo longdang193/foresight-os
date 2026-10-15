@@ -292,14 +292,14 @@ class TypedTable:
         }
 
 
-_AUTHORITATIVE_MEASUREMENTS: dict[tuple[str, str], TypedMeasurement] = {}
+_AUTHORITATIVE_MEASUREMENTS: dict[tuple[str, str, str], TypedMeasurement] = {}
 _AUTHORITATIVE_CALCULATIONS: dict[tuple[str, str], CalculationRecord] = {}
 _AUTHORITATIVE_RECORD_LIMIT = 100_000
 
 
 def _remember_authoritative_measurements(measurements: Iterable[TypedMeasurement]) -> None:
     for measurement in measurements:
-        key = (measurement.provenance.workbook_sha256, measurement.id)
+        key = (measurement.provenance.workbook_sha256, measurement.id, measurement.provenance.range)
         _AUTHORITATIVE_MEASUREMENTS[key] = measurement
     while len(_AUTHORITATIVE_MEASUREMENTS) > _AUTHORITATIVE_RECORD_LIMIT:
         _AUTHORITATIVE_MEASUREMENTS.pop(next(iter(_AUTHORITATIVE_MEASUREMENTS)))
@@ -560,8 +560,7 @@ def _preflight_xlsx_archive(source: Path, selection: SheetSelection | None, limi
         total_merged_cell_count = 0
         for sheet in workbook_root.findall("main:sheets/main:sheet", namespaces):
             title = sheet.attrib["name"]
-            if selection and selection.sheet_names and title not in selection.sheet_names:
-                continue
+            selected_sheet = not selection or not selection.sheet_names or title in selection.sheet_names
             target = targets.get(sheet.attrib.get(f"{{{namespaces['rel']}}}id"))
             if not target:
                 continue
@@ -569,17 +568,19 @@ def _preflight_xlsx_archive(source: Path, selection: SheetSelection | None, limi
             sheet_path = posixpath.normpath(normalized_target if normalized_target.startswith("xl/") else posixpath.join("xl", normalized_target))
             selected_ranges = [cell_range for selected_sheet, cell_range in (selection.ranges if selection else ()) if selected_sheet == title]
             bounds = [_range_bounds(cell_range) for cell_range in selected_ranges]
-            for range_bounds in bounds:
-                if range_bounds[3] - range_bounds[1] + 1 > limits.max_rows:
-                    raise ToolbeltError("workbook selection exceeds row limit")
-                if (range_bounds[3] - range_bounds[1] + 1) * (range_bounds[2] - range_bounds[0] + 1) > limits.max_cells:
-                    raise ToolbeltError("workbook selection exceeds cell limit")
+            if selected_sheet:
+                for range_bounds in bounds:
+                    if range_bounds[3] - range_bounds[1] + 1 > limits.max_rows:
+                        raise ToolbeltError("workbook selection exceeds row limit")
+                    if (range_bounds[3] - range_bounds[1] + 1) * (range_bounds[2] - range_bounds[0] + 1) > limits.max_cells:
+                        raise ToolbeltError("workbook selection exceeds cell limit")
             with archive.open(sheet_path) as handle:
                 for _, element in ET.iterparse(handle, events=("end",)):
                     _check_cancel(cancel_check)
                     if element.tag == f"{{{namespaces['main']}}}row":
-                        total_row_count += 1
-                        if total_row_count > limits.max_rows:
+                        if selected_sheet:
+                            total_row_count += 1
+                        if selected_sheet and total_row_count > limits.max_rows:
                             raise ToolbeltError("workbook allocation exceeds row limit")
                     elif element.tag == f"{{{namespaces['main']}}}c":
                         coordinate = element.attrib.get("r", "")
@@ -601,6 +602,8 @@ def _preflight_xlsx_archive(source: Path, selection: SheetSelection | None, limi
                             total_merged_cell_count += area
                             if total_merged_cell_count > limits.max_total_merged_cells:
                                 raise ToolbeltError("workbook merged area exceeds total limit")
+                            if total_cell_count + total_merged_cell_count > limits.max_cells:
+                                raise ToolbeltError("workbook allocation exceeds cell limit")
                     element.clear()
 
 
@@ -1081,7 +1084,7 @@ def calculation(
         for item in measurements:
             if item.provenance.workbook_sha256 != approved_workbook_sha256:
                 raise ToolbeltError("BLOCKED_RECALCULATION: approved workbook hash is missing or mismatched")
-            authoritative = _AUTHORITATIVE_MEASUREMENTS.get((approved_workbook_sha256, item.id))
+            authoritative = _AUTHORITATIVE_MEASUREMENTS.get((approved_workbook_sha256, item.id, item.provenance.range))
             if authoritative is None or replace(item, trusted=False) != replace(authoritative, trusted=False):
                 raise ToolbeltError("BLOCKED_RECALCULATION: workbook measurement provenance is untrusted")
             resolved_measurements.append(authoritative)

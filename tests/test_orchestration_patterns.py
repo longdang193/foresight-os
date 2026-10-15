@@ -49,7 +49,7 @@ def _recipe(patterns: tuple[ExecutionPattern, ...]) -> ExecutionRecipe:
         base.roles,
         base.max_agent_steps,
         base.max_correction_rounds,
-        base.max_total_agent_calls,
+        12,
         base.completion,
         base.escalation,
         base.partial_result,
@@ -168,6 +168,45 @@ def test_multi_participant_stage_rejects_conflicting_canonical_records():
         )
 
 
+def test_multi_participant_stage_deduplicates_equivalent_records_with_different_aliases():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "one"}, {"id": "two"}),
+        "typed-result",
+        "typed-result",
+        {},
+        synthesis_policy="aggregate-typed-results",
+    )
+    common = {
+        "contract": "analysis-stage-result/v1",
+        "stage_id": "stage-1",
+        "calculations": [],
+        "claims": [],
+        "implications": [],
+        "recommendations": [],
+        "artifacts": [],
+        "relationships": [],
+        "assumptions": [],
+        "uncertainty": [],
+        "monitoring_indicators": [],
+        "evidence": [{
+            "source_locator": {"file_version": "workbook-v1", "sheet": "Summary", "range": "B2", "units": "percent", "transformation": "none", "calculation": "observed"},
+            "version": "v1",
+            "date": "2026-01-01",
+            "excerpt": "same signal",
+            "limitations": [],
+            "measurement_key": None,
+        }],
+    }
+    first = {**common, "evidence": [{**common["evidence"][0], "id": "analyst-evidence"}]}
+    second = {**common, "evidence": [{**common["evidence"][0], "id": "reviewer-evidence"}]}
+
+    result = _synthesize_stage_outputs(stage, [first, second])
+
+    assert len(result["evidence"]) == 1
+
+
 def test_admitted_native_execution_validates_the_approved_recipe_snapshot():
     recipe = _recipe((ExecutionPattern.SEQUENTIAL,))
 
@@ -224,7 +263,7 @@ def test_handoff_metrics_report_observed_transfer_not_recipe_shape():
         )
     )
 
-    assert result.metrics.model_calls == 3
+    assert result.metrics.model_calls == 1
     assert result.metrics.handoffs == 0
 
 
