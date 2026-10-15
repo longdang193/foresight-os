@@ -178,7 +178,31 @@ def test_schema_is_strict_and_binds_contract():
     schema = analysis_stage_result_schema()["json_schema"]["schema"]
 
     assert schema["additionalProperties"] is False
-    assert schema["properties"]["contract"] == {"const": ANALYSIS_STAGE_RESULT_CONTRACT}
+    assert schema["properties"]["contract"] == {
+        "type": "string",
+        "const": ANALYSIS_STAGE_RESULT_CONTRACT,
+    }
+    assert schema["$defs"]["relationship"]["properties"]["relation_type"]["enum"] == sorted(
+        ["supports", "contradicts", "derived_from", "depends_on", "informs", "produces", "supersedes"]
+    )
+
+
+def test_strict_schema_requires_every_declared_property():
+    schema = analysis_stage_result_schema()["json_schema"]["schema"]
+    object_schemas = [schema, *schema["$defs"].values()]
+
+    for object_schema in object_schemas:
+        assert set(object_schema["required"]) == set(object_schema["properties"])
+
+
+def test_nullable_confidence_rationale_normalizes_to_empty_text():
+    payload = _payload(
+        claims=[{**_payload()["claims"][0], "confidence_rationale": None}],
+    )
+
+    result = normalize_stage_result(payload)
+
+    assert result.claims[0].confidence_rationale == ""
 
 
 def test_committer_persists_provisional_state_and_never_writes_receipts(tmp_path):
@@ -209,6 +233,74 @@ def test_committer_repeated_same_content_is_idempotent(tmp_path):
     assert first.result_hashes == second.result_hashes
     assert len(loaded.evidence) == len(loaded.claims) == len(loaded.relationships) == 1
     assert [revision.number for revision in loaded.revisions] == [1]
+
+
+def test_committer_resolves_references_to_prior_stage_records(tmp_path):
+    store = AnalysisStore(tmp_path / "case")
+    committer = CanonicalResultCommitter(store, "case")
+    first_stage = type("Stage", (), {"stage_id": "stage-1", "result_contract": ANALYSIS_STAGE_RESULT_CONTRACT})()
+    first = committer(first_stage, _payload(), {})
+    prior_evidence_id = next(item for item in first.result_references if item.startswith("evidence-"))
+    second_payload = _payload(
+        stage_id="stage-2",
+        evidence=[],
+        claims=[{**_payload()["claims"][0], "evidence_ids": [prior_evidence_id], "relationship_ids": []}],
+        relationships=[],
+    )
+
+    second_stage = type("Stage", (), {"stage_id": "stage-2", "result_contract": ANALYSIS_STAGE_RESULT_CONTRACT})()
+    second = committer(second_stage, second_payload, {})
+
+    assert second.output["evidence_ids"] == [prior_evidence_id]
+    assert store.load_pending().claims[-1].evidence_ids == [prior_evidence_id]
+
+
+def test_current_provider_alias_cannot_redirect_existing_canonical_reference(tmp_path):
+    store = AnalysisStore(tmp_path / "case")
+    committer = CanonicalResultCommitter(store, "case")
+    first_stage = type("Stage", (), {"stage_id": "stage-1", "result_contract": ANALYSIS_STAGE_RESULT_CONTRACT})()
+    first = committer(first_stage, _payload(), {})
+    prior_evidence_id = next(item for item in first.result_references if item.startswith("evidence-"))
+    second_payload = _payload(
+        stage_id="stage-2",
+        evidence=[{**_payload()["evidence"][0], "id": prior_evidence_id, "excerpt": "different evidence"}],
+        claims=[{**_payload()["claims"][0], "evidence_ids": [prior_evidence_id], "relationship_ids": []}],
+        relationships=[],
+    )
+
+    second_stage = type("Stage", (), {"stage_id": "stage-2", "result_contract": ANALYSIS_STAGE_RESULT_CONTRACT})()
+    second = committer(second_stage, second_payload, {})
+
+    assert second.output["claims"][0]["evidence_ids"] == [prior_evidence_id]
+    assert len(store.load_pending().evidence) == 2
+
+
+def test_current_relationship_alias_cannot_redirect_existing_relationship_reference(tmp_path):
+    store = AnalysisStore(tmp_path / "case")
+    committer = CanonicalResultCommitter(store, "case")
+    first_stage = type("Stage", (), {"stage_id": "stage-1", "result_contract": ANALYSIS_STAGE_RESULT_CONTRACT})()
+    first = committer(first_stage, _payload(), {})
+    prior_evidence_id = next(item for item in first.result_references if item.startswith("evidence-"))
+    prior_claim_id = next(item for item in first.result_references if item.startswith("claim-"))
+    prior_relationship_id = next(item for item in first.result_references if item.startswith("relationship-"))
+    second_payload = _payload(
+        stage_id="stage-2",
+        evidence=[],
+        claims=[{**_payload()["claims"][0], "evidence_ids": [prior_evidence_id], "relationship_ids": [prior_relationship_id]}],
+        relationships=[
+            {
+                "id": prior_relationship_id,
+                "from_id": prior_evidence_id,
+                "to_id": prior_claim_id,
+                "relation_type": "supports",
+            }
+        ],
+    )
+
+    second_stage = type("Stage", (), {"stage_id": "stage-2", "result_contract": ANALYSIS_STAGE_RESULT_CONTRACT})()
+    second = committer(second_stage, second_payload, {})
+
+    assert second.output["claims"][0]["relationship_ids"] == [prior_relationship_id]
 
 
 def test_committer_rejects_same_id_with_different_persisted_content(tmp_path):

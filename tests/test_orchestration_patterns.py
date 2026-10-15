@@ -1,13 +1,13 @@
 import asyncio
 from types import SimpleNamespace
 
-from agent_framework import Agent, ChatResponse, ChatResponseUpdate, Content, Message, ResponseStream
+from agent_framework import Agent, AgentResponse, ChatResponse, ChatResponseUpdate, Content, Message, ResponseStream
 from agent_framework.orchestrations import HandoffBuilder
 
 from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, RecipeName, RecipeStage, make_recipe
 from foresight_os.controller.budgets import BudgetState
 from foresight_os.persistence.ids import canonical_json_hash
-from foresight_os.runtime.workflow import CanonicalStageResult, _canonical_result_hash, _close_agents, _run_native_stage, run_recipe_async
+from foresight_os.runtime.workflow import CanonicalStageResult, _canonical_result_hash, _close_agents, _run_native_stage, _workflow_output_value, run_recipe_async
 from foresight_os.runtime.metrics import RunMetrics
 
 
@@ -58,6 +58,21 @@ def test_native_sequential_concurrent_and_group_chat_execute_with_installed_buil
     for pattern in (ExecutionPattern.SEQUENTIAL, ExecutionPattern.CONCURRENT, ExecutionPattern.GROUP_CHAT):
         outputs = asyncio.run(_run_native_stage(pattern, "hello", client, [{"purpose": "one"}, {"purpose": "two"}]))
         assert outputs
+
+
+def test_native_workflow_unwraps_structured_agent_response_values():
+    response = AgentResponse(messages=[Message("assistant", ['{"stage_id": "stage-1"}'])], response_format={"type": "object"})
+
+    assert _workflow_output_value(response) == {"stage_id": "stage-1"}
+
+
+def test_native_workflow_unwraps_wrapped_json_text_and_preserves_prose():
+    response = AgentResponse(messages=[Message("assistant", ['{"stage_id": "stage-1"}'])])
+    wrapped = SimpleNamespace(agent_response=response)
+    prose = AgentResponse(messages=[Message("assistant", ["plain text"])])
+
+    assert _workflow_output_value(wrapped) == {"stage_id": "stage-1"}
+    assert _workflow_output_value(prose) == "plain text"
 
 
 def test_handoff_uses_native_builder_and_allowed_route():

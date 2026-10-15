@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
+from foresight_os.domain.relationships import RELATIONSHIP_RULES
 from foresight_os.runtime.capabilities import CapabilityUnavailableError, ForesightFunctionMiddleware, instrument_tool
 
 
@@ -62,10 +63,31 @@ class AgentFactory:
             selected_skills = skill_registry.resolve(config.skill_ids)
         required_skill_capabilities = skill_registry.required_capabilities(selected_skills) if skill_registry is not None else ()
         required_capabilities = tuple(dict.fromkeys((*config.capability_ids, *required_skill_capabilities)))
+        instructions = f"Act as the {config.role} responsible for {config.purpose} and return a structured result."
+        if context.get("require_structured_output") and context.get("stage_id"):
+            instructions += (
+                f" The output field stage_id must be exactly {context['stage_id']!r}; "
+                "do not invent or substitute a generic stage identifier."
+            )
+            relationship_guidance = "; ".join(
+                f"{relation}: {'/'.join(sorted(kind.value for kind in rule.sources))} -> "
+                f"{'/'.join(sorted(kind.value for kind in rule.targets))}"
+                for relation, rule in sorted(RELATIONSHIP_RULES.items())
+            )
+            instructions += (
+                " Relationship edges must follow the canonical endpoint rules: "
+                f"{relationship_guidance}. Only emit an edge when both endpoint kinds match; "
+                "if uncertain, omit the edge rather than inventing a relationship."
+            )
+            instructions += (
+                " The stage result must be self-contained: include every evidence record used by "
+                "this stage in the current payload, and re-declare dependency evidence before "
+                "referencing it. Do not reference an ID that appears only in dependency_outputs."
+            )
         kwargs: dict[str, Any] = {
             "id": config.id,
             "name": config.id,
-            "instructions": f"Act as the {config.role} responsible for {config.purpose} and return a structured result."
+            "instructions": instructions
             + (f"\n\n{skill_registry.instructions(selected_skills)}" if selected_skills and skill_registry is not None else ""),
         }
         if context.get("handoff"):
