@@ -16,6 +16,7 @@ def test_case_portability_probe_reports_three_local_shapes(tmp_path: Path):
         "mappings_only",
         "missing_or_contradictory",
     }
+    assert len({item["source_sha256"] for item in report["cases"]}) == 3
     assert all(item["production_files_changed"] == [] for item in report["cases"])
     assert all(item["recovery"]["analysis_reloaded"] for item in report["cases"])
 

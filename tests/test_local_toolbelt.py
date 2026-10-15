@@ -129,8 +129,8 @@ def test_workbook_read_cache_evicts_old_entries_without_unpacking_error(tmp_path
     assert cache.size > 0
 
 
-def test_workbook_read_cache_memoizes_source_hash_across_selections(monkeypatch, tmp_path: Path):
-    source = tmp_path / "memoized.csv"
+def test_workbook_read_cache_refreshes_source_hash_across_selections(monkeypatch, tmp_path: Path):
+    source = tmp_path / "refreshed.csv"
     source.write_text("Region,Value\nNorth,10\nSouth,20\n", encoding="utf-8")
     cache = WorkbookReadCache()
     calls = 0
@@ -146,7 +146,7 @@ def test_workbook_read_cache_memoizes_source_hash_across_selections(monkeypatch,
     first = spreadsheet_read(source, SheetSelection(ranges=((source.stem, "A1:B2"),)), _cache=cache)
     second = spreadsheet_read(source, SheetSelection(ranges=((source.stem, "A2:B3"),)), _cache=cache)
 
-    assert calls == 1
+    assert calls == 2
     assert first.workbook_sha256 == second.workbook_sha256
     assert first.tables[0].rows != second.tables[0].rows
 
@@ -164,6 +164,35 @@ def test_workbook_read_cache_rejects_stale_source_content(tmp_path: Path):
     changed = next(item for item in second.measurements if item.provenance.coordinate == "B2")
     assert changed.value == 99
     assert changed.provenance.workbook_sha256 == second.workbook_sha256
+
+
+def test_workbook_read_cache_rejects_metadata_preserving_source_changes(monkeypatch, tmp_path: Path):
+    source = tmp_path / "metadata-preserving.csv"
+    source.write_text("Region,Value\nNorth,10\n", encoding="utf-8")
+    fixed_stat = source.stat()
+    monkeypatch.setattr(Path, "stat", lambda self: fixed_stat)
+    cache = WorkbookReadCache()
+
+    first = spreadsheet_read(source, _cache=cache)
+    source.write_text("Region,Value\nNorth,99\n", encoding="utf-8")
+    second = spreadsheet_read(source, _cache=cache)
+
+    assert first.workbook_sha256 != second.workbook_sha256
+    changed = next(item for item in second.measurements if item.provenance.coordinate == "B2")
+    assert changed.value == 99
+    assert changed.provenance.workbook_sha256 == second.workbook_sha256
+
+
+def test_workbook_read_cache_does_not_retain_unbounded_source_identity_state(tmp_path: Path):
+    cache = WorkbookReadCache(max_entries=1)
+    for index in range(30):
+        source = tmp_path / f"source-{index}.csv"
+        source.write_text(f"Region,Value\nNorth,{index}\n", encoding="utf-8")
+        spreadsheet_read(source, _cache=cache)
+
+    assert cache.size == 1
+    assert cache.bytes_used <= cache.max_bytes
+    assert not hasattr(cache, "_source_versions")
 
 
 def test_workbook_and_analysis_entries_share_one_cache_budget(workbook_path):

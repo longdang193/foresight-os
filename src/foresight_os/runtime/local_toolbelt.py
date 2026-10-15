@@ -80,23 +80,10 @@ class WorkbookReadCache:
         self.max_bytes = max(1, max_bytes)
         self._entries: dict[tuple[Any, ...], tuple[WorkbookReadResult, int]] = {}
         self._analysis_entries: dict[tuple[Any, ...], tuple[AnalysisResult, int]] = {}
-        self._source_versions: dict[str, tuple[tuple[int, int, int], str]] = {}
         self._bytes = 0
 
     def source_hash(self, source: Path) -> str:
-        canonical = str(source.resolve())
-        stat = source.stat()
-        signature = (
-            int(stat.st_size),
-            int(stat.st_mtime_ns),
-            int(getattr(stat, "st_ctime_ns", 0)),
-        )
-        cached = self._source_versions.get(canonical)
-        if cached is not None and cached[0] == signature:
-            return cached[1]
-        digest = _sha256_file(source)
-        self._source_versions[canonical] = (signature, digest)
-        return digest
+        return _sha256_file(source)
 
     def key(
         self,
@@ -145,7 +132,6 @@ class WorkbookReadCache:
     def clear(self) -> None:
         self._entries.clear()
         self._analysis_entries.clear()
-        self._source_versions.clear()
         self._bytes = 0
 
     @property

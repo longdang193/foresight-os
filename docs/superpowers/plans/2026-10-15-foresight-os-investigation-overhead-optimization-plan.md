@@ -50,10 +50,12 @@ extended rather than replaced:
   and `domain.challenge`. Add applicability and escalation to those owners;
   expose `Explore`, `Assess`, and `Decide` only as optional projections over
   effective policy, not as a new runtime mode, registry, or status hierarchy.
-- `CapabilityScope` already owns a run-scoped workbook cache and cleanup. First
-  memoize source identity/hash acquisition inside that scope and measure the
-  result. Any deeper immutable parsed snapshot is conditional on material
-  remaining parse overhead; do not add an external cache.
+- `CapabilityScope` already owns a run-scoped workbook cache and cleanup. Keep
+  source currentness authoritative by recomputing the content hash before each
+  cache lookup; optimize reuse at the complete-result level rather than adding
+  an unsafe metadata-only identity cache. Any deeper immutable parsed snapshot
+  is conditional on material remaining parse overhead; do not add an external
+  cache.
 - `PENDING_REVIEW`, `PROVISIONAL`, `ReviewSlotStatus`, invalidation, and
   conditional checks already represent most of the proposed state model. Add a
   user-facing projection and selective invalidation where needed; do not
@@ -132,15 +134,14 @@ patterns retain their reviewer behavior.
 
 ### Immutable run-scoped workbook identity and reuse
 
-The source version is captured once per run and all run-local reads are tied to
-that exact version. First memoize canonical identity/hash acquisition through
-the existing `CapabilityScope`/toolbelt boundary and benchmark it. Reuse keys
-include source identity, content hash, selection, parsing options, and effective
-limits. If content changes, a new fingerprint and snapshot are required and
-affected validation becomes stale. Only complete successful reads enter the
-cache; failed, cancelled, partial, or untrusted results do not. A deeper parsed
-snapshot is added only if measurement proves hash/read optimization is
-insufficient. Workbook and analysis entries share one bounded memory budget;
+The source version is checked by recomputing the content hash before each cache
+lookup, so metadata-preserving edits cannot reuse stale values or provenance.
+Reuse keys include source identity, content hash, selection, parsing options,
+and effective limits. If content changes, a new fingerprint and snapshot are
+required and affected validation becomes stale. Only complete successful reads
+enter the cache; failed, cancelled, partial, or untrusted results do not. A
+deeper parsed snapshot is added only if measurement proves read overhead is
+still material. Workbook and analysis entries share one bounded memory budget;
 the source file is never modified and every reused measurement retains the
 original workbook hash and cell/range provenance.
 
@@ -209,7 +210,7 @@ payloads, and disposable work outputs remain out of the plan's durable files.
 | Task 0: reconcile owners and baseline | `completed` | current | `none (lead controller)` | active correctness plan disposition | baseline probe and scope ledger | `work/optimization-overhead-20261015/baseline/receipt.json`; active-plan branch/base mismatch recorded; local-only work allowed |
 | Task 1: optional assurance projection | `completed` | current | `none (lead controller)` | Task 0 | focused policy/recipe tests | `13 passed`; optional labels deferred because existing effective policy is authoritative and labels would add no proven value yet |
 | Task 2: validation escalation and duplicate review | `completed` | current | `none (lead controller)` | Task 0; Task 1 only if policy changes | review/workflow tests and local boundary probe | `61 passed`; default sequential reviewer removed; explicit reviewer patterns retained |
-| Task 3: measured workbook identity/reuse | `completed` | current | `none (lead controller)` | Task 0 | toolbelt/cache/cancellation tests | `73 passed`; source hash memoization, changed-content invalidation, shared cache budget, failure/cancellation non-publication; release probe completed |
+| Task 3: measured workbook identity/reuse | `completed` | current | `none (lead controller)` | Task 0 | toolbelt/cache/cancellation tests | focused cache tests and release probe; fresh source hashing, metadata-preserving change rejection, bounded cache state, failure/cancellation non-publication |
 | Task 4: selective conclusions and UX projection | `completed` | current | `none (lead controller)` | Tasks 0–2 | invalidation, report, and acceptance tests | `19 passed`; derived finding summary added without changing durable status or human acceptance gates |
 | Task 5: thin host procedure and guidance | `completed` | current | `none (lead controller)` | Tasks 0–2 | skill/link/package boundary tests | `13 passed`; `.agents/skills/foresight-validation/` added; packaged manifest unchanged |
 | Task 6: staged portability benchmark and final proof | `completed` | current | `none (lead controller)` | Tasks 2–5 | three-case matrix, comparison receipt, full suite | portability receipt `VERIFIED`; release comparison `accepted=true`; repository-wide verification `verified` |
@@ -442,9 +443,9 @@ payloads, and disposable work outputs remain out of the plan's durable files.
 ### Task 3: Measure and reduce run-scoped workbook identity/read cost
 
 **Purpose:**
-- Stop proven repeated hashing/opening/closing of the same workbook while
-  preserving cancellation, limits, formula-cache trust, and provenance. Start
-  with source identity/hash memoization; add a deeper parsed snapshot only if
+- Stop proven repeated workbook parsing/opening/closing while preserving
+  cancellation, limits, formula-cache trust, and provenance. Recompute source
+  content hashes for currentness; add a deeper parsed snapshot only if
   measurement shows it is still needed.
 
 **Task Function:**
@@ -462,8 +463,8 @@ payloads, and disposable work outputs remain out of the plan's durable files.
 - Capture a source version once per run and tie all run-local reads to that exact
   version; if the file changes, require a new fingerprint and mark affected
   validation stale.
-- Memoize source identity/hash acquisition in `CapabilityScope` before adding
-  any parsed snapshot layer.
+- Recompute source identity/hash before each cache lookup; do not use metadata-
+  only currentness to authorize reuse.
 - Cache key includes source identity, content hash, selection, parsing options,
   and effective limits.
 - Only complete successful results are cached; cancellation and failure never
@@ -485,7 +486,7 @@ payloads, and disposable work outputs remain out of the plan's durable files.
 
 **Authority:**
 - Preauthorized local actions: edit the run-scoped toolbelt/cache and capability boundary, add focused local tests, and write redacted benchmark receipts.
-- Stop for: external cache/storage, source-file mutation, weakened formula-cache trust, incomplete cancellation settlement, or a cache entry published from a partial/failed read.
+- Stop for: external cache/storage, source-file mutation, weakened formula-cache trust, metadata-only currentness assumptions, incomplete cancellation settlement, or a cache entry published from a partial/failed read.
 
 **Steps:**
 - [x] Step 1: Separate one-time source identity acquisition from equivalent
@@ -518,9 +519,9 @@ payloads, and disposable work outputs remain out of the plan's durable files.
   parsed snapshot is either justified by that evidence or explicitly deferred.
 
 **Execution Evidence (2026-10-15):**
-- `73 passed` for local toolbelt, runtime boundary, and independent validation
-  tests; source hash reuse, changed-content rejection, shared cache bounds, and
-  failed/cancelled read settlement are covered.
+- Focused local toolbelt, runtime boundary, and independent validation tests
+  cover fresh source hashing, metadata-preserving changed-content rejection,
+  bounded cache state, and failed/cancelled read settlement.
 - Release receipt: `work/optimization-overhead-20261015/release/receipt.json`.
   The same fixture hash and accepted-finding count were preserved; XLSX p95 was
   `39.133 ms` versus baseline `39.572 ms`, peak allocation was `1,097,285`
@@ -764,11 +765,12 @@ payloads, and disposable work outputs remain out of the plan's durable files.
 - Final repository verification passed: `python -m pytest -q`,
   `python -m compileall -q src tests evaluation`, Markdown link coverage for
   33 paths, final portability receipt `work/optimization-overhead-20261015/portability/final-receipt.json`, and `git diff --check`.
-- The final portability run verified three local cases and preserved source
-  hashes, recovery, and production-file-change checks. Model-call and manual-
-  action dimensions remain `not_measured`; `case-002` and `case-003` reuse the
-  frozen CSV schema and are recorded as staged benchmark categories rather
-  than true structural variants.
+- The final portability run verified three distinct local fixtures and
+  preserved source hashes, recovery, and production-file-change checks.
+  Model-call and manual-action dimensions remain `not_measured`; all fixtures
+  retain the required CSV columns, while `case-002` varies row coverage and
+  mapping status and `case-003` varies values to exercise contradictory
+  evidence.
 
 **Exit Criteria:**
 - Portability and optimization receipts are comparable, redacted, and

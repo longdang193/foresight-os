@@ -113,7 +113,7 @@ def run(cases_root: Path, output_root: Path) -> dict[str, object]:
         "cases": cases,
         "limitations": [
             "model calls and manual actions are not measured by the deterministic local vertical-slice harness",
-            "case-002 and case-003 currently reuse the frozen CSV schema; their shape labels are staged benchmark categories",
+            "all three fixtures retain the required CSV columns; case-002 varies row coverage and mapping status, while case-003 varies values to exercise contradictory evidence",
         ],
     }
 
