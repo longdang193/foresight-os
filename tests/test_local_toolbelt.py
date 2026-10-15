@@ -952,7 +952,26 @@ def test_workbook_session_publication_rolls_back_when_cancelled_at_cache_boundar
     with pytest.raises(ToolbeltError, match="cancelled"):
         session.read(cancel_check=cancel_check)
     assert session.cache.size == 0
+    assert session.authority.measurements == {}
     assert context.stats.published_results == 0
+    context.close()
+
+
+def test_workbook_session_budget_rejection_rolls_back_read_publication(tmp_path):
+    source = tmp_path / "budget-read.csv"
+    source.write_text("Metric,Value\n" + "\n".join(f"A{index},1234567890" for index in range(20)) + "\n", encoding="utf-8")
+    context = WorkbookContext(max_total_bytes=source.stat().st_size + 200)
+    session = context.session_for_source(source)
+    retained_before = session.snapshot.byte_size
+
+    with pytest.raises(ToolbeltError, match="retained-resource budget"):
+        session.read()
+
+    assert session.cache.bytes_used == 0
+    assert session.authority.measurements == {}
+    assert context.stats.rejected_publications == 1
+    assert context.stats.published_results == 0
+    assert session.snapshot.byte_size == retained_before
     context.close()
 
 

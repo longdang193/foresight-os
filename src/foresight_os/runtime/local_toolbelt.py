@@ -294,13 +294,36 @@ class AuthorityIndex:
         self.calculations: dict[tuple[str, str], CalculationRecord] = {}
         self._lock = threading.RLock()
 
-    def remember_measurements(self, measurements: Iterable[TypedMeasurement]) -> None:
+    def remember_measurements(self, measurements: Iterable[TypedMeasurement]) -> tuple[tuple[tuple[str, str, str], TypedMeasurement], ...]:
+        with self._lock:
+            entries = []
+            for measurement in measurements:
+                key = (measurement.provenance.workbook_sha256, measurement.id, measurement.provenance.range)
+                if key not in self.measurements:
+                    entries.append((key, measurement))
+            if len(self.measurements) + len(entries) > self.max_records:
+                raise ToolbeltError("authoritative measurement retention budget exceeded")
+            for key, measurement in entries:
+                self.measurements[key] = measurement
+            return tuple(entries)
+
+    def forget_measurements(
+        self,
+        measurements: Iterable[TypedMeasurement],
+        *,
+        preserve_keys: Iterable[tuple[str, str, str]] = (),
+    ) -> None:
+        preserved = set(preserve_keys)
         with self._lock:
             for measurement in measurements:
                 key = (measurement.provenance.workbook_sha256, measurement.id, measurement.provenance.range)
-                if key not in self.measurements and len(self.measurements) >= self.max_records:
-                    raise ToolbeltError("authoritative measurement retention budget exceeded")
-                self.measurements[key] = measurement
+                if key in preserved or self.measurements.get(key) is not measurement:
+                    continue
+                self.measurements.pop(key, None)
+
+    def measurement_keys(self) -> set[tuple[str, str, str]]:
+        with self._lock:
+            return set(self.measurements)
 
     def remember_calculation(self, record: CalculationRecord, workbook_hash: str) -> None:
         with self._lock:
@@ -349,19 +372,43 @@ class WorkbookSession:
         with self._lock:
             if self._closed:
                 raise ToolbeltError("workbook session is closed")
-            result = spreadsheet_read(
+            selection_value = _coerce_sheet_selection(selection)
+            limits_value = _coerce_toolbelt_limits(limits or self.limits)
+            cache_key = self.cache.key(
                 self.snapshot.captured_path,
-                selection,
-                limits or self.limits,
-                cancel_check=cancel_check,
-                _cache=self.cache,
-                _source_hash=self.snapshot.sha256,
-                _source_label=self.snapshot.source,
-                _authority=self.authority,
-                _stats=self.stats,
+                selection_value,
+                limits_value,
+                source_hash=self.snapshot.sha256,
             )
+            cached_before = self.cache.get(cache_key)
+            authority_keys_before = self.authority.measurement_keys()
+            result = None
+            try:
+                result = spreadsheet_read(
+                    self.snapshot.captured_path,
+                    selection_value,
+                    limits_value,
+                    cancel_check=cancel_check,
+                    _cache=self.cache,
+                    _source_hash=self.snapshot.sha256,
+                    _source_label=self.snapshot.source,
+                    _authority=self.authority,
+                    _stats=self.stats,
+                )
+            except BaseException:
+                raise
         if self.budget_check is not None:
-            self.budget_check()
+            try:
+                self.budget_check()
+            except BaseException:
+                if result is not None:
+                    if cached_before is None:
+                        self.cache.discard(cache_key, result)
+                    self.authority.forget_measurements(result.measurements, preserve_keys=authority_keys_before)
+                    self.stats.rejected_publications += 1
+                    if cached_before is None:
+                        self.stats.published_results = max(0, self.stats.published_results - 1)
+                raise
         return result
 
     def currentness_hash(self, *, cancel_check: Callable[[], bool] | None = None) -> str:
@@ -655,15 +702,34 @@ _AUTHORITATIVE_CALCULATIONS: dict[tuple[str, str], CalculationRecord] = {}
 _AUTHORITATIVE_RECORD_LIMIT = ToolbeltLimits().max_cells
 
 
-def _remember_authoritative_measurements(measurements: Iterable[TypedMeasurement], authority: AuthorityIndex | None = None) -> None:
+def _remember_authoritative_measurements(
+    measurements: Iterable[TypedMeasurement],
+    authority: AuthorityIndex | None = None,
+) -> tuple[tuple[tuple[str, str, str], TypedMeasurement], ...]:
+    entries = []
     if authority is not None:
-        authority.remember_measurements(measurements)
-        return
+        return authority.remember_measurements(measurements)
     for measurement in measurements:
         key = (measurement.provenance.workbook_sha256, measurement.id, measurement.provenance.range)
+        if key not in _AUTHORITATIVE_MEASUREMENTS:
+            entries.append((key, measurement))
+    for key, measurement in entries:
         _AUTHORITATIVE_MEASUREMENTS[key] = measurement
     while len(_AUTHORITATIVE_MEASUREMENTS) > _AUTHORITATIVE_RECORD_LIMIT:
         _AUTHORITATIVE_MEASUREMENTS.pop(next(iter(_AUTHORITATIVE_MEASUREMENTS)))
+    return tuple(entries)
+
+
+def _forget_authoritative_measurements(
+    entries: Iterable[tuple[tuple[str, str, str], TypedMeasurement]],
+    authority: AuthorityIndex | None = None,
+) -> None:
+    if authority is not None:
+        authority.forget_measurements((measurement for _, measurement in entries))
+        return
+    for key, measurement in entries:
+        if _AUTHORITATIVE_MEASUREMENTS.get(key) is measurement:
+            _AUTHORITATIVE_MEASUREMENTS.pop(key, None)
 
 
 def _remember_authoritative_calculation(record: CalculationRecord, workbook_hash: str, authority: AuthorityIndex | None = None) -> None:
@@ -852,6 +918,32 @@ def _publish_read_cache(
         stats.published_results += 1
 
 
+def _publish_read_result(
+    cache: WorkbookReadCache | None,
+    cache_key: tuple[Any, ...] | None,
+    result: WorkbookReadResult,
+    cancel_check: Callable[[], bool] | None,
+    authority: AuthorityIndex | None,
+    stats: WorkbookSessionStats | None,
+) -> None:
+    authority_entries: tuple[tuple[tuple[str, str, str], TypedMeasurement], ...] = ()
+    cache_published = False
+    try:
+        if cache is not None and cache_key is not None:
+            _publish_read_cache(cache, cache_key, result, cancel_check, stats)
+            cache_published = True
+        _check_cancel(cancel_check)
+        authority_entries = _remember_authoritative_measurements(result.measurements, authority)
+        _check_cancel(cancel_check)
+    except BaseException:
+        _forget_authoritative_measurements(authority_entries, authority)
+        if cache_published and cache is not None and cache_key is not None:
+            cache.discard(cache_key, result)
+            if stats is not None:
+                stats.published_results = max(0, stats.published_results - 1)
+        raise
+
+
 def _delimited_value(value: str) -> Any:
     value = value.strip()
     if not value:
@@ -1032,7 +1124,7 @@ def spreadsheet_read(
             if _stats is not None:
                 _stats.read_cache_hits += 1
             cached_result = replace(cached_result, source=_source_label or str(source))
-            _remember_authoritative_measurements(cached_result.measurements, _authority)
+            _publish_read_result(None, None, cached_result, cancel_check, _authority, _stats)
             return cached_result
     if source.stat().st_size > limits.max_bytes:
         raise ToolbeltError("workbook exceeds byte limit")
@@ -1040,9 +1132,7 @@ def spreadsheet_read(
         result = _read_delimited(source, selection, limits, cancel_check, digest)
         if _source_label:
             result = replace(result, source=_source_label)
-        _remember_authoritative_measurements(result.measurements, _authority)
-        if _cache is not None and cache_key is not None:
-            _publish_read_cache(_cache, cache_key, result, cancel_check, _stats)
+        _publish_read_result(_cache, cache_key, result, cancel_check, _authority, _stats)
         return result
     if source.suffix.lower() not in {".xlsx", ".xlsm", ".xltx", ".xltm"}:
         raise ToolbeltError("unsupported spreadsheet format")
@@ -1171,11 +1261,12 @@ def spreadsheet_read(
                 if measurement.provenance.range != table.source_range or measurement.provenance.sheet != table.sheet:
                     continue
                 related.extend(CellProvenance(digest, sheet, coordinate, f"{sheet}!{coordinate}") for sheet, coordinate in measurement.cross_sheet_cells)
-            finalized_tables.append(replace(table, related_provenance=tuple(dict.fromkeys(related))))
+            finalized_related = tuple(dict.fromkeys(related))
+            finalized_tables.append(
+                table if finalized_related == table.related_provenance else replace(table, related_provenance=finalized_related)
+            )
         result = WorkbookReadResult(_source_label or str(source), digest, tuple(sheets), tuple(finalized_tables), tuple(measurements))
-        _remember_authoritative_measurements(result.measurements, _authority)
-        if _cache is not None and cache_key is not None:
-            _publish_read_cache(_cache, cache_key, result, cancel_check, _stats)
+        _publish_read_result(_cache, cache_key, result, cancel_check, _authority, _stats)
         return result
     finally:
         if cached is not None:

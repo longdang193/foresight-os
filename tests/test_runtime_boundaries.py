@@ -669,7 +669,7 @@ def test_public_function_middleware_accounts_for_native_function_invocation():
     asyncio.run(scenario())
 
 
-def test_instrumented_spreadsheet_dispatch_reuses_one_scope_context(tmp_path):
+def test_instrumented_spreadsheet_dispatch_keeps_reads_live_by_default(tmp_path):
     workbook_path = tmp_path / "scope.csv"
     workbook_path.write_text("Metric,Value\nA,10\n", encoding="utf-8")
 
@@ -681,12 +681,16 @@ def test_instrumented_spreadsheet_dispatch_reuses_one_scope_context(tmp_path):
             {"scope": scope},
         )
 
-        first = await wrapped(str(workbook_path), {"sheet": "Demand"})
-        second = await wrapped(str(workbook_path), {"sheet": "Demand"})
+        first = await wrapped(str(workbook_path))
+        second = await wrapped(str(workbook_path))
+        workbook_path.write_text("Metric,Value\nA,20\n", encoding="utf-8")
+        third = await wrapped(str(workbook_path))
         context = scope.workbook_context
         assert first.workbook_sha256 == second.workbook_sha256
+        assert third.workbook_sha256 != first.workbook_sha256
+        assert third.tables[0].rows[0][1] == 20
         assert context is not None
-        assert context.stats.capture_count == 1
+        assert context.stats.capture_count == 0
         assert context.stats.read_cache_hits == 1
 
         await scope.close()

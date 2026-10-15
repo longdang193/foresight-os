@@ -407,10 +407,11 @@ def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, cont
 
         workbook_context = scope.get_workbook_context()
         effective_kwargs = dict(kwargs)
-        if definition.id == "spreadsheet_read" and "workbook_session" not in effective_kwargs:
-            source = args[0] if args else effective_kwargs.get("source")
-            if source is not None and accepts_keyword("workbook_session"):
-                effective_kwargs["workbook_session"] = workbook_context.session_for_source(source)
+        if definition.id == "spreadsheet_read":
+            if accepts_keyword("_cache"):
+                effective_kwargs.setdefault("_cache", workbook_context.derived_cache)
+            if accepts_keyword("_stats"):
+                effective_kwargs.setdefault("_stats", workbook_context.stats)
         elif definition.id == "data_analysis":
             table = args[0] if args else effective_kwargs.get("table")
             session = workbook_context.session_for_table(table) if table is not None and not isinstance(table, Mapping) else None
