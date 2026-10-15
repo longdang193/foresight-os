@@ -46,18 +46,7 @@ class LiveProviderProbe:
 
 
 def load_provider_settings(env_file: Path, config_file: Path) -> ProviderSettings:
-    assignments: dict[str, str] = {}
-    if env_file.exists():
-        for raw_line in env_file.read_text(encoding="utf-8").splitlines():
-            line = raw_line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            name, value = line.split("=", 1)
-            name = name.removeprefix("export ").strip()
-            value = value.strip().strip('"').strip("'")
-            if value:
-                assignments[name] = value
-    assignments.update({name: value for name, value in os.environ.items() if value})
+    assignments = load_environment_file(env_file)
 
     config = tomllib.loads(config_file.read_text(encoding="utf-8"))
     provider_name = config.get("model_provider")
@@ -71,6 +60,22 @@ def load_provider_settings(env_file: Path, config_file: Path) -> ProviderSetting
     if not api_key:
         raise ValueError(f"configured credential environment variable is missing: {credential_env}")
     return ProviderSettings(provider_name, model, base_url, credential_env, api_key)
+
+
+def load_environment_file(env_file: Path) -> dict[str, str]:
+    assignments: dict[str, str] = {}
+    if env_file.exists():
+        for raw_line in env_file.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            name, value = line.split("=", 1)
+            name = name.removeprefix("export ").strip()
+            value = value.strip().strip('"').strip("'")
+            if value:
+                assignments[name] = value
+    assignments.update({name: value for name, value in os.environ.items() if value})
+    return assignments
 
 
 def build_configured_client(env_file: Path, config_file: Path):

@@ -278,6 +278,16 @@ def prepare_capability_context(
         local_bindings = context.setdefault("local_capabilities", {})
         for name, binding in bind_local_toolbelt().items():
             local_bindings.setdefault(name, binding)
+        if context.get("local_workspace") is not None:
+            from foresight_os.runtime.local_adapters import bind_local_adapters
+
+            local_adapters = bind_local_adapters(
+                context["local_workspace"],
+                document_roots=context.get("document_roots"),
+            )
+            adapters = context.setdefault("adapters", {})
+            for name, binding in local_adapters.items():
+                adapters.setdefault(name, binding)
 
     if context.get("mcp_bindings") is not None:
         context.setdefault("mcp_tools", {}).update(
@@ -500,6 +510,9 @@ def instrument_tool(tool: Any, definition: CapabilityDefinition, context: Mappin
     async def invoke(*args: Any, **kwargs: Any) -> Any:
         return await dispatch(*args, **kwargs)
 
+    if not getattr(tool, "__name__", None):
+        invoke.__name__ = definition.id
+        invoke.__qualname__ = definition.id
     signature = inspect.signature(tool)
     invoke.__signature__ = signature.replace(
         parameters=[

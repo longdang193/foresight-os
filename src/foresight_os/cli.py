@@ -16,7 +16,8 @@ from foresight_os.domain.approval import AdaptationEnvelope, ApprovalRecord, App
 from foresight_os.persistence.ids import canonical_json_hash
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.runtime.execution_gate import ExecutionAdmissionError, execute_approved_investigation
-from foresight_os.runtime.maf_probe import build_configured_client
+from foresight_os.runtime.maf_probe import build_configured_client, load_environment_file
+from foresight_os.runtime.web_search import load_configured_web_search_provider
 from foresight_os.runtime.capabilities import CapabilityUnavailableError
 from foresight_os.persistence.recovery import continue_investigation
 from foresight_os.clients.first_client_adapter import LocalClient
@@ -180,7 +181,19 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"status": "BLOCKED_EXTERNAL", "error": "execution requires configured provider credentials"}))
             return 2
         try:
-            result = asyncio.run(execute_approved_investigation(args.work_dir, args.prompt, client, args.run_id))
+            run_context = {}
+            environment = load_environment_file(args.env_file)
+            if environment.get("FORESIGHT_WEB_SEARCH_URL"):
+                run_context["web_search_provider"] = load_configured_web_search_provider(environment)
+            result = asyncio.run(
+                execute_approved_investigation(
+                    args.work_dir,
+                    args.prompt,
+                    client,
+                    args.run_id,
+                    run_context=run_context,
+                )
+            )
         except ExecutionAdmissionError as exc:
             status = "FAILED" if "RESULT_PERSISTENCE_UNAVAILABLE" in str(exc) else "BLOCKED_INPUT"
             print(json.dumps({"status": status, "error": str(exc)}, sort_keys=True))

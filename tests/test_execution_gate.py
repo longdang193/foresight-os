@@ -132,3 +132,20 @@ def test_concurrent_canonical_stage_requires_synthesis_before_provider_dispatch(
     with pytest.raises(ExecutionAdmissionError, match="requires an explicit synthesis policy"):
         asyncio.run(ExecutionGate(store).execute(prompt="Question", client=Client()))
     assert provider_calls == 0
+
+
+def test_gate_admits_local_document_and_artifact_capabilities_with_workspace_scope(tmp_path):
+    store = prepared_store(tmp_path)
+    recipe = store.load_recipe()
+    store.save_recipe(replace(
+        recipe,
+        stages=tuple(
+            replace(stage, capabilities=("document_read", "artifact_generation"))
+            for stage in recipe.stages
+        ),
+    ))
+    approve_recipe(store, store.load_recipe())
+
+    admitted = ExecutionGate(store).admit(prompt="Question")
+
+    assert admitted.recipe.stages[0].capabilities == ("document_read", "artifact_generation")
