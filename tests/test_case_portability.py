@@ -19,6 +19,11 @@ def test_case_portability_probe_reports_three_local_shapes(tmp_path: Path):
     assert len({item["source_sha256"] for item in report["cases"]}) == 3
     assert all(item["production_files_changed"] == [] for item in report["cases"])
     assert all(item["recovery"]["analysis_reloaded"] for item in report["cases"])
+    contradictory = next(item for item in report["cases"] if item["case_id"] == "case-003")
+    assert contradictory["expected_outcome_verified"]
+    assert contradictory["metrics"]["workbook_hashes"] == 2
+    assert contradictory["metrics"]["workbook_parse_count"] == 1
+    assert contradictory["metrics"]["time_to_first_useful_finding_ms"] == "not_measured"
 
 
 def test_case_portability_probe_fails_closed_for_missing_inputs(tmp_path: Path):

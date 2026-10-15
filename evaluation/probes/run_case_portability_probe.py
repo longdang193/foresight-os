@@ -7,9 +7,11 @@ import subprocess
 import sys
 import time
 import tracemalloc
+from unittest.mock import patch
 from pathlib import Path
 
 from foresight_os.persistence.analysis_store import AnalysisStore
+from foresight_os import vertical_slice as vertical_slice_module
 from foresight_os.vertical_slice import run_vertical_slice
 
 
@@ -17,6 +19,17 @@ CASE_SHAPES = {
     "case-001": "existing_supported",
     "case-002": "mappings_only",
     "case-003": "missing_or_contradictory",
+}
+
+CASE_EXPECTATIONS = {
+    "case-003": {
+        "required_report_fragments": (
+            "above forecast demand",
+            "no capacity gap is evidenced",
+            "No capacity constraint is evidenced",
+        ),
+        "forbidden_report_fragments": ("below forecast demand",),
+    },
 }
 
 
@@ -43,13 +56,28 @@ def _revision() -> str:
 def _run_case(repo_root: Path, case_dir: Path, output_root: Path) -> dict[str, object]:
     case_id = case_dir.name
     workbook = case_dir / "workbook.csv"
-    before_source = _digest(workbook)
+    source_hashes = 0
+    parse_count = 0
+
+    def source_digest() -> str:
+        nonlocal source_hashes
+        source_hashes += 1
+        return _digest(workbook)
+
+    before_source = source_digest()
     before_production = _production_snapshot(repo_root)
     output_dir = output_root / case_id
     tracemalloc.start()
     started = time.perf_counter()
     try:
-        outcome = run_vertical_slice(workbook, output_dir, human_accept=True)
+        def counted_read_workbook(path):
+            nonlocal parse_count
+            parse_count += 1
+            return original_read_workbook(path)
+
+        original_read_workbook = vertical_slice_module.read_workbook
+        with patch.object(vertical_slice_module, "read_workbook", side_effect=counted_read_workbook):
+            outcome = run_vertical_slice(workbook, output_dir, human_accept=True)
         elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
         _, peak_allocation = tracemalloc.get_traced_memory()
     finally:
@@ -64,26 +92,30 @@ def _run_case(repo_root: Path, case_dir: Path, output_root: Path) -> dict[str, o
     if outcome.accepted:
         reloaded = AnalysisStore(output_dir).load_analysis()
     recovered = bool(reloaded is not None and (output_dir / "analysis.json").exists() and outcome.report_path and outcome.report_path.exists())
-    source_unchanged = before_source == _digest(workbook)
-    status = "VERIFIED" if outcome.accepted and recovered and source_unchanged and not changed_production else "FAILED"
+    source_unchanged = before_source == source_digest()
+    report_text = outcome.report_path.read_text(encoding="utf-8") if outcome.report_path and outcome.report_path.exists() else ""
+    expectation = CASE_EXPECTATIONS.get(case_id, {})
+    expected_report = all(fragment in report_text for fragment in expectation.get("required_report_fragments", ()))
+    forbidden_report = any(fragment in report_text for fragment in expectation.get("forbidden_report_fragments", ()))
+    status = "VERIFIED" if outcome.accepted and recovered and source_unchanged and not changed_production and expected_report and not forbidden_report else "FAILED"
     return {
         "case_id": case_id,
         "shape": CASE_SHAPES.get(case_id, "unclassified"),
         "status": status,
         "source_sha256": before_source,
         "production_files_changed": changed_production,
-        "manual_setup_actions": 0,
-        "approval_interruptions": 0,
+        "manual_setup_actions": "not_measured",
+        "approval_interruptions": "not_measured",
         "human_acceptance_simulated": True,
         "metrics": {
             "elapsed_ms": elapsed_ms,
-            "time_to_first_useful_finding_ms": elapsed_ms if outcome.accepted else None,
-            "workbook_hashes": 1,
-            "workbook_parse_count": 1,
+            "time_to_first_useful_finding_ms": "not_measured",
+            "workbook_hashes": source_hashes,
+            "workbook_parse_count": parse_count,
             "model_calls": "not_measured",
             "validation_escalations": 0 if outcome.review.accepted else 1,
             "peak_allocation_bytes": peak_allocation,
-            "runtime_branches": ["sequential", "vertical_slice_guardrail"],
+            "runtime_branches": ["sequential"] if outcome.review.accepted else ["sequential", "human_review"],
         },
         "recovery": {
             "analysis_reloaded": reloaded is not None,
@@ -92,6 +124,7 @@ def _run_case(repo_root: Path, case_dir: Path, output_root: Path) -> dict[str, o
         },
         "outcome_status": outcome.status,
         "review_accepted": outcome.review.accepted,
+        "expected_outcome_verified": expected_report and not forbidden_report,
     }
 
 

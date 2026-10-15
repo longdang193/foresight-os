@@ -11,6 +11,7 @@ from foresight_os.domain.challenge import (
     derive_finding_views,
     finding_summary_status,
 )
+from foresight_os.domain.models import Assessment
 from tests.test_review_records import make_state
 
 
@@ -69,3 +70,20 @@ def test_finding_summary_distinguishes_supported_and_uncertain_results():
     )
     supported = replace(supported, review_records=[supported_review])
     assert finding_summary_status(derive_finding_views(supported, (claim.id,))[0]) == "supported"
+
+
+@pytest.mark.parametrize("assessment, expected", [(Assessment.UNCERTAIN, "uncertain"), (Assessment.CONTESTED, "correction-needed"), (Assessment.REFUTED, "correction-needed")])
+def test_finding_summary_honors_non_supported_assessments(assessment: Assessment, expected: str):
+    state = make_state()
+    claim = replace(state.claims[0], assessment=assessment, uncertainty=())
+    reviewed = replace(state, claims=[claim])
+    review = ReviewRecord(
+        "review-assessment",
+        (claim.id,),
+        reviewed.revision,
+        build_material_fingerprint(reviewed, (claim.id,)),
+        outcome=ReviewOutcome.ACCEPTED,
+    )
+    reviewed = replace(reviewed, review_records=[review])
+
+    assert finding_summary_status(derive_finding_views(reviewed, (claim.id,))[0]) == expected

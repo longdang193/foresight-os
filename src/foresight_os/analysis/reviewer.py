@@ -180,7 +180,16 @@ def review_reasoning(
             message = f"{record.id}: derived claim needs period and unit context"
             issues.append(message)
             objections.append(ChallengeObjection("UNSUPPORTED_ASSUMPTION", record.id, message, disposition=ObjectionDisposition.UNRESOLVED))
-    if any("capacity" in record.statement.lower() for record in records) and not any("conditional" in record.statement.lower() for record in records):
+    capacity_contradiction_reconciled = any(
+        "no capacity gap is evidenced" in record.statement.lower()
+        or "above forecast demand" in record.statement.lower()
+        for record in records
+    )
+    if (
+        any("capacity" in record.statement.lower() for record in records)
+        and not any("conditional" in record.statement.lower() for record in records)
+        and not capacity_contradiction_reconciled
+    ):
         message = "recommendation must address the capacity contradiction"
         issues.append(message)
         objections.append(ChallengeObjection("ALTERNATIVE_HYPOTHESIS", records[-1].id if records else "review", message, disposition=ObjectionDisposition.UNRESOLVED))

@@ -48,9 +48,14 @@ def draft_analysis(evidence: list[Evidence]) -> DraftAnalysis:
         Assessment.SUPPORTED,
         evidence_ids=[demand_2024.id, demand_2030.id],
     )
+    capacity_gap_statement = (
+        f"Northern Europe capacity is forecast to reach index {capacity_end_value} in 2030, below forecast demand of {demand_end_value}."
+        if capacity_gap.output > 0
+        else f"Northern Europe capacity is forecast to reach index {capacity_end_value} in 2030, above forecast demand of {demand_end_value}; no capacity gap is evidenced."
+    )
     capacity_claim = AnalyticalRecord(
         "claim-northern-capacity-gap",
-        f"Northern Europe capacity is forecast to reach index {capacity_end_value} in 2030, below forecast demand of {demand_end_value}.",
+        capacity_gap_statement,
         Basis.DERIVED,
         Assessment.SUPPORTED,
         evidence_ids=[demand_2030.id, capacity_2030.id],
@@ -75,7 +80,11 @@ def draft_analysis(evidence: list[Evidence]) -> DraftAnalysis:
     )
     implication = AnalyticalRecord(
         "implication-capacity-constrained-growth",
-        "Growth creates a capacity constraint that must be resolved before scaling service commitments.",
+        (
+            "Growth creates a capacity constraint that must be resolved before scaling service commitments."
+            if capacity_gap.output > 0
+            else "No capacity constraint is evidenced for Northern Europe at the 2030 forecast point."
+        ),
         Basis.DERIVED,
         Assessment.SUPPORTED,
         evidence_ids=[demand_2030.id, capacity_2030.id],
@@ -91,7 +100,11 @@ def draft_analysis(evidence: list[Evidence]) -> DraftAnalysis:
     )
     recommendation = AnalyticalRecord(
         "recommendation-northern-attention",
-        "Increase strategic attention on Northern Europe, conditional on validating expansion cost.",
+        (
+            "Increase strategic attention on Northern Europe, conditional on validating expansion cost."
+            if capacity_gap.output > 0
+            else "Maintain strategic monitoring of Northern Europe without an expansion response; reassess if demand or capacity assumptions change."
+        ),
         Basis.DERIVED,
         Assessment.SUPPORTED,
         evidence_ids=[demand_2030.id, capacity_2030.id],
