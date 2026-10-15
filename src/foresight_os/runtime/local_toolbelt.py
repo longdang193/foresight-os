@@ -3,6 +3,12 @@ from __future__ import annotations
 import ast
 import csv
 import hashlib
+import os
+import shutil
+import sys
+import tempfile
+import threading
+import uuid
 from itertools import zip_longest
 import operator
 import posixpath
@@ -55,6 +61,8 @@ class ToolbeltLimits:
     max_merged_cells_per_range: int = 100_000
     max_total_merged_cells: int = 500_000
     max_result_rows: int = 10_000
+    max_authority_records: int = 50_000
+    max_retained_bytes: int = 100_000_000
 
 
 def _coerce_toolbelt_limits(value: ToolbeltLimits | Mapping[str, Any] | None) -> ToolbeltLimits:
@@ -71,6 +79,8 @@ def _coerce_toolbelt_limits(value: ToolbeltLimits | Mapping[str, Any] | None) ->
         "max_merged_cells_per_range",
         "max_total_merged_cells",
         "max_result_rows",
+        "max_authority_records",
+        "max_retained_bytes",
     )
     return ToolbeltLimits(**{name: int(value[name]) for name in fields if name in value})
 
@@ -82,6 +92,7 @@ class WorkbookReadCache:
         self._entries: dict[tuple[Any, ...], tuple[WorkbookReadResult, int]] = {}
         self._analysis_entries: dict[tuple[Any, ...], tuple[AnalysisResult, int]] = {}
         self._bytes = 0
+        self._lock = threading.RLock()
 
     def source_hash(self, source: Path) -> str:
         return _sha256_file(source)
@@ -100,24 +111,37 @@ class WorkbookReadCache:
         return canonical, source_hash or self.source_hash(source), selection_key, limit_key
 
     def get(self, key: tuple[Any, ...]) -> WorkbookReadResult | None:
-        entry = self._entries.get(key)
-        return entry[0] if entry is not None else None
+        with self._lock:
+            entry = self._entries.get(key)
+            return entry[0] if entry is not None else None
 
     def put(self, key: tuple[Any, ...], result: WorkbookReadResult) -> None:
-        self._put(self._entries, key, result)
+        with self._lock:
+            self._put(self._entries, key, result)
 
     def analysis_key(self, table: TypedTable, operation: AnalysisOperation, limits: ToolbeltLimits) -> tuple[Any, ...]:
-        return ("analysis", table.id, repr(operation), repr(limits))
+        join_fingerprint = operation.join_table.material_fingerprint if operation.join_table is not None else ""
+        return ("analysis", table.material_fingerprint, join_fingerprint, repr(operation), repr(limits))
 
     def get_analysis(self, key: tuple[Any, ...]) -> AnalysisResult | None:
-        entry = self._analysis_entries.get(key)
-        return entry[0] if entry is not None else None
+        with self._lock:
+            entry = self._analysis_entries.get(key)
+            return entry[0] if entry is not None else None
 
     def put_analysis(self, key: tuple[Any, ...], result: AnalysisResult) -> None:
-        self._put(self._analysis_entries, key, result)
+        with self._lock:
+            self._put(self._analysis_entries, key, result)
+
+    def discard(self, key: tuple[Any, ...], expected: Any | None = None) -> None:
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None or (expected is not None and entry[0] is not expected):
+                return
+            self._entries.pop(key, None)
+            self._bytes -= entry[1]
 
     def _put(self, entries: dict[tuple[Any, ...], tuple[Any, int]], key: tuple[Any, ...], result: Any) -> None:
-        estimated = max(1, len(repr(result)))
+        estimated = _estimate_size(result)
         if estimated > self.max_bytes:
             return
         previous = entries.pop(key, None)
@@ -131,9 +155,10 @@ class WorkbookReadCache:
         self._bytes += estimated
 
     def clear(self) -> None:
-        self._entries.clear()
-        self._analysis_entries.clear()
-        self._bytes = 0
+        with self._lock:
+            self._entries.clear()
+            self._analysis_entries.clear()
+            self._bytes = 0
 
     @property
     def size(self) -> int:
@@ -141,11 +166,29 @@ class WorkbookReadCache:
 
     @property
     def bytes_used(self) -> int:
-        return self._bytes
+        with self._lock:
+            return self._bytes
 
     @property
     def _entry_count(self) -> int:
-        return len(self._entries) + len(self._analysis_entries)
+        with self._lock:
+            return len(self._entries) + len(self._analysis_entries)
+
+
+def _estimate_size(value: Any, seen: set[int] | None = None) -> int:
+    seen = seen or set()
+    identity = id(value)
+    if identity in seen:
+        return 0
+    seen.add(identity)
+    size = sys.getsizeof(value, 0)
+    if isinstance(value, Mapping):
+        size += sum(_estimate_size(key, seen) + _estimate_size(item, seen) for key, item in value.items())
+    elif isinstance(value, (tuple, list, set, frozenset)):
+        size += sum(_estimate_size(item, seen) for item in value)
+    elif hasattr(value, "__dict__"):
+        size += _estimate_size(vars(value), seen)
+    return max(1, size)
 
 
 def _sha256_file(source: Path, chunk_size: int = 1024 * 1024) -> str:
@@ -163,6 +206,277 @@ class SheetSelection:
     tables: tuple[tuple[str, str], ...] = ()
     include_hidden: bool = False
     include_hidden_rows: bool = False
+
+
+@dataclass
+class WorkbookSessionStats:
+    capture_count: int = 0
+    capture_hash_count: int = 0
+    currentness_hash_count: int = 0
+    xlsx_parse_count: int = 0
+    openpyxl_load_count: int = 0
+    read_cache_hits: int = 0
+    analysis_cache_hits: int = 0
+    published_results: int = 0
+    rejected_publications: int = 0
+    peak_in_flight_parse_bytes: int = 0
+
+    def to_dict(self) -> dict[str, int]:
+        return {field.name: int(getattr(self, field.name)) for field in fields(self)}
+
+
+@dataclass(frozen=True)
+class SourceSnapshot:
+    snapshot_id: str
+    source: str
+    sha256: str
+    byte_size: int
+    captured_path: Path
+
+    @classmethod
+    def capture(
+        cls,
+        source: str | Path,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
+        stats: WorkbookSessionStats | None = None,
+    ) -> SourceSnapshot:
+        source_path = Path(source).resolve()
+        if not source_path.is_file():
+            raise ToolbeltError(f"source does not exist: {source_path}")
+        digest = hashlib.sha256()
+        payload = bytearray()
+        try:
+            with source_path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    _check_cancel(cancel_check)
+                    digest.update(chunk)
+                    payload.extend(chunk)
+            _check_cancel(cancel_check)
+            snapshot_dir = Path(tempfile.mkdtemp(prefix="foresight-workbook-"))
+            captured_path = snapshot_dir / source_path.name
+            captured_path.write_bytes(payload)
+        except BaseException:
+            if "snapshot_dir" in locals():
+                shutil.rmtree(snapshot_dir, ignore_errors=True)
+            raise
+        if stats is not None:
+            stats.capture_count += 1
+            stats.capture_hash_count += 1
+        return cls(
+            snapshot_id=f"{digest.hexdigest()[:16]}-{uuid.uuid4().hex[:8]}",
+            source=str(source_path),
+            sha256=digest.hexdigest(),
+            byte_size=len(payload),
+            captured_path=captured_path,
+        )
+
+    def currentness_hash(self, *, cancel_check: Callable[[], bool] | None = None, stats: WorkbookSessionStats | None = None) -> str:
+        _check_cancel(cancel_check)
+        digest = _sha256_file(Path(self.source))
+        _check_cancel(cancel_check)
+        if stats is not None:
+            stats.currentness_hash_count += 1
+        return digest
+
+    def close(self) -> None:
+        try:
+            self.captured_path.unlink(missing_ok=True)
+            shutil.rmtree(self.captured_path.parent, ignore_errors=True)
+        except OSError:
+            pass
+
+
+class AuthorityIndex:
+    def __init__(self, max_records: int = 50_000) -> None:
+        self.max_records = max(1, max_records)
+        self.measurements: dict[tuple[str, str, str], TypedMeasurement] = {}
+        self.calculations: dict[tuple[str, str], CalculationRecord] = {}
+        self._lock = threading.RLock()
+
+    def remember_measurements(self, measurements: Iterable[TypedMeasurement]) -> None:
+        with self._lock:
+            for measurement in measurements:
+                key = (measurement.provenance.workbook_sha256, measurement.id, measurement.provenance.range)
+                if key not in self.measurements and len(self.measurements) >= self.max_records:
+                    raise ToolbeltError("authoritative measurement retention budget exceeded")
+                self.measurements[key] = measurement
+
+    def remember_calculation(self, record: CalculationRecord, workbook_hash: str) -> None:
+        with self._lock:
+            key = (workbook_hash, record.id)
+            if key not in self.calculations and len(self.calculations) >= self.max_records:
+                raise ToolbeltError("authoritative calculation retention budget exceeded")
+            self.calculations[key] = record
+
+    def get_measurement(self, key: tuple[str, str, str]) -> TypedMeasurement | None:
+        with self._lock:
+            return self.measurements.get(key)
+
+    def get_calculation(self, key: tuple[str, str]) -> CalculationRecord | None:
+        with self._lock:
+            return self.calculations.get(key)
+
+    def clear(self) -> None:
+        with self._lock:
+            self.measurements.clear()
+            self.calculations.clear()
+
+    @property
+    def bytes_used(self) -> int:
+        with self._lock:
+            return _estimate_size(self.measurements) + _estimate_size(self.calculations)
+
+
+@dataclass
+class WorkbookSession:
+    snapshot: SourceSnapshot
+    limits: ToolbeltLimits = field(default_factory=ToolbeltLimits)
+    cache: WorkbookReadCache = field(default_factory=WorkbookReadCache)
+    authority: AuthorityIndex = field(default_factory=AuthorityIndex)
+    stats: WorkbookSessionStats = field(default_factory=WorkbookSessionStats)
+    budget_check: Callable[[], None] | None = field(default=None, repr=False)
+    _closed: bool = field(default=False, init=False, repr=False)
+    _lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
+
+    def read(
+        self,
+        selection: Mapping[str, Any] | None = None,
+        limits: Mapping[str, Any] | None = None,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> WorkbookReadResult:
+        with self._lock:
+            if self._closed:
+                raise ToolbeltError("workbook session is closed")
+            result = spreadsheet_read(
+                self.snapshot.captured_path,
+                selection,
+                limits or self.limits,
+                cancel_check=cancel_check,
+                _cache=self.cache,
+                _source_hash=self.snapshot.sha256,
+                _source_label=self.snapshot.source,
+                _authority=self.authority,
+                _stats=self.stats,
+            )
+        if self.budget_check is not None:
+            self.budget_check()
+        return result
+
+    def currentness_hash(self, *, cancel_check: Callable[[], bool] | None = None) -> str:
+        with self._lock:
+            if self._closed:
+                raise ToolbeltError("workbook session is closed")
+            return self.snapshot.currentness_hash(cancel_check=cancel_check, stats=self.stats)
+
+    def analyze(
+        self,
+        table: TypedTable | Mapping[str, Any],
+        operation: AnalysisOperation | Mapping[str, Any],
+        limits: Mapping[str, Any] | None = None,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> AnalysisResult:
+        with self._lock:
+            if self._closed:
+                raise ToolbeltError("workbook session is closed")
+            result = data_analysis(
+                table,
+                operation,
+                limits or self.limits,
+                cancel_check=cancel_check,
+                _cache=self.cache,
+                _stats=self.stats,
+                workbook_session=self,
+            )
+        if self.budget_check is not None:
+            self.budget_check()
+        return result
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            self.cache.clear()
+            self.authority.clear()
+            self.snapshot.close()
+
+
+class WorkbookContext:
+    def __init__(self, *, limits: ToolbeltLimits | Mapping[str, Any] | None = None, max_total_bytes: int | None = None) -> None:
+        self.limits = _coerce_toolbelt_limits(limits)
+        self.max_total_bytes = max(1, int(max_total_bytes or self.limits.max_retained_bytes))
+        self.sessions: dict[str, WorkbookSession] = {}
+        self._source_sessions: dict[str, WorkbookSession] = {}
+        self.derived_cache = WorkbookReadCache(max_entries=32, max_bytes=self.max_total_bytes)
+        self.authority = AuthorityIndex(self.limits.max_authority_records)
+        self.stats = WorkbookSessionStats()
+        self._lock = threading.RLock()
+        self._closed = False
+
+    def session_for_source(
+        self,
+        source: str | Path,
+        *,
+        new_capture: bool = False,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> WorkbookSession:
+        canonical = str(Path(source).resolve())
+        with self._lock:
+            if self._closed:
+                raise ToolbeltError("workbook context is closed")
+            if not new_capture and canonical in self._source_sessions:
+                return self._source_sessions[canonical]
+            snapshot = SourceSnapshot.capture(canonical, cancel_check=cancel_check, stats=self.stats)
+            session = WorkbookSession(snapshot, self.limits, authority=self.authority, stats=self.stats, budget_check=self._check_budget)
+            self.sessions[snapshot.snapshot_id] = session
+            self._source_sessions[canonical] = session
+            self._check_budget()
+            return session
+
+    def session_for_snapshot(self, snapshot: SourceSnapshot) -> WorkbookSession:
+        with self._lock:
+            if self._closed:
+                raise ToolbeltError("workbook context is closed")
+            if snapshot.snapshot_id in self.sessions:
+                return self.sessions[snapshot.snapshot_id]
+            session = WorkbookSession(snapshot, self.limits, authority=self.authority, stats=self.stats, budget_check=self._check_budget)
+            self.sessions[snapshot.snapshot_id] = session
+            self._source_sessions[snapshot.source] = session
+            self._check_budget()
+            return session
+
+    def session_for_table(self, table: TypedTable) -> WorkbookSession | None:
+        hashes = {item.workbook_sha256 for row in table.row_provenance for item in row}
+        with self._lock:
+            for session in self.sessions.values():
+                if session.snapshot.sha256 in hashes:
+                    return session
+        return None
+
+    def _check_budget(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            retained = sum(session.snapshot.byte_size + session.cache.bytes_used for session in self.sessions.values())
+            retained += self.derived_cache.bytes_used + self.authority.bytes_used
+        if retained > self.max_total_bytes:
+            raise ToolbeltError("workbook context retained-resource budget exceeded")
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            sessions = tuple(self.sessions.values())
+            self.sessions.clear()
+            self._source_sessions.clear()
+            self.derived_cache.clear()
+            for session in sessions:
+                session.close()
+            self.authority.clear()
 
 
 def _coerce_sheet_selection(value: SheetSelection | Mapping[str, Any] | None) -> SheetSelection | None:
@@ -255,6 +569,21 @@ class TypedTable:
     source_range: str = ""
     related_provenance: tuple[CellProvenance, ...] = ()
     row_measurements: tuple[tuple[TypedMeasurement, ...], ...] = ()
+    material_fingerprint: str = ""
+
+    def __post_init__(self) -> None:
+        if self.material_fingerprint:
+            return
+        identity = (
+            tuple(item.workbook_sha256 for row in self.row_provenance for item in row),
+            self.sheet,
+            self.source_range,
+            self.hidden,
+            self.headers,
+            self.rows,
+            self.related_provenance,
+        )
+        object.__setattr__(self, "material_fingerprint", hashlib.sha256(repr(identity).encode()).hexdigest())
 
     @property
     def columns(self) -> tuple[str, ...]:
@@ -308,6 +637,7 @@ class TypedTable:
                 }
                 for item in self.related_provenance
             ],
+            "material_fingerprint": self.material_fingerprint,
         }
 
 
@@ -316,7 +646,10 @@ _AUTHORITATIVE_CALCULATIONS: dict[tuple[str, str], CalculationRecord] = {}
 _AUTHORITATIVE_RECORD_LIMIT = ToolbeltLimits().max_cells
 
 
-def _remember_authoritative_measurements(measurements: Iterable[TypedMeasurement]) -> None:
+def _remember_authoritative_measurements(measurements: Iterable[TypedMeasurement], authority: AuthorityIndex | None = None) -> None:
+    if authority is not None:
+        authority.remember_measurements(measurements)
+        return
     for measurement in measurements:
         key = (measurement.provenance.workbook_sha256, measurement.id, measurement.provenance.range)
         _AUTHORITATIVE_MEASUREMENTS[key] = measurement
@@ -324,7 +657,10 @@ def _remember_authoritative_measurements(measurements: Iterable[TypedMeasurement
         _AUTHORITATIVE_MEASUREMENTS.pop(next(iter(_AUTHORITATIVE_MEASUREMENTS)))
 
 
-def _remember_authoritative_calculation(record: CalculationRecord, workbook_hash: str) -> None:
+def _remember_authoritative_calculation(record: CalculationRecord, workbook_hash: str, authority: AuthorityIndex | None = None) -> None:
+    if authority is not None:
+        authority.remember_calculation(record, workbook_hash)
+        return
     _AUTHORITATIVE_CALCULATIONS[(workbook_hash, record.id)] = record
     while len(_AUTHORITATIVE_CALCULATIONS) > _AUTHORITATIVE_RECORD_LIMIT:
         _AUTHORITATIVE_CALCULATIONS.pop(next(iter(_AUTHORITATIVE_CALCULATIONS)))
@@ -489,6 +825,24 @@ def _check_cancel(cancel_check: Callable[[], bool] | None) -> None:
         raise ToolbeltError("cancelled")
 
 
+def _publish_read_cache(
+    cache: WorkbookReadCache,
+    key: tuple[Any, ...],
+    result: WorkbookReadResult,
+    cancel_check: Callable[[], bool] | None,
+    stats: WorkbookSessionStats | None,
+) -> None:
+    _check_cancel(cancel_check)
+    cache.put(key, result)
+    try:
+        _check_cancel(cancel_check)
+    except BaseException:
+        cache.discard(key, result)
+        raise
+    if stats is not None:
+        stats.published_results += 1
+
+
 def _delimited_value(value: str) -> Any:
     value = value.strip()
     if not value:
@@ -644,8 +998,15 @@ def spreadsheet_read(
     *,
     cancel_check: Callable[[], bool] | None = None,
     _cache: Any = None,
+    _source_hash: str | None = None,
+    _source_label: str | None = None,
+    _authority: AuthorityIndex | None = None,
+    _stats: WorkbookSessionStats | None = None,
+    workbook_session: WorkbookSession | None = None,
 ) -> WorkbookReadResult:
     """Read a bounded workbook using JSON-compatible source, selection, and limits."""
+    if workbook_session is not None:
+        return workbook_session.read(selection, limits, cancel_check=cancel_check)
     selection = _coerce_sheet_selection(selection)
     limits = _coerce_toolbelt_limits(limits)
     if limits.max_cells > _AUTHORITATIVE_RECORD_LIMIT:
@@ -655,20 +1016,24 @@ def spreadsheet_read(
     cache_key = None
     digest = None
     if _cache is not None:
-        digest = _cache.source_hash(source)
+        digest = _source_hash or _cache.source_hash(source)
         cache_key = _cache.key(source, selection, limits, source_hash=digest)
         cached_result = _cache.get(cache_key)
         if cached_result is not None:
-            cached_result = replace(cached_result, source=str(source))
-            _remember_authoritative_measurements(cached_result.measurements)
+            if _stats is not None:
+                _stats.read_cache_hits += 1
+            cached_result = replace(cached_result, source=_source_label or str(source))
+            _remember_authoritative_measurements(cached_result.measurements, _authority)
             return cached_result
     if source.stat().st_size > limits.max_bytes:
         raise ToolbeltError("workbook exceeds byte limit")
     if source.suffix.lower() in {".csv", ".tsv"}:
         result = _read_delimited(source, selection, limits, cancel_check, digest)
+        if _source_label:
+            result = replace(result, source=_source_label)
+        _remember_authoritative_measurements(result.measurements, _authority)
         if _cache is not None and cache_key is not None:
-            _cache.put(cache_key, result)
-        _remember_authoritative_measurements(result.measurements)
+            _publish_read_cache(_cache, cache_key, result, cancel_check, _stats)
         return result
     if source.suffix.lower() not in {".xlsx", ".xlsm", ".xltx", ".xltm"}:
         raise ToolbeltError("unsupported spreadsheet format")
@@ -681,11 +1046,16 @@ def spreadsheet_read(
         raise ToolbeltError("workbook expanded content exceeds byte limit")
     _preflight_xlsx_archive(source, selection, limits, cancel_check)
     digest = digest or _sha256_file(source)
+    if _stats is not None:
+        _stats.xlsx_parse_count += 1
+        _stats.peak_in_flight_parse_bytes = max(_stats.peak_in_flight_parse_bytes, source.stat().st_size)
     workbook = None
     cached = None
     try:
         workbook = openpyxl.load_workbook(source, data_only=False, read_only=False)
         cached = openpyxl.load_workbook(source, data_only=True, read_only=True)
+        if _stats is not None:
+            _stats.openpyxl_load_count += 2
         sheets: list[SheetSummary] = []
         tables: list[TypedTable] = []
         measurements: list[TypedMeasurement] = []
@@ -793,10 +1163,10 @@ def spreadsheet_read(
                     continue
                 related.extend(CellProvenance(digest, sheet, coordinate, f"{sheet}!{coordinate}") for sheet, coordinate in measurement.cross_sheet_cells)
             finalized_tables.append(replace(table, related_provenance=tuple(dict.fromkeys(related))))
-        result = WorkbookReadResult(str(source), digest, tuple(sheets), tuple(finalized_tables), tuple(measurements))
+        result = WorkbookReadResult(_source_label or str(source), digest, tuple(sheets), tuple(finalized_tables), tuple(measurements))
+        _remember_authoritative_measurements(result.measurements, _authority)
         if _cache is not None and cache_key is not None:
-            _cache.put(cache_key, result)
-        _remember_authoritative_measurements(result.measurements)
+            _publish_read_cache(_cache, cache_key, result, cancel_check, _stats)
         return result
     finally:
         if cached is not None:
@@ -831,16 +1201,24 @@ def data_analysis(
     *,
     cancel_check: Callable[[], bool] | None = None,
     _cache: Any = None,
+    _stats: WorkbookSessionStats | None = None,
+    workbook_session: WorkbookSession | None = None,
 ) -> AnalysisResult:
     table = _coerce_typed_table(table)
     operation = _coerce_analysis_operation(operation)
     limits = _coerce_toolbelt_limits(limits)
+    if workbook_session is not None and _cache is None:
+        _cache = workbook_session.cache
     _check_cancel(cancel_check)
     analysis_cache_key = None
     if _cache is not None and hasattr(_cache, "analysis_key"):
         analysis_cache_key = _cache.analysis_key(table, operation, limits)
         cached_result = _cache.get_analysis(analysis_cache_key)
         if cached_result is not None:
+            if _stats is not None:
+                _stats.analysis_cache_hits += 1
+            if workbook_session is not None and workbook_session.budget_check is not None:
+                workbook_session.budget_check()
             return cached_result
     rows = _rows(table)
     kind = operation.kind.lower()
@@ -942,7 +1320,12 @@ def data_analysis(
     key = hashlib.sha256(repr((operation, result, provenance)).encode()).hexdigest()
     analysis_result = AnalysisResult(operation.kind, tuple(result), provenance, key, tuple(warnings))
     if _cache is not None and analysis_cache_key is not None:
+        _check_cancel(cancel_check)
         _cache.put_analysis(analysis_cache_key, analysis_result)
+        if _stats is not None:
+            _stats.published_results += 1
+        if workbook_session is not None and workbook_session.budget_check is not None:
+            workbook_session.budget_check()
     return analysis_result
 
 
@@ -1003,6 +1386,7 @@ def _coerce_typed_table(value: TypedTable | Mapping[str, Any]) -> TypedTable:
         source_range=str(value.get("source_range", "")),
         related_provenance=related_provenance,
         row_measurements=row_measurements,
+        material_fingerprint=str(value.get("material_fingerprint", "")),
     )
 
 
@@ -1106,7 +1490,12 @@ def calculation(
     formula: FormulaSpec | Mapping[str, Any],
     units: UnitSpec | Mapping[str, Any],
     approved_workbook_sha256: str | None = None,
+    *,
+    _authority: AuthorityIndex | None = None,
+    workbook_session: WorkbookSession | None = None,
 ) -> CalculationRecord:
+    if workbook_session is not None and _authority is None:
+        _authority = workbook_session.authority
     inputs = tuple(_coerce_calculation_input(item) for item in inputs)
     formula = _coerce_formula_spec(formula)
     units = _coerce_unit_spec(units)
@@ -1122,7 +1511,11 @@ def calculation(
         for item in measurements:
             if item.provenance.workbook_sha256 != approved_workbook_sha256:
                 raise ToolbeltError("BLOCKED_RECALCULATION: approved workbook hash is missing or mismatched")
-            authoritative = _AUTHORITATIVE_MEASUREMENTS.get((approved_workbook_sha256, item.id, item.provenance.range))
+            authoritative = (
+                _authority.get_measurement((approved_workbook_sha256, item.id, item.provenance.range))
+                if _authority is not None
+                else _AUTHORITATIVE_MEASUREMENTS.get((approved_workbook_sha256, item.id, item.provenance.range))
+            )
             if authoritative is None or replace(item, trusted=False) != replace(authoritative, trusted=False):
                 raise ToolbeltError("BLOCKED_RECALCULATION: workbook measurement provenance is untrusted")
             resolved_measurements.append(authoritative)
@@ -1138,7 +1531,11 @@ def calculation(
                 raise ToolbeltError("BLOCKED_RECALCULATION: authoritative calculation ancestry is unavailable")
             if any(approved_workbook_sha256 not in locator for locator in item.source_locators):
                 raise ToolbeltError("BLOCKED_RECALCULATION: approved workbook hash is missing or mismatched")
-            authoritative = _AUTHORITATIVE_CALCULATIONS.get((approved_workbook_sha256, item.id))
+            authoritative = (
+                _authority.get_calculation((approved_workbook_sha256, item.id))
+                if _authority is not None
+                else _AUTHORITATIVE_CALCULATIONS.get((approved_workbook_sha256, item.id))
+            )
             if authoritative is None or replace(item, verification_status=CalculationVerificationStatus.NOT_VERIFIED) != replace(authoritative, verification_status=CalculationVerificationStatus.NOT_VERIFIED):
                 raise ToolbeltError("BLOCKED_RECALCULATION: authoritative calculation ancestry is unavailable")
             resolved_calculations.append(authoritative)
@@ -1174,7 +1571,7 @@ def calculation(
     record_id = "calculation-" + hashlib.sha256(repr(identity).encode()).hexdigest()[:16]
     record = CalculationRecord(record_id, MeasurementKey("toolbelt", formula.expression, "current", units.units), formula.expression, input_ids, output, units.units, locators, CalculationVerificationStatus.VERIFIED)
     if approved_workbook_sha256:
-        _remember_authoritative_calculation(record, approved_workbook_sha256)
+        _remember_authoritative_calculation(record, approved_workbook_sha256, _authority)
     return record
 
 

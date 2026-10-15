@@ -28,11 +28,17 @@ def _receipt() -> dict:
         "event_loop_lag_ms": 0.1,
     }
     return {
-        "schema_version": 2,
+        "schema_version": 3,
+        "benchmark": {"workload_id": "workbook-session-reuse-level1-v1", "schema_version": 3},
         "revision": {
             "commit": "commit",
             "repo_root": "repo",
             "package_path": "repo/src/foresight_os/__init__.py",
+            "source_tree_fingerprint": "tree",
+            "implementation_fingerprint": "implementation",
+            "harness_fingerprint": "harness",
+            "dirty_paths": [],
+            "measurement_mode": "baseline",
         },
         "accepted_finding_count": 2,
         "economics": economics,
@@ -53,8 +59,28 @@ def _receipt() -> dict:
             }
         ],
         "resource": {"rss_bytes": 100},
-        "xlsx": {"p95_ms": 10, "peak_allocation_bytes": 100, "deterministic_key": "same"},
-        "workload": {"fixture_sha256": "same", "warmups": 2, "measured_runs": 10, "patterns": list(PATTERNS)},
+        "xlsx": {
+            "p95_ms": 10,
+            "peak_allocation_bytes": 100,
+            "deterministic_key": "same",
+            "session_reuse": {
+                "available": True,
+                **{
+                    phase: {
+                        "capture_count": 0,
+                        "capture_hash_count": 0,
+                        "currentness_hash_count": 0,
+                        "xlsx_parse_count": 0,
+                        "openpyxl_load_count": 0,
+                    }
+                    for phase in ("cold", "warm_identical", "different_selection", "analyst_to_validator", "explicit_currentness")
+                },
+                "cold": {"capture_count": 1, "capture_hash_count": 1, "currentness_hash_count": 0, "xlsx_parse_count": 1, "openpyxl_load_count": 2},
+                "explicit_currentness": {"capture_count": 0, "capture_hash_count": 0, "currentness_hash_count": 1, "xlsx_parse_count": 0, "openpyxl_load_count": 0},
+                "resource_observations": {"same_view_sha_matches": True},
+            },
+        },
+        "workload": {"workload_id": "workbook-session-reuse-level1-v1", "fixture_sha256": "same", "warmups": 2, "measured_runs": 10, "patterns": list(PATTERNS)},
         "acceptance": {"p95_regression_pct": 20, "peak_allocation_regression_pct": 15, "soak_runs": 2, "tool_calls_per_finding_increase": 0},
         "maf_patterns": {
             name: {
@@ -106,10 +132,12 @@ def test_comparator_rejects_missing_or_zero_denominator_without_raising():
 def test_comparator_rejects_workload_pattern_and_resource_regressions():
     baseline = _receipt()
     release = deepcopy(baseline)
+    release["revision"]["implementation_fingerprint"] = "release"
     release["workload"]["fixture_sha256"] = "different"
     assert compare(baseline, release) == {"accepted": False, "mismatched_comparison_inputs": ["workload"]}
 
     release = deepcopy(baseline)
+    release["revision"]["implementation_fingerprint"] = "release"
     release["maf_patterns"]["CONCURRENT"]["latency"]["wall_time_ms_p95"] = 13
     release["soak"]["monotonic_growth"] = True
     result = compare(baseline, release)
@@ -120,6 +148,7 @@ def test_comparator_rejects_workload_pattern_and_resource_regressions():
 def test_comparator_rejects_new_calls_for_reused_stage():
     baseline = _receipt()
     release = deepcopy(baseline)
+    release["revision"]["implementation_fingerprint"] = "release"
     release["stage_metrics"][0]["reused_stages"] = 1
     release["stage_metrics"][0]["model_calls"] = 1
 
@@ -129,11 +158,30 @@ def test_comparator_rejects_new_calls_for_reused_stage():
     assert result["reused_stage_new_calls"] == ["stage-1"]
 
 
+def test_comparator_requires_matched_harness_and_distinct_implementation():
+    baseline = _receipt()
+    release = deepcopy(baseline)
+    assert compare(baseline, release) == {
+        "accepted": False,
+        "mismatched_comparison_inputs": ["implementation_fingerprint"],
+    }
+
+    release = deepcopy(baseline)
+    release["revision"]["implementation_fingerprint"] = "different"
+    release["revision"]["harness_fingerprint"] = "different-harness"
+    assert compare(baseline, release) == {
+        "accepted": False,
+        "mismatched_comparison_inputs": ["harness"],
+    }
+
+
 def test_repeat_comparator_requires_stable_group_chat_p95_and_metadata():
     baseline = _receipt()
     baseline_repeat = deepcopy(baseline)
     release = deepcopy(baseline)
     release_repeat = deepcopy(baseline)
+    release["revision"]["implementation_fingerprint"] = "release"
+    release_repeat["revision"]["implementation_fingerprint"] = "release"
     release["revision"]["commit"] = "release-commit"
     release_repeat["revision"]["commit"] = "release-commit"
     release["maf_patterns"]["CHALLENGE_RECOMMENDATION"]["latency"]["wall_time_ms_p95"] = 12

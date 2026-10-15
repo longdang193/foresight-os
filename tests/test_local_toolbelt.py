@@ -1,7 +1,9 @@
 import hashlib
 import json
 import re
+import threading
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import get_type_hints
@@ -16,6 +18,7 @@ from foresight_os.runtime.local_toolbelt import (
     ToolbeltLimits,
     ToolbeltError,
     TypedMeasurement,
+    WorkbookContext,
     _implicit_xlsx_bounds,
     calculation,
     data_analysis,
@@ -776,3 +779,137 @@ def test_xlsx_reader_rejects_malformed_selection_shapes(selection, message, tmp_
 
     with pytest.raises(ToolbeltError, match=message):
         spreadsheet_read(source, selection)
+
+
+def test_workbook_context_distinguishes_pinned_reads_currentness_and_new_capture(tmp_path):
+    source = tmp_path / "mutable.csv"
+    source.write_text("Metric,Value\nA,10\n", encoding="utf-8")
+    context = WorkbookContext()
+    session = context.session_for_source(source)
+    first = session.read()
+
+    source.write_text("Metric,Value\nA,20\n", encoding="utf-8")
+    pinned = session.read()
+    assert pinned.workbook_sha256 == first.workbook_sha256
+    assert session.currentness_hash() != first.workbook_sha256
+
+    refreshed = context.session_for_source(source, new_capture=True)
+    assert refreshed.snapshot.sha256 != first.workbook_sha256
+    assert refreshed.read().workbook_sha256 == refreshed.snapshot.sha256
+    assert context.stats.capture_count == 2
+    context.close()
+
+
+def test_workbook_context_authority_survives_derived_cache_clear(workbook_path):
+    context = WorkbookContext()
+    session = context.session_for_source(workbook_path)
+    result = session.read(SheetSelection(ranges=(("Demand", "A2:C3"),)))
+    measurement = next(item for item in result.measurements if item.provenance.coordinate == "C3")
+    assert context.authority.measurements
+    session.cache.clear()
+    assert context.authority.get_measurement((result.workbook_sha256, measurement.id, measurement.provenance.range)) is not None
+    context.close()
+
+
+def test_workbook_context_owns_multiple_source_versions_and_cleans_snapshots(tmp_path):
+    first_source = tmp_path / "first.csv"
+    second_source = tmp_path / "second.csv"
+    first_source.write_text("Metric,Value\nA,10\n", encoding="utf-8")
+    second_source.write_text("Metric,Value\nB,20\n", encoding="utf-8")
+
+    context = WorkbookContext()
+    first = context.session_for_source(first_source)
+    second = context.session_for_source(second_source)
+
+    assert first is context.session_for_source(first_source)
+    assert first is not second
+    first_capture = first.snapshot.captured_path
+    second_capture = second.snapshot.captured_path
+    assert first.read().workbook_sha256 != second.read().workbook_sha256
+
+    context.close()
+    assert not first_capture.exists()
+    assert not second_capture.exists()
+    assert context.sessions == {}
+
+
+def test_workbook_session_serializes_identical_reads_and_reuses_one_parse(workbook_path):
+    context = WorkbookContext()
+    session = context.session_for_source(workbook_path)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(lambda _: session.read(), range(4)))
+
+    assert {result.workbook_sha256 for result in results} == {session.snapshot.sha256}
+    assert context.stats.xlsx_parse_count == 1
+    assert context.stats.openpyxl_load_count == 2
+    assert context.stats.read_cache_hits == 3
+    assert context.stats.peak_in_flight_parse_bytes >= workbook_path.stat().st_size
+    context.close()
+
+
+def test_workbook_session_publication_rolls_back_when_cancelled_at_cache_boundary(tmp_path):
+    source = tmp_path / "publication.csv"
+    source.write_text("Metric,Value\nA,10\n", encoding="utf-8")
+    context = WorkbookContext()
+    session = context.session_for_source(source)
+    cancelled = threading.Event()
+    checks = 0
+
+    def cancel_check():
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            cancelled.set()
+        return cancelled.is_set()
+
+    with pytest.raises(ToolbeltError, match="cancelled"):
+        session.read(cancel_check=cancel_check)
+    assert session.cache.size == 0
+    assert context.stats.published_results == 0
+    context.close()
+
+
+def test_workbook_session_eviction_remains_bounded_under_concurrent_selections(workbook_path):
+    context = WorkbookContext()
+    session = context.session_for_source(workbook_path)
+    session.cache.max_entries = 1
+    selections = [SheetSelection(ranges=(("Demand", f"A2:{column}4"),)) for column in ("B", "C", "D", "E")]
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(session.read, selections))
+
+    assert len(results) == len(selections)
+    assert session.cache.size <= 1
+    assert session.cache.bytes_used <= session.cache.max_bytes
+    context.close()
+
+
+def test_workbook_context_close_waits_for_active_read_and_prevents_future_publication(monkeypatch, workbook_path):
+    import foresight_os.runtime.local_toolbelt as local_toolbelt
+
+    entered = threading.Event()
+    release = threading.Event()
+    original_load = local_toolbelt.openpyxl.load_workbook
+
+    def blocked_load(*args, **kwargs):
+        entered.set()
+        release.wait(timeout=5)
+        return original_load(*args, **kwargs)
+
+    monkeypatch.setattr(local_toolbelt.openpyxl, "load_workbook", blocked_load)
+    context = WorkbookContext()
+    session = context.session_for_source(workbook_path)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        read_future = executor.submit(session.read)
+        assert entered.wait(timeout=5)
+        close_future = executor.submit(context.close)
+        assert not close_future.done()
+        release.set()
+        result = read_future.result(timeout=5)
+        close_future.result(timeout=5)
+
+    assert result.workbook_sha256 == session.snapshot.sha256
+    assert context.sessions == {}
+    with pytest.raises(ToolbeltError, match="closed"):
+        session.read()

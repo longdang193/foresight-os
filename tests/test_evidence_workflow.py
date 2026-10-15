@@ -144,6 +144,44 @@ def test_xlsx_finding_workflow_persists_provenance_calculation_and_restart(tmp_p
     assert views[0].accepted is True
     assert views[0].review_status == "CURRENT"
 
+
+def test_resumed_xlsx_acceptance_uses_captured_version_unless_current_source_is_requested(tmp_path: Path):
+    from foresight_os.analysis.evidence_workflow import run_xlsx_finding_workflow
+
+    source = tmp_path / "resumed-currentness.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.append(["Metric", "Value"])
+    workbook.active.append(["A", 10])
+    workbook.save(source)
+    store = AnalysisStore(tmp_path / "resumed-currentness-case")
+    pending = run_xlsx_finding_workflow(
+        store,
+        source,
+        AnalysisOperation("sum", value_column="Value"),
+        human_decision="PENDING",
+    )
+    assert pending.status == "pending"
+
+    workbook.active["B2"] = 99
+    workbook.save(source)
+    assert accept_pending_evidence(store, human_decision="ACCEPT").status == "accepted"
+
+    second_store = AnalysisStore(tmp_path / "resumed-currentness-explicit")
+    pending = run_xlsx_finding_workflow(
+        second_store,
+        source,
+        AnalysisOperation("sum", value_column="Value"),
+        human_decision="PENDING",
+    )
+    assert pending.status == "pending"
+    workbook.active["B2"] = 123
+    workbook.save(source)
+    stale = accept_pending_evidence(second_store, human_decision="ACCEPT", current_source=source)
+    assert stale.status == "stale"
+    assert "does not match" in stale.failure
+    blocked = accept_pending_evidence(second_store, human_decision="ACCEPT", current_source=tmp_path / "missing.xlsx")
+    assert blocked.status == "blocked"
+
 def test_xlsx_finding_workflow_uses_selected_table_when_workbook_has_multiple_tables(tmp_path: Path):
     from foresight_os.analysis.evidence_workflow import run_xlsx_finding_workflow
 

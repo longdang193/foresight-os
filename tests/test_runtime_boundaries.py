@@ -628,6 +628,32 @@ def test_public_function_middleware_accounts_for_native_function_invocation():
     asyncio.run(scenario())
 
 
+def test_instrumented_spreadsheet_dispatch_reuses_one_scope_context(tmp_path):
+    workbook_path = tmp_path / "scope.csv"
+    workbook_path.write_text("Metric,Value\nA,10\n", encoding="utf-8")
+
+    async def scenario():
+        scope = CapabilityScope(ownership=ScopeOwnership.RUN)
+        wrapped = instrument_tool(
+            spreadsheet_read,
+            CapabilityDefinition("spreadsheet_read", "local_deterministic", execution_mode=ExecutionMode.BLOCKING),
+            {"scope": scope},
+        )
+
+        first = await wrapped(str(workbook_path), {"sheet": "Demand"})
+        second = await wrapped(str(workbook_path), {"sheet": "Demand"})
+        context = scope.workbook_context
+        assert first.workbook_sha256 == second.workbook_sha256
+        assert context is not None
+        assert context.stats.capture_count == 1
+        assert context.stats.read_cache_hits == 1
+
+        await scope.close()
+        assert scope.workbook_context is None
+
+    asyncio.run(scenario())
+
+
 def test_public_function_middleware_preserves_provider_errors_and_cleanup():
     async def scenario():
         metrics = RunMetrics("middleware-error", "DIRECT", "direct")

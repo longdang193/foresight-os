@@ -18,7 +18,16 @@ from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.runtime.local_toolbelt import AnalysisOperation, SheetSelection
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+WORKLOAD_ID = "workbook-session-reuse-level1-v1"
+_FINGERPRINT_EXCLUDES = (
+    "work/",
+    "build/",
+    "data/",
+    ".git/",
+    ".pytest_cache/",
+    "src/foresight_os.egg-info/",
+)
 
 
 def _revision_metadata() -> dict[str, str]:
@@ -39,6 +48,71 @@ def _revision_metadata() -> dict[str, str]:
         "commit": revision,
         "repo_root": str(repo_root),
         "package_path": str(package_path),
+    }
+
+
+def _git_output(repo_root: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+
+def _dirty_paths(repo_root: Path) -> list[str]:
+    paths = []
+    for line in _git_output(repo_root, "status", "--porcelain=v1", "--untracked-files=all").splitlines():
+        if len(line) < 4:
+            continue
+        path = line[3:]
+        if " -> " in path:
+            path = path.rsplit(" -> ", 1)[-1]
+        paths.append(path.replace("\\", "/"))
+    return sorted(set(paths))
+
+
+def _fingerprint_paths(repo_root: Path, *, prefixes: tuple[str, ...] = ()) -> list[Path]:
+    tracked = [Path(item) for item in _git_output(repo_root, "ls-files", "-z").split("\0") if item]
+    dirty = [Path(item) for item in _dirty_paths(repo_root)]
+    paths = sorted(set(tracked + dirty), key=lambda item: item.as_posix())
+    result = []
+    for path in paths:
+        normalized = path.as_posix()
+        if any(normalized == prefix.rstrip("/") or normalized.startswith(prefix) for prefix in _FINGERPRINT_EXCLUDES):
+            continue
+        if prefixes and not any(normalized.startswith(prefix) for prefix in prefixes):
+            continue
+        absolute = repo_root / path
+        if absolute.is_file():
+            result.append(path)
+    return result
+
+
+def _fingerprint(repo_root: Path, paths: list[Path]) -> str:
+    digest = hashlib.sha256()
+    for path in paths:
+        digest.update(path.as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update((repo_root / path).read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _identity_metadata() -> dict[str, object]:
+    repo_root = Path(__file__).parents[2].resolve()
+    harness_paths = (
+        "evaluation/probes/optimization_measurement.py",
+        "evaluation/probes/run_optimization_probe.py",
+        "evaluation/probes/compare_optimization_receipts.py",
+    )
+    harness_files = [Path(path) for path in harness_paths if (repo_root / path).is_file()]
+    return {
+        "source_tree_fingerprint": _fingerprint(repo_root, _fingerprint_paths(repo_root)),
+        "implementation_fingerprint": _fingerprint(repo_root, _fingerprint_paths(repo_root, prefixes=("src/foresight_os/",))),
+        "harness_fingerprint": _fingerprint(repo_root, harness_files),
+        "dirty_paths": _dirty_paths(repo_root),
     }
 
 
@@ -215,8 +289,9 @@ def build_receipt(
         "mode": mode,
         "status": "VERIFIED" if native_mcp.get("status") == "VERIFIED" else "FAILED",
         "environment": _environment_metadata(),
-        "revision": _revision_metadata(),
-        "workload": {"fixture": fixture.name, "fixture_sha256": hashlib.sha256(fixture.read_bytes()).hexdigest(), "warmups": 2, "measured_runs": 10, "patterns": sorted(patterns)},
+        "revision": {**_revision_metadata(), **_identity_metadata(), "measurement_mode": mode},
+        "benchmark": {"workload_id": WORKLOAD_ID, "schema_version": SCHEMA_VERSION},
+        "workload": {"workload_id": WORKLOAD_ID, "fixture": fixture.name, "fixture_sha256": hashlib.sha256(fixture.read_bytes()).hexdigest(), "warmups": 2, "measured_runs": 10, "patterns": sorted(patterns)},
         "acceptance": thresholds,
         "accepted_finding_count": accepted_count,
         "economics": economics,

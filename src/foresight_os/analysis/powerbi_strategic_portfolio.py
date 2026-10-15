@@ -12,7 +12,7 @@ from foresight_os.analysis.review_workflow import review_and_accept_pending_anal
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
 from foresight_os.persistence.analysis_store import AnalysisStore
-from foresight_os.runtime.local_toolbelt import SheetSelection, ToolbeltError, spreadsheet_read
+from foresight_os.runtime.local_toolbelt import SheetSelection, ToolbeltError, WorkbookSession, spreadsheet_read
 
 
 @dataclass(frozen=True)
@@ -117,11 +117,11 @@ def _forward_signal_index(signal_rows: list[dict[str, Any]], segment: str | None
     values = [(_number(row.get("Change_Index")) or 0.0) for row in rows]
     return sum(values) / len(values) if values else 0.0
 
-def analyze_powerbi_strategic_portfolio(source: Path) -> PowerBIAnalysis:
+def analyze_powerbi_strategic_portfolio(source: Path, *, workbook_session: WorkbookSession | None = None) -> PowerBIAnalysis:
     source = Path(source)
-    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    digest = workbook_session.snapshot.sha256 if workbook_session is not None else hashlib.sha256(source.read_bytes()).hexdigest()
     sheets = ("Brief", "Dim_Region", "Dim_Segment", "Fact_Performance", "Targets", "Forward_Signals", "Measure_Definitions", "Dashboard_Snapshot", "Strategic_Options", "Change_One_Input")
-    workbook = spreadsheet_read(source, SheetSelection(sheet_names=sheets, include_hidden=True, include_hidden_rows=True))
+    workbook = spreadsheet_read(source, SheetSelection(sheet_names=sheets, include_hidden=True, include_hidden_rows=True), workbook_session=workbook_session)
     tables = {name: _table(workbook, name) for name in sheets}
     rows = {name: _rows(table) for name, table in tables.items() if name != "Brief"}
     evidence: list[Evidence] = []

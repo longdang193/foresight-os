@@ -12,7 +12,7 @@ from foresight_os.analysis.review_workflow import review_and_accept_pending_anal
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
 from foresight_os.persistence.analysis_store import AnalysisStore
-from foresight_os.runtime.local_toolbelt import SheetSelection, ToolbeltError, spreadsheet_read
+from foresight_os.runtime.local_toolbelt import SheetSelection, ToolbeltError, WorkbookSession, spreadsheet_read
 
 
 @dataclass(frozen=True)
@@ -101,10 +101,10 @@ def _action(evidence_strength: float, deployment: int, relevance: float, impact:
         return "Experiment"
     return "Monitor"
 
-def analyze_technology_radar(source: Path) -> TechnologyAnalysis:
+def analyze_technology_radar(source: Path, *, workbook_session: WorkbookSession | None = None) -> TechnologyAnalysis:
     source = Path(source)
-    digest = hashlib.sha256(source.read_bytes()).hexdigest()
-    workbook = spreadsheet_read(source, SheetSelection(sheet_names=("Brief", "Signals", "Company_Relevance", "Competitor_Actions", "Scenario_Signposts", "Priority_Scoring"), include_hidden=True, include_hidden_rows=True))
+    digest = workbook_session.snapshot.sha256 if workbook_session is not None else hashlib.sha256(source.read_bytes()).hexdigest()
+    workbook = spreadsheet_read(source, SheetSelection(sheet_names=("Brief", "Signals", "Company_Relevance", "Competitor_Actions", "Scenario_Signposts", "Priority_Scoring"), include_hidden=True, include_hidden_rows=True), workbook_session=workbook_session)
     brief, signal_table, relevance_table, competitor_table, signpost_table, priority_table = [_table(workbook, item) for item in ("Brief", "Signals", "Company_Relevance", "Competitor_Actions", "Scenario_Signposts", "Priority_Scoring")]
     signals, relevances, competitors, signposts, priorities = [_rows(table) for table in (signal_table, relevance_table, competitor_table, signpost_table, priority_table)]
     evidence: list[Evidence] = []

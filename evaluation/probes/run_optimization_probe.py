@@ -18,6 +18,11 @@ from agent_framework import Agent, ChatResponse, ChatResponseUpdate, Content, Fu
 from foresight_os.controller.recipes import ExecutionPattern, RecipeName, make_recipe
 from foresight_os.runtime.capabilities import CapabilityDefinition, CapabilityScope, instrument_tool
 from foresight_os.runtime.local_toolbelt import AnalysisOperation, SheetSelection, data_analysis, spreadsheet_read
+
+try:
+    from foresight_os.runtime.local_toolbelt import WorkbookContext
+except ImportError:
+    WorkbookContext = None
 from foresight_os.runtime.workflow import run_recipe_async
 from optimization_measurement import _metric_snapshot, build_receipt, observed_xlsx_state, process_rss_bytes, stage_metric
 
@@ -130,12 +135,62 @@ def _measure_workbook(path: Path) -> dict[str, object]:
     durations: list[float] = []
     allocations: list[int] = []
     result = None
-    for _ in range(2):
-        result = spreadsheet_read(path, SheetSelection(include_hidden=True, include_hidden_rows=True))
+    full_selection = SheetSelection(include_hidden=True, include_hidden_rows=True)
+    session_observations = {
+        "available": WorkbookContext is not None,
+        "cold": {"capture_count": 0, "capture_hash_count": 0, "currentness_hash_count": 0, "xlsx_parse_count": 0, "openpyxl_load_count": 0},
+        "warm_identical": {"capture_count": 0, "capture_hash_count": 0, "currentness_hash_count": 0, "xlsx_parse_count": 0, "openpyxl_load_count": 0},
+        "different_selection": {"capture_count": 0, "capture_hash_count": 0, "currentness_hash_count": 0, "xlsx_parse_count": 0, "openpyxl_load_count": 0},
+        "analyst_to_validator": {"capture_count": 0, "capture_hash_count": 0, "currentness_hash_count": 0, "xlsx_parse_count": 0, "openpyxl_load_count": 0},
+        "explicit_currentness": {"capture_count": 0, "capture_hash_count": 0, "currentness_hash_count": 0, "xlsx_parse_count": 0, "openpyxl_load_count": 0},
+        "resource_observations": {},
+    }
+    context = None
+    session = None
+    if WorkbookContext is not None:
+        from foresight_os.analysis.independent_validation import read_validation_source
+
+        context = WorkbookContext()
+        before = context.stats.to_dict()
+        session = context.session_for_source(path)
+
+        def stats_snapshot():
+            return context.stats.to_dict()
+
+        result = session.read(full_selection)
+        after = stats_snapshot()
+        session_observations["cold"] = {field: after[field] - before[field] for field in after}
+        before = after
+        warm_result = session.read(full_selection)
+        after = stats_snapshot()
+        session_observations["warm_identical"] = {field: after[field] - before[field] for field in after}
+        first_sheet = result.sheets[0].name if result.sheets else ""
+        before = after
+        session.read(SheetSelection(ranges=((first_sheet, "A1:B2"),)))
+        after = stats_snapshot()
+        session_observations["different_selection"] = {field: after[field] - before[field] for field in after}
+        before = after
+        validation_result = read_validation_source(path, full_selection, workbook_session=session)
+        after = stats_snapshot()
+        session_observations["analyst_to_validator"] = {field: after[field] - before[field] for field in after}
+        before = after
+        currentness = session.currentness_hash()
+        after = stats_snapshot()
+        session_observations["explicit_currentness"] = {field: after[field] - before[field] for field in after}
+        session_observations["resource_observations"] = {
+            "snapshot_bytes": session.snapshot.byte_size,
+            "authority_bytes": context.authority.bytes_used,
+            "derived_cache_bytes": session.cache.bytes_used,
+            "peak_in_flight_parse_bytes": context.stats.peak_in_flight_parse_bytes,
+            "same_view_sha_matches": warm_result.workbook_sha256 == validation_result.workbook_sha256 == currentness,
+        }
+    else:
+        for _ in range(2):
+            result = spreadsheet_read(path, full_selection)
     for _ in range(10):
         tracemalloc.start()
         started = time.perf_counter()
-        result = spreadsheet_read(path, SheetSelection(include_hidden=True, include_hidden_rows=True))
+        result = spreadsheet_read(path, full_selection)
         current, peak = tracemalloc.get_traced_memory()
         tracemalloc.stop()
         durations.append((time.perf_counter() - started) * 1000)
@@ -143,6 +198,8 @@ def _measure_workbook(path: Path) -> dict[str, object]:
     table = result.tables[0]
     value_column = "Value" if "Value" in table.columns else table.columns[-1]
     analysis = data_analysis(table, AnalysisOperation("aggregate", value_column=value_column))
+    if context is not None:
+        context.close()
     return {
         "source": "fixture",
         "sheet_count": len(result.sheets),
@@ -154,6 +211,7 @@ def _measure_workbook(path: Path) -> dict[str, object]:
         "deterministic_key": analysis.deterministic_key,
         "source_hash": result.workbook_sha256,
         "local_tool_calls": 13,
+        "session_reuse": session_observations,
     }
 
 

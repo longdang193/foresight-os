@@ -1,6 +1,7 @@
 import inspect
 import asyncio
 import functools
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -82,9 +83,14 @@ class CapabilityScope:
     semaphores: dict[str, asyncio.Semaphore] = field(default_factory=dict)
     executor: ThreadPoolExecutor | None = None
     workbook_cache: Any = None
+    workbook_context: Any = None
     _closed: bool = field(default=False, init=False, repr=False)
+    _cancel_events: set[asyncio.Event] = field(default_factory=set, init=False, repr=False)
+    _workbook_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
 
     def register(self, resource: Any, ownership: CapabilityOwnership = CapabilityOwnership.OWNED) -> Any:
+        if self._closed:
+            raise RuntimeError("capability scope is closed")
         if ownership == CapabilityOwnership.OWNED and all(item is not resource for item in self.resources):
             self.resources.append(resource)
         return resource
@@ -97,11 +103,20 @@ class CapabilityScope:
             return
         self._closed = True
         errors: list[BaseException] = []
+        for cancel_event in tuple(self._cancel_events):
+            cancel_event.set()
         if self.executor is not None:
             executor = self.executor
             self.executor = None
             try:
                 await asyncio.to_thread(executor.shutdown, wait=True, cancel_futures=False)
+            except BaseException as error:
+                errors.append(error)
+        if self.workbook_context is not None:
+            context = self.workbook_context
+            self.workbook_context = None
+            try:
+                context.close()
             except BaseException as error:
                 errors.append(error)
         if self.workbook_cache is not None:
@@ -126,6 +141,25 @@ class CapabilityScope:
             error = RuntimeError(f"failed to close {len(errors)} capability resource(s)")
             error.errors = errors
             raise error from errors[0]
+
+    def get_workbook_context(self) -> Any:
+        if self._closed:
+            raise RuntimeError("capability scope is closed")
+        with self._workbook_lock:
+            if self.workbook_context is None:
+                from foresight_os.runtime.local_toolbelt import WorkbookContext
+
+                self.workbook_context = WorkbookContext()
+            return self.workbook_context
+
+    def register_cancel_event(self, cancel_event: asyncio.Event) -> None:
+        if self._closed:
+            cancel_event.set()
+            raise RuntimeError("capability scope is closed")
+        self._cancel_events.add(cancel_event)
+
+    def unregister_cancel_event(self, cancel_event: asyncio.Event) -> None:
+        self._cancel_events.discard(cancel_event)
 
 
 class CapabilityResolver:
@@ -349,18 +383,30 @@ def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, cont
     semaphore = semaphores.setdefault(definition.id, asyncio.Semaphore(max(1, definition.max_parallelism)))
     mode = definition.execution_mode
 
-    def blocking_call(args: tuple[Any, ...], kwargs: dict[str, Any], cancel_event: asyncio.Event | None) -> Any:
+    def workbook_kwargs(args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
+        if scope is None or definition.id not in {"spreadsheet_read", "data_analysis", "calculation"}:
+            return dict(kwargs)
+        from foresight_os.runtime.local_toolbelt import WorkbookSession
+
+        workbook_context = scope.get_workbook_context()
         effective_kwargs = dict(kwargs)
-        if definition.id in {"spreadsheet_read", "data_analysis"} and scope is not None:
-            try:
-                accepts_cache = "_cache" in inspect.signature(dispatch).parameters
-            except (TypeError, ValueError):
-                accepts_cache = False
-            if accepts_cache:
-                if getattr(scope, "workbook_cache", None) is None:
-                    from foresight_os.runtime.local_toolbelt import WorkbookReadCache
-                    scope.workbook_cache = WorkbookReadCache()
-                effective_kwargs.setdefault("_cache", scope.workbook_cache)
+        if definition.id == "spreadsheet_read" and "workbook_session" not in effective_kwargs:
+            source = args[0] if args else effective_kwargs.get("source")
+            if source is not None:
+                effective_kwargs["workbook_session"] = workbook_context.session_for_source(source)
+        elif definition.id == "data_analysis":
+            table = args[0] if args else effective_kwargs.get("table")
+            session = workbook_context.session_for_table(table) if table is not None and not isinstance(table, Mapping) else None
+            effective_kwargs.setdefault("_cache", workbook_context.derived_cache)
+            effective_kwargs.setdefault("_stats", workbook_context.stats)
+            if isinstance(session, WorkbookSession):
+                effective_kwargs.setdefault("workbook_session", session)
+        elif definition.id == "calculation":
+            effective_kwargs.setdefault("_authority", workbook_context.authority)
+        return effective_kwargs
+
+    def blocking_call(args: tuple[Any, ...], kwargs: dict[str, Any], cancel_event: asyncio.Event | None) -> Any:
+        effective_kwargs = workbook_kwargs(args, kwargs)
         if cancel_event is not None:
             try:
                 parameters = inspect.signature(dispatch).parameters
@@ -382,6 +428,8 @@ def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, cont
         queue_started = time.perf_counter()
         cancel_event = asyncio.Event() if mode == ExecutionMode.BLOCKING else None
         try:
+            if scope is not None and scope._closed:
+                raise RuntimeError("capability scope is closed")
             if budget is not None and not budget.reserve(tool_calls=1):
                 raise BudgetExceededError(f"maximum tool calls exceeded before dispatch: {definition.id}")
             async with semaphore:
@@ -390,6 +438,8 @@ def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, cont
                 if metrics is not None:
                     metrics.record_tool_call(str(context.get("tool_call_kind", "local")))
                 if mode == ExecutionMode.BLOCKING:
+                    if scope is not None:
+                        scope.register_cancel_event(cancel_event)
                     if scope is not None and getattr(scope, "executor", None) is None:
                         scope.executor = ThreadPoolExecutor(max_workers=max(1, definition.max_parallelism))
                     executor = getattr(scope, "executor", None)
@@ -406,13 +456,11 @@ def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, cont
                             metrics.cancellation_settlements += 1
                         await asyncio.shield(future)
                         raise
+                    finally:
+                        if scope is not None:
+                            scope.unregister_cancel_event(cancel_event)
                 else:
-                    effective_kwargs = dict(kwargs)
-                    if definition.id in {"spreadsheet_read", "data_analysis"} and scope is not None:
-                        if getattr(scope, "workbook_cache", None) is None:
-                            from foresight_os.runtime.local_toolbelt import WorkbookReadCache
-                            scope.workbook_cache = WorkbookReadCache()
-                        effective_kwargs.setdefault("_cache", scope.workbook_cache)
+                    effective_kwargs = workbook_kwargs(args, kwargs)
                     result = dispatch(*args, **effective_kwargs)
                     if inspect.isawaitable(result):
                         result = await result
@@ -518,7 +566,15 @@ def instrument_tool(tool: Any, definition: CapabilityDefinition, context: Mappin
         parameters=[
             parameter
             for parameter in signature.parameters.values()
-            if parameter.name not in {"cancel_check", "_cache"}
+            if parameter.name not in {
+                "cancel_check",
+                "_cache",
+                "_source_hash",
+                "_source_label",
+                "_authority",
+                "_stats",
+                "workbook_session",
+            }
         ]
     )
     setattr(invoke, "__foresight_instrumented__", True)

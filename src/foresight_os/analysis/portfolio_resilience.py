@@ -26,7 +26,7 @@ from foresight_os.domain.models import (
     SourceLocator,
 )
 from foresight_os.persistence.analysis_store import AnalysisStore
-from foresight_os.runtime.local_toolbelt import SheetSelection, ToolbeltError, spreadsheet_read
+from foresight_os.runtime.local_toolbelt import SheetSelection, ToolbeltError, WorkbookSession, spreadsheet_read
 
 
 @dataclass(frozen=True)
@@ -183,9 +183,9 @@ def _record(
     )
 
 
-def analyze_portfolio_resilience(source: Path) -> PortfolioAnalysis:
+def analyze_portfolio_resilience(source: Path, *, workbook_session: WorkbookSession | None = None) -> PortfolioAnalysis:
     source = Path(source)
-    source_sha256 = hashlib.sha256(source.read_bytes()).hexdigest()
+    source_sha256 = workbook_session.snapshot.sha256 if workbook_session is not None else hashlib.sha256(source.read_bytes()).hexdigest()
     workbook = spreadsheet_read(
         source,
         SheetSelection(
@@ -193,6 +193,7 @@ def analyze_portfolio_resilience(source: Path) -> PortfolioAnalysis:
             include_hidden=True,
             include_hidden_rows=True,
         ),
+        workbook_session=workbook_session,
     )
     brief_table = _table(workbook, "Brief")
     sales_table = _table(workbook, "Sales_History")

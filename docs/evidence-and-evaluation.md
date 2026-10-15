@@ -130,6 +130,17 @@ accepted-finding-normalized values, and a no-growth soak. Comparisons fail
 closed on missing evidence, schema or workload mismatch, zero denominators,
 resource growth, or threshold regressions.
 
+Workbook performance evidence uses one run-owned `WorkbookContext` with one
+immutable `WorkbookSession` per captured source version. A pinned read reuses
+the captured bytes; an explicit currentness check hashes the mutable original;
+and a new capture is required to observe a changed source. Derived read and
+analysis results may be evicted, while authority records and pinned snapshots
+remain valid until the run-owned context closes. The Level 1 reuse boundary is
+same-snapshot, same-selection reuse; normalized parsed-workbook reuse is not
+claimed here. The matched receipt separately gates cold capture/hash, warm
+identical reads, same-snapshot selection changes, analyst-to-validator reuse,
+and explicit currentness hashing.
+
 Run structural evaluation and release measurement through the scripts documented
 in `evaluation/README.md` and `.github/workflows/evidence.yml`. Keep provider
 evidence in its protected, separately invoked boundary.

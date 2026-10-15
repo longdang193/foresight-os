@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 REQUIRED_PATTERNS = {"DIRECT", "ANALYZE", "CONCURRENT", "HANDOFF", "CHALLENGE_RECOMMENDATION"}
 ECONOMIC_FIELDS = (
     "model_calls",
@@ -22,6 +22,8 @@ SOAK_FIELDS = (
     "owned_capability_resources",
     "mcp_session_count",
 )
+SESSION_PHASES = ("cold", "warm_identical", "different_selection", "analyst_to_validator", "explicit_currentness")
+SESSION_COUNTERS = ("capture_count", "capture_hash_count", "currentness_hash_count", "xlsx_parse_count", "openpyxl_load_count")
 
 
 def _tool_calls(receipt: dict) -> int:
@@ -36,6 +38,7 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
     missing: list[str] = []
     required = (
         "schema_version",
+        "benchmark",
         "revision",
         "accepted_finding_count",
         "economics",
@@ -52,9 +55,15 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
     if receipt.get("schema_version") != SCHEMA_VERSION:
         missing.append(f"schema_version={SCHEMA_VERSION}")
     revision = receipt.get("revision", {})
-    for field in ("commit", "repo_root", "package_path"):
+    for field in ("commit", "repo_root", "package_path", "source_tree_fingerprint", "implementation_fingerprint", "harness_fingerprint", "measurement_mode"):
         if not isinstance(revision.get(field), str) or not revision[field].strip():
             missing.append(f"revision.{field}")
+    if not isinstance(revision.get("dirty_paths"), list):
+        missing.append("revision.dirty_paths")
+    benchmark = receipt.get("benchmark", {})
+    for field in ("workload_id", "schema_version"):
+        if not benchmark.get(field):
+            missing.append(f"benchmark.{field}")
     accepted_count = receipt.get("accepted_finding_count")
     if not isinstance(accepted_count, int) or accepted_count <= 0:
         missing.append("accepted_finding_count>0")
@@ -86,6 +95,19 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
         missing.append("xlsx.p95_ms>0")
     if not _is_number(workbook.get("peak_allocation_bytes")) or int(workbook.get("peak_allocation_bytes", 0)) <= 0:
         missing.append("xlsx.peak_allocation_bytes>0")
+    session_reuse = workbook.get("session_reuse")
+    if not isinstance(session_reuse, dict):
+        missing.append("xlsx.session_reuse")
+    else:
+        for phase in SESSION_PHASES:
+            counters = session_reuse.get(phase)
+            if not isinstance(counters, dict):
+                missing.append(f"xlsx.session_reuse.{phase}")
+                continue
+            for field in SESSION_COUNTERS:
+                value = counters.get(field)
+                if not _is_number(value) or int(value) < 0:
+                    missing.append(f"xlsx.session_reuse.{phase}.{field}")
     patterns = receipt.get("maf_patterns", {})
     missing.extend(f"maf_patterns.{name}" for name in sorted(REQUIRED_PATTERNS - set(patterns)))
     for name, item in patterns.items():
@@ -114,8 +136,11 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
             missing.append(f"soak.resource_growth.{field}")
     if receipt.get("native_mcp", {}).get("status") != "VERIFIED":
         missing.append("native_mcp.status=VERIFIED")
-    if not receipt.get("workload", {}).get("patterns"):
+    workload = receipt.get("workload", {})
+    if not workload.get("patterns"):
         missing.append("workload.patterns")
+    if workload.get("workload_id") != benchmark.get("workload_id"):
+        missing.append("workload.workload_id")
     return sorted(set(missing))
 
 
@@ -154,6 +179,8 @@ def validate_stability(baseline_repeat: list[dict], release_repeat: list[dict]) 
             errors.append(f"{label}.environment differs between repeats")
         if first.get("revision") != second.get("revision"):
             errors.append(f"{label}.revision differs between repeats")
+        if first.get("benchmark") != second.get("benchmark"):
+            errors.append(f"{label}.benchmark differs between repeats")
         try:
             drift = _safe_pct(
                 float(second["maf_patterns"]["CHALLENGE_RECOMMENDATION"]["latency"]["wall_time_ms_p95"]),
@@ -173,6 +200,10 @@ def validate_stability(baseline_repeat: list[dict], release_repeat: list[dict]) 
             errors.append("baseline/release workload differs")
         if baseline_repeat[0].get("environment") != release_repeat[0].get("environment"):
             errors.append("baseline/release environment differs")
+        if baseline_repeat[0].get("benchmark") != release_repeat[0].get("benchmark"):
+            errors.append("baseline/release benchmark differs")
+        if baseline_repeat[0].get("revision", {}).get("harness_fingerprint") != release_repeat[0].get("revision", {}).get("harness_fingerprint"):
+            errors.append("baseline/release harness differs")
         if (
             baseline_repeat[0].get("revision", {}).get("commit")
             == release_repeat[0].get("revision", {}).get("commit")
@@ -198,6 +229,14 @@ def compare(baseline: dict, release: dict) -> dict:
         return {"accepted": False, "missing_required_evidence": {"baseline": missing_baseline, "release": missing_release}}
 
     mismatches: list[str] = []
+    if baseline.get("benchmark") != release.get("benchmark"):
+        mismatches.append("benchmark")
+    if baseline.get("environment") != release.get("environment"):
+        mismatches.append("environment")
+    if baseline.get("revision", {}).get("harness_fingerprint") != release.get("revision", {}).get("harness_fingerprint"):
+        mismatches.append("harness")
+    if baseline.get("revision", {}).get("implementation_fingerprint") == release.get("revision", {}).get("implementation_fingerprint"):
+        mismatches.append("implementation_fingerprint")
     if baseline.get("workload") != release.get("workload"):
         mismatches.append("workload")
     if baseline.get("xlsx", {}).get("deterministic_key") != release.get("xlsx", {}).get("deterministic_key"):
@@ -252,6 +291,27 @@ def compare(baseline: dict, release: dict) -> dict:
         float(release_economics["per_accepted_finding"][field]) <= float(baseline_economics["per_accepted_finding"][field])
         for field in {"model_calls", "tool_calls_total", "local_tool_calls", "mcp_tool_calls", "external_http_requests"}
     )
+    release_session = release["xlsx"]["session_reuse"]
+    session_gate_failures: list[str] = []
+    if not release_session.get("available", False):
+        session_gate_failures.append("session_reuse.available")
+    cold = release_session["cold"]
+    if cold["capture_count"] != 1 or cold["capture_hash_count"] != 1:
+        session_gate_failures.append("session_reuse.cold.capture")
+    if cold["xlsx_parse_count"] < 1 or cold["openpyxl_load_count"] < 2:
+        session_gate_failures.append("session_reuse.cold.parse")
+    for phase in ("warm_identical", "different_selection", "analyst_to_validator", "explicit_currentness"):
+        counters = release_session[phase]
+        if counters["capture_count"] != 0 or counters["capture_hash_count"] != 0:
+            session_gate_failures.append(f"session_reuse.{phase}.capture")
+    if any(release_session["warm_identical"][field] != 0 for field in ("currentness_hash_count", "xlsx_parse_count", "openpyxl_load_count")):
+        session_gate_failures.append("session_reuse.warm_identical.reuse")
+    if release_session["analyst_to_validator"]["xlsx_parse_count"] != 0 or release_session["analyst_to_validator"]["openpyxl_load_count"] != 0:
+        session_gate_failures.append("session_reuse.analyst_to_validator.reuse")
+    if release_session["explicit_currentness"]["currentness_hash_count"] != 1:
+        session_gate_failures.append("session_reuse.explicit_currentness")
+    if not release_session.get("resource_observations", {}).get("same_view_sha_matches", False):
+        session_gate_failures.append("session_reuse.same_view_sha_matches")
     accepted = (
         p95_regression <= 20
         and allocation_regression <= 15
@@ -259,6 +319,7 @@ def compare(baseline: dict, release: dict) -> dict:
         and all(value <= 20 for value in pattern_regressions.values())
         and non_regressive_economics
         and not reused_stage_new_calls
+        and not session_gate_failures
     )
     return {
         "accepted": accepted,
@@ -270,6 +331,7 @@ def compare(baseline: dict, release: dict) -> dict:
         "workload": baseline["workload"],
         "native_mcp": {"baseline": baseline["native_mcp"]["status"], "release": release["native_mcp"]["status"]},
         "reused_stage_new_calls": reused_stage_new_calls,
+        "session_reuse": {"release": release_session, "gate_failures": session_gate_failures},
     }
 
 

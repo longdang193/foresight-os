@@ -12,7 +12,7 @@ from foresight_os.analysis.review_workflow import review_and_accept_pending_anal
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
 from foresight_os.persistence.analysis_store import AnalysisStore
-from foresight_os.runtime.local_toolbelt import SheetSelection, ToolbeltError, spreadsheet_read
+from foresight_os.runtime.local_toolbelt import SheetSelection, ToolbeltError, WorkbookSession, spreadsheet_read
 
 
 @dataclass(frozen=True)
@@ -110,10 +110,10 @@ def _unit_cost_eur(row: dict[str, Any]) -> float:
 def _record(record_id: str, statement: str, evidence_ids: list[str], assumptions: tuple[str, ...], uncertainty: tuple[str, ...], disconfirmation: tuple[str, ...], monitoring: tuple[str, ...]) -> AnalyticalRecord:
     return AnalyticalRecord(record_id, statement, Basis.DERIVED, Assessment.SUPPORTED, evidence_ids=list(dict.fromkeys(evidence_ids)), assumptions=assumptions, uncertainty=uncertainty, confidence_rationale="Derived from deterministic row-level calculations with explicit exclusions and assumptions.", disconfirmation_conditions=disconfirmation, monitoring_indicators=monitoring)
 
-def analyze_supplier_resilience(source: Path) -> SupplierAnalysis:
+def analyze_supplier_resilience(source: Path, *, workbook_session: WorkbookSession | None = None) -> SupplierAnalysis:
     source = Path(source)
-    digest = hashlib.sha256(source.read_bytes()).hexdigest()
-    workbook = spreadsheet_read(source, SheetSelection(sheet_names=("Brief", "Supplier_Master", "Incidents", "Scenario_Assumptions", "Mitigation_Options"), include_hidden=True, include_hidden_rows=True))
+    digest = workbook_session.snapshot.sha256 if workbook_session is not None else hashlib.sha256(source.read_bytes()).hexdigest()
+    workbook = spreadsheet_read(source, SheetSelection(sheet_names=("Brief", "Supplier_Master", "Incidents", "Scenario_Assumptions", "Mitigation_Options"), include_hidden=True, include_hidden_rows=True), workbook_session=workbook_session)
     brief, supplier_table, incident_table, scenario_table, option_table = [_table(workbook, name) for name in ("Brief", "Supplier_Master", "Incidents", "Scenario_Assumptions", "Mitigation_Options")]
     supplier_rows, incident_rows, scenario_rows, option_rows = [_rows(table) for table in (supplier_table, incident_table, scenario_table, option_table)]
     evidence: list[Evidence] = []

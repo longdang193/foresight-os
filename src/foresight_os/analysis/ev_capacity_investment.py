@@ -13,7 +13,7 @@ from foresight_os.analysis.review_workflow import review_and_accept_pending_anal
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
 from foresight_os.persistence.analysis_store import AnalysisStore
-from foresight_os.runtime.local_toolbelt import SheetSelection, ToolbeltError, spreadsheet_read
+from foresight_os.runtime.local_toolbelt import SheetSelection, ToolbeltError, WorkbookSession, spreadsheet_read
 
 
 @dataclass(frozen=True)
@@ -102,11 +102,11 @@ def _record(record_id: str, statement: str, evidence_ids: list[str], assumptions
 def _capacity_dependency_ids(capacity_rows: list[tuple[int, dict[str, Any]]], by_row: dict[tuple[str, int], Evidence], year: int) -> tuple[str, ...]:
     return tuple(by_row[("Capacity", index)].id for index, row in capacity_rows if int(row.get("Year")) == year)
 
-def analyze_ev_capacity_investment(source: Path) -> EVAnalysis:
+def analyze_ev_capacity_investment(source: Path, *, workbook_session: WorkbookSession | None = None) -> EVAnalysis:
     source = Path(source)
-    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    digest = workbook_session.snapshot.sha256 if workbook_session is not None else hashlib.sha256(source.read_bytes()).hexdigest()
     sheets = ("Brief", "Demand_History", "Demand_Scenarios", "Capacity", "Infrastructure", "Policy_Signals", "Strategic_Options", "Reported_KPIs")
-    workbook = spreadsheet_read(source, SheetSelection(sheet_names=sheets, include_hidden=True, include_hidden_rows=True))
+    workbook = spreadsheet_read(source, SheetSelection(sheet_names=sheets, include_hidden=True, include_hidden_rows=True), workbook_session=workbook_session)
     tables = {name: _table(workbook, name) for name in sheets}
     rows = {name: _rows(table) for name, table in tables.items() if name != "Brief"}
     evidence: list[Evidence] = []

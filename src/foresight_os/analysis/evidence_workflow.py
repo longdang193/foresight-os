@@ -32,6 +32,7 @@ from foresight_os.runtime.local_toolbelt import (
     FormulaStatus,
     SheetSelection,
     ToolbeltError,
+    WorkbookSession,
     data_analysis,
     spreadsheet_read,
 )
@@ -224,10 +225,45 @@ async def run_evidence_workflow(
         return EvidenceWorkflowResult("failed", tuple(), None, None, None, None, None, tuple(tools), type(error).__name__)
 
 
-def accept_pending_evidence(store: AnalysisStore, *, human_decision: str, source_trust_accepted: bool = True) -> EvidenceWorkflowResult:
+def accept_pending_evidence(
+    store: AnalysisStore,
+    *,
+    human_decision: str,
+    source_trust_accepted: bool = True,
+    current_source: Path | None = None,
+) -> EvidenceWorkflowResult:
     state = store.load_pending()
     if state.revision_status != RevisionStatus.PENDING_REVIEW:
         raise ValueError("analysis does not contain a pending evidence review")
+    if current_source is not None:
+        source = Path(current_source)
+        expected_versions = {item.source_locator.file_version for item in state.evidence}
+        try:
+            current_version = hashlib.sha256(source.read_bytes()).hexdigest()
+        except OSError as error:
+            return EvidenceWorkflowResult(
+                "blocked",
+                tuple(),
+                str(source),
+                state.evidence[0] if state.evidence else None,
+                state.claims[0] if state.claims else None,
+                None,
+                state,
+                tuple(),
+                f"current source is unavailable: {type(error).__name__}",
+            )
+        if current_version not in expected_versions:
+            return EvidenceWorkflowResult(
+                "stale",
+                tuple(),
+                str(source),
+                state.evidence[0] if state.evidence else None,
+                state.claims[0] if state.claims else None,
+                None,
+                state,
+                tuple(),
+                "current source does not match the captured evidence version",
+            )
     review = review_analysis_state(state)
     if not source_trust_accepted:
         review = ReviewResult(False, ["human source-trust decision rejected the retrieved source"])
@@ -247,12 +283,14 @@ def run_xlsx_finding_workflow(
     selection: SheetSelection | None = None,
     investigation_id: str = "xlsx-evidence-workflow",
     human_decision: str = "REJECT",
+    workbook_session: WorkbookSession | None = None,
 ) -> EvidenceWorkflowResult:
     """Promote a deterministic workbook analysis into reviewable domain state."""
     try:
-        before = hashlib.sha256(Path(source).read_bytes()).hexdigest()
-        workbook = spreadsheet_read(Path(source), selection)
-        if before != hashlib.sha256(Path(source).read_bytes()).hexdigest():
+        before = workbook_session.snapshot.sha256 if workbook_session is not None else hashlib.sha256(Path(source).read_bytes()).hexdigest()
+        workbook = spreadsheet_read(Path(source), selection, workbook_session=workbook_session)
+        after = workbook_session.currentness_hash() if workbook_session is not None else hashlib.sha256(Path(source).read_bytes()).hexdigest()
+        if before != after:
             raise ToolbeltError("source workbook changed during read")
         if not workbook.tables:
             raise ToolbeltError("workbook selection produced no table")
@@ -267,7 +305,7 @@ def run_xlsx_finding_workflow(
             table = next((candidate for candidate in workbook.tables if (candidate.sheet, candidate.source_range) in requested), None)
             if table is None:
                 raise ToolbeltError("selected range was not found in workbook")
-        result = data_analysis(table, operation)
+        result = data_analysis(table, operation, workbook_session=workbook_session)
         measurements = {(item.provenance.sheet, item.provenance.coordinate): item for item in workbook.measurements}
         evidence: list[Evidence] = []
         selected_columns = {table.columns.index(operation.value_column)} if operation.value_column in table.columns else set(range(len(table.columns)))
