@@ -16,6 +16,7 @@ from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.persistence.ids import canonical_json_hash
 from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, RecipeStage, RecipeName, StageInput, make_recipe
 from foresight_os.domain.models import AnalysisState, Revision, SourceLocator, Evidence
+from foresight_os.runtime.metrics import BudgetExceededError
 from foresight_os.runtime.workflow import CanonicalStageResult, _stage_cache_key, run_recipe_async
 
 
@@ -498,3 +499,42 @@ def test_workflow_uses_one_correction_round_for_canonical_validation_feedback():
     assert result.metrics.correction_rounds == 1
     assert len(prompts) == 2
     assert "canonical validation" in prompts[1]
+
+
+def test_canonical_correction_retry_reserves_agent_call_budget():
+    base = make_recipe(RecipeName.DIRECT)
+    stage = RecipeStage("stage-1", ExecutionPattern.DIRECT, ({"id": "analyst", "purpose": "analyze"},), "prompt", "typed-result", {})
+    recipe = ExecutionRecipe(
+        base.name,
+        base.pattern,
+        base.roles,
+        base.max_agent_steps,
+        base.max_correction_rounds,
+        1,
+        base.completion,
+        base.escalation,
+        base.partial_result,
+        stages=(stage,),
+    )
+
+    class Agent:
+        async def run(self, prompt, **kwargs):
+            return SimpleNamespace(value={"status": "invalid"}, text="")
+
+    class Client:
+        def as_agent(self, **kwargs):
+            return Agent()
+
+    def committer(stage, output, context):
+        raise ValidationError("canonical rejection")
+
+    with pytest.raises(BudgetExceededError, match="agent calls"):
+        asyncio.run(
+            run_recipe_async(
+                recipe,
+                "question",
+                client=Client(),
+                run_id="canonical-correction-budget",
+                run_context={"canonical_result_committer": committer},
+            )
+        )

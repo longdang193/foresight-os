@@ -136,6 +136,26 @@ def test_missing_or_mismatched_delivery_proof_cannot_be_verified(tmp_path):
         persist_delivery_receipt(store, spec, bad, destination="canva")
 
 
+def test_invalidated_presentation_receipt_cannot_be_persisted_or_reported(tmp_path):
+    workbook = __import__("pathlib").Path(__file__).parents[1] / "evaluation" / "cases" / "case-001" / "workbook.csv"
+    run_vertical_slice(workbook, tmp_path / "case-001", human_accept=True)
+    store = AnalysisStore(tmp_path / "case-001")
+    state = store.load_accepted()
+    spec = compile_presentation(state)
+    artifact, relationships = presentation_artifact(state, spec, "presentation-spec.json")
+    store.save_analysis(replace(state, artifacts=[*state.artifacts, artifact], relationships=[*state.relationships, *relationships]))
+    receipt = CanvaDeliveryReceipt("canva", "design-1", spec.analysis_revision, spec.spec_hash, "CONFIRMED", "2026-10-15T00:00:00Z")
+
+    invalidated = invalidate_dependencies(store.load_accepted(), [state.recommendations[0].evidence_ids[0]], "source changed")
+    store.save_analysis(invalidated)
+
+    with pytest.raises(PresentationBoundaryError, match="accepted revision"):
+        persist_delivery_receipt(store, spec, receipt, destination="canva")
+    with pytest.raises(PresentationBoundaryError, match="stale"):
+        verify_persisted_delivery_receipt(store.load_accepted(), spec, destination="canva")
+    assert deliverable_status("canva", store.load_accepted()) == "NOT_STARTED"
+
+
 def test_provider_success_without_local_persistence_is_not_complete():
     spec = type("Spec", (), {"status": "CURRENT", "analysis_revision": 1, "spec_hash": "hash"})()
     receipt = PptxDeliveryReceipt("local-pptx", "deck.pptx", 1, "hash", "SUCCEEDED", "2026-10-15T00:00:00Z")

@@ -15,6 +15,8 @@ from foresight_os.runtime.local_toolbelt import (
     SheetSelection,
     ToolbeltLimits,
     ToolbeltError,
+    TypedMeasurement,
+    _implicit_xlsx_bounds,
     calculation,
     data_analysis,
     spreadsheet_read,
@@ -63,6 +65,22 @@ def test_workbook_read_compacts_implicit_padding_and_provider_serialization(tmp_
     assert result.workbook_sha256 in encoded
     assert "B2" in encoded
     assert len(encoded) < 10_000
+
+
+def test_implicit_xlsx_bounds_uses_sparse_cells_without_iterating():
+    class Cell:
+        def __init__(self, row, column, value):
+            self.row = row
+            self.column = column
+            self.value = value
+
+    class Worksheet:
+        _cells = {(1, 1): Cell(1, 1, "header"), (4, 3): Cell(4, 3, 10)}
+
+        def iter_rows(self):
+            raise AssertionError("implicit bounds must not scan the worksheet grid")
+
+    assert _implicit_xlsx_bounds(Worksheet()) == (1, 1, 3, 4)
 
 
 def test_selected_sheet_does_not_inherit_unselected_sheet_row_limit(tmp_path: Path):
@@ -202,6 +220,52 @@ def test_calculation_rejects_untrusted_json_shaped_measurements():
             formula={"expression": "Demand!C3", "operation": "sum"},
             units={"units": "units"},
         )
+
+
+def test_spreadsheet_measurement_survives_json_provider_boundary(workbook_path):
+    result = spreadsheet_read(workbook_path, SheetSelection(tables=(("Demand", "DemandTable"),)))
+    measurement = next(item for item in result.measurements if item.provenance.coordinate == "C3")
+
+    record = calculation(
+        [json.loads(json.dumps(measurement.to_dict(), default=str))],
+        formula={"expression": "Demand!C3", "operation": "sum"},
+        units={"units": "units"},
+        approved_workbook_sha256=result.workbook_sha256,
+    )
+
+    assert record.verification_status.value == "VERIFIED"
+
+
+def test_fabricated_calculation_mapping_cannot_be_verified():
+    with pytest.raises(ToolbeltError, match="authoritative calculation"):
+        calculation(
+            [{
+                "id": "calculation-fake",
+                "key": {"region": "toolbelt", "measure": "fake", "period": "current", "units": "units", "scenario": "default", "version": "v1"},
+                "formula": "fake",
+                "input_ids": ["measurement-fake"],
+                "output": 12,
+                "units": "units",
+                "source_locators": ["workbook-hash:Demand!C3"],
+            }],
+            formula={"expression": "fake", "operation": "sum"},
+            units={"units": "units"},
+            approved_workbook_sha256="workbook-hash",
+        )
+
+
+def test_serialized_formula_measurements_keep_recalculation_guard(tmp_path):
+    source = tmp_path / "formula.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.append(["Value"])
+    workbook.active.append(["=1+1"])
+    workbook.save(source)
+
+    result = spreadsheet_read(source)
+    payload = result.tables[0].to_dict()
+
+    with pytest.raises(ToolbeltError, match="BLOCKED_RECALCULATION"):
+        data_analysis(payload, AnalysisOperation("aggregate", value_column="Value"))
 
 
 def test_formula_cache_and_manual_recalculation_state_are_truthful(workbook_path, tmp_path):

@@ -23,14 +23,18 @@ def deliverable_status(requested: str, state: Any) -> str:
         return "PERSISTED" if any(str(item.kind).lower() in {"presentation-outline", "presentation_spec"} and item.lifecycle.value == "CURRENT" for item in artifacts) else "NOT_STARTED"
     if normalized in {"pptx", "verified pptx"}:
         return "PERSISTED" if any(
-            item.lifecycle.value == "CURRENT"
+            getattr(state.revision_status, "value", state.revision_status) == "ACCEPTED"
+            and item.id not in set(getattr(state.invalidation, "stale_artifact_ids", ()))
+            and item.lifecycle.value == "CURRENT"
             and isinstance(getattr(item, "delivery_receipt", None), dict)
             and item.delivery_receipt.get("destination") == "pptx"
             for item in artifacts
         ) else "NOT_STARTED"
     if normalized in {"canva", "canva design", "canva receipt"}:
         return "PERSISTED" if any(
-            item.lifecycle.value == "CURRENT"
+            getattr(state.revision_status, "value", state.revision_status) == "ACCEPTED"
+            and item.id not in set(getattr(state.invalidation, "stale_artifact_ids", ()))
+            and item.lifecycle.value == "CURRENT"
             and isinstance(getattr(item, "delivery_receipt", None), dict)
             and item.delivery_receipt.get("destination") == "canva"
             for item in artifacts

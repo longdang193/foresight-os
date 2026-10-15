@@ -293,6 +293,10 @@ def persist_delivery_receipt(store: Any, spec: PresentationSpec, receipt: CanvaD
     payload["presentation_artifact_id"] = artifact_id
     try:
         return store.save_delivery_receipt(artifact_id, payload)
+    except ValueError as error:
+        if "current accepted revision" in str(error) or "stale presentation artifact" in str(error):
+            raise PresentationBoundaryError(str(error)) from error
+        raise PresentationBoundaryError("delivery succeeded but its local receipt could not be persisted") from error
     except Exception as error:
         raise PresentationBoundaryError("delivery succeeded but its local receipt could not be persisted") from error
 
@@ -300,6 +304,10 @@ def persist_delivery_receipt(store: Any, spec: PresentationSpec, receipt: CanvaD
 def verify_persisted_delivery_receipt(state: AnalysisState, spec: PresentationSpec, *, destination: str) -> None:
     artifact_id = f"artifact-presentation-{spec.spec_hash[:16]}"
     artifact = next((item for item in state.artifacts if item.id == artifact_id), None)
+    if artifact is not None and (artifact.id in state.invalidation.stale_artifact_ids or artifact.lifecycle.value != "CURRENT"):
+        raise PresentationBoundaryError("persisted delivery receipt is stale")
+    if state.revision_status != RevisionStatus.ACCEPTED or state.revision != spec.analysis_revision:
+        raise PresentationBoundaryError("persisted delivery receipt is not for the current accepted revision")
     receipt = artifact.delivery_receipt if artifact is not None else None
     if not isinstance(receipt, dict) or receipt.get("destination") != destination or receipt.get("presentation_spec_hash") != spec.spec_hash:
         raise PresentationBoundaryError("persisted delivery receipt is missing or stale")

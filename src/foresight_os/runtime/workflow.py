@@ -226,8 +226,32 @@ def _synthesize_stage_outputs(stage: Any, outputs: list[object], failures: tuple
         raise ValidationError("typed stage synthesis requires mapping outputs")
     first = dict(outputs[0])
     collections = ("evidence", "calculations", "claims", "implications", "recommendations", "artifacts", "relationships")
+
+    def merge_records(key: str) -> list[object]:
+        merged: list[object] = []
+        by_id: dict[str, object] = {}
+        for output in outputs:
+            entries = output.get(key, [])
+            if entries is None:
+                continue
+            if not isinstance(entries, (list, tuple)):
+                raise ValidationError(f"typed stage synthesis requires a list for {key}")
+            for entry in entries:
+                record_id = entry.get("id") if isinstance(entry, Mapping) else None
+                if not record_id:
+                    merged.append(entry)
+                    continue
+                existing = by_id.get(str(record_id))
+                if existing is None:
+                    by_id[str(record_id)] = entry
+                    merged.append(entry)
+                    continue
+                if _canonical_result_hash(existing) != _canonical_result_hash(entry):
+                    raise ValidationError(f"conflicting canonical record for {key}:{record_id}")
+        return merged
+
     for key in collections:
-        first[key] = [entry for output in outputs for entry in list(output.get(key, []))]
+        first[key] = merge_records(key)
     first["assumptions"] = [entry for output in outputs for entry in list(output.get("assumptions", []))]
     first["uncertainty"] = [entry for output in outputs for entry in list(output.get("uncertainty", []))]
     first["monitoring_indicators"] = [entry for output in outputs for entry in list(output.get("monitoring_indicators", []))]
@@ -694,8 +718,12 @@ async def run_recipe_async(
                     canonical = await canonical
                 break
             except ValidationError as error:
+                if budget.total_agent_calls >= budget.max_total_agent_calls:
+                    raise BudgetExceededError("maximum agent calls exceeded before correction dispatch") from error
                 if not budget.correct():
                     raise
+                if not budget.call():
+                    raise BudgetExceededError("maximum agent calls exceeded before correction dispatch") from error
                 metrics.correction_rounds += 1
                 correction_prompt = (
                     f"{stage_input}\n\n"

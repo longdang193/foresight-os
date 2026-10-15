@@ -248,9 +248,12 @@ class TypedTable:
     def to_dict(self) -> dict[str, Any]:
         compact_rows = []
         compact_row_provenance = []
-        for row, provenance in zip(self.rows, self.row_provenance, strict=False):
+        compact_row_measurements = []
+        for index, row in enumerate(self.rows):
             if not any(value not in (None, "") for value in row):
                 continue
+            provenance = self.row_provenance[index] if index < len(self.row_provenance) else ()
+            measurements = self.row_measurements[index] if index < len(self.row_measurements) else ()
             compact_rows.append(list(row))
             compact_row_provenance.append(
                 [
@@ -264,6 +267,7 @@ class TypedTable:
                     if value not in (None, "")
                 ]
             )
+            compact_row_measurements.append([item.to_dict() for item in measurements])
         return {
             "id": self.id,
             "name": self.name,
@@ -271,6 +275,7 @@ class TypedTable:
             "headers": [list(row) for row in self.headers],
             "rows": compact_rows,
             "row_provenance": compact_row_provenance,
+            "row_measurements": compact_row_measurements,
             "row_count": len(self.rows),
             "omitted_blank_row_count": len(self.rows) - len(compact_rows),
             "hidden": self.hidden,
@@ -285,6 +290,25 @@ class TypedTable:
                 for item in self.related_provenance
             ],
         }
+
+
+_AUTHORITATIVE_MEASUREMENTS: dict[tuple[str, str], TypedMeasurement] = {}
+_AUTHORITATIVE_CALCULATIONS: dict[tuple[str, str], CalculationRecord] = {}
+_AUTHORITATIVE_RECORD_LIMIT = 100_000
+
+
+def _remember_authoritative_measurements(measurements: Iterable[TypedMeasurement]) -> None:
+    for measurement in measurements:
+        key = (measurement.provenance.workbook_sha256, measurement.id)
+        _AUTHORITATIVE_MEASUREMENTS[key] = measurement
+    while len(_AUTHORITATIVE_MEASUREMENTS) > _AUTHORITATIVE_RECORD_LIMIT:
+        _AUTHORITATIVE_MEASUREMENTS.pop(next(iter(_AUTHORITATIVE_MEASUREMENTS)))
+
+
+def _remember_authoritative_calculation(record: CalculationRecord, workbook_hash: str) -> None:
+    _AUTHORITATIVE_CALCULATIONS[(workbook_hash, record.id)] = record
+    while len(_AUTHORITATIVE_CALCULATIONS) > _AUTHORITATIVE_RECORD_LIMIT:
+        _AUTHORITATIVE_CALCULATIONS.pop(next(iter(_AUTHORITATIVE_CALCULATIONS)))
 
 
 @dataclass(frozen=True)
@@ -425,7 +449,7 @@ def _in_selection(sheet: str, selection: SheetSelection | None) -> bool:
 
 
 def _implicit_xlsx_bounds(ws) -> tuple[int, int, int, int] | None:
-    used_cells = [cell for row in ws.iter_rows() for cell in row if cell.value is not None]
+    used_cells = [cell for cell in getattr(ws, "_cells", {}).values() if cell.value is not None]
     if not used_cells:
         return None
     return (
@@ -598,11 +622,15 @@ def spreadsheet_read(
         cache_key = _cache.key(source, selection, limits)
         cached_result = _cache.get(cache_key)
         if cached_result is not None:
-            return replace(cached_result, source=str(source))
+            cached_result = replace(cached_result, source=str(source))
+            _remember_authoritative_measurements(cached_result.measurements)
+            return cached_result
     if source.stat().st_size > limits.max_bytes:
         raise ToolbeltError("workbook exceeds byte limit")
     if source.suffix.lower() in {".csv", ".tsv"}:
-        return _read_delimited(source, selection, limits, cancel_check)
+        result = _read_delimited(source, selection, limits, cancel_check)
+        _remember_authoritative_measurements(result.measurements)
+        return result
     if source.suffix.lower() not in {".xlsx", ".xlsm", ".xltx", ".xltm"}:
         raise ToolbeltError("unsupported spreadsheet format")
     try:
@@ -727,6 +755,7 @@ def spreadsheet_read(
         result = WorkbookReadResult(str(source), digest, tuple(sheets), tuple(finalized_tables), tuple(measurements))
         if _cache is not None and cache_key is not None:
             _cache.put(cache_key, result)
+        _remember_authoritative_measurements(result.measurements)
         return result
     finally:
         if cached is not None:
@@ -978,6 +1007,11 @@ def _coerce_calculation_input(value: Evidence | CalculationRecord | TypedMeasure
             output=float(value["output"]),
             units=str(value.get("units", "")),
             source_locators=[str(item) for item in value.get("source_locators", ())],
+            verification_status=(
+                value.get("verification_status", CalculationVerificationStatus.NOT_VERIFIED)
+                if isinstance(value.get("verification_status", CalculationVerificationStatus.NOT_VERIFIED), CalculationVerificationStatus)
+                else CalculationVerificationStatus(str(value.get("verification_status", CalculationVerificationStatus.NOT_VERIFIED)))
+            ),
         )
     if "value" in value and "provenance" in value:
         status = value.get("formula_status", FormulaStatus.VALUE)
@@ -1040,8 +1074,36 @@ def calculation(
     if any(isinstance(item, Evidence) for item in inputs):
         raise ToolbeltError("BLOCKED_RECALCULATION: authoritative workbook measurement required")
     measurements = [item for item in inputs if isinstance(item, TypedMeasurement)]
-    if measurements and not all(item.trusted for item in measurements):
-        raise ToolbeltError("BLOCKED_RECALCULATION: workbook measurement provenance is untrusted")
+    if measurements:
+        if not approved_workbook_sha256:
+            raise ToolbeltError("BLOCKED_RECALCULATION: workbook measurement provenance is untrusted; approved workbook hash is missing or mismatched")
+        resolved_measurements = []
+        for item in measurements:
+            if item.provenance.workbook_sha256 != approved_workbook_sha256:
+                raise ToolbeltError("BLOCKED_RECALCULATION: approved workbook hash is missing or mismatched")
+            authoritative = _AUTHORITATIVE_MEASUREMENTS.get((approved_workbook_sha256, item.id))
+            if authoritative is None or replace(item, trusted=False) != replace(authoritative, trusted=False):
+                raise ToolbeltError("BLOCKED_RECALCULATION: workbook measurement provenance is untrusted")
+            resolved_measurements.append(authoritative)
+        resolved_iter = iter(resolved_measurements)
+        inputs = tuple(next(resolved_iter) if isinstance(item, TypedMeasurement) else item for item in inputs)
+    calculations = [item for item in inputs if isinstance(item, CalculationRecord)]
+    if calculations:
+        if not approved_workbook_sha256:
+            raise ToolbeltError("BLOCKED_RECALCULATION: approved workbook hash is missing or mismatched")
+        resolved_calculations = []
+        for item in calculations:
+            if item.verification_status != CalculationVerificationStatus.VERIFIED or not item.input_ids or not item.source_locators:
+                raise ToolbeltError("BLOCKED_RECALCULATION: authoritative calculation ancestry is unavailable")
+            if any(approved_workbook_sha256 not in locator for locator in item.source_locators):
+                raise ToolbeltError("BLOCKED_RECALCULATION: approved workbook hash is missing or mismatched")
+            authoritative = _AUTHORITATIVE_CALCULATIONS.get((approved_workbook_sha256, item.id))
+            if authoritative is None or replace(item, verification_status=CalculationVerificationStatus.NOT_VERIFIED) != replace(authoritative, verification_status=CalculationVerificationStatus.NOT_VERIFIED):
+                raise ToolbeltError("BLOCKED_RECALCULATION: authoritative calculation ancestry is unavailable")
+            resolved_calculations.append(authoritative)
+        resolved_iter = iter(resolved_calculations)
+        inputs = tuple(next(resolved_iter) if isinstance(item, CalculationRecord) else item for item in inputs)
+        measurements = [item for item in inputs if isinstance(item, TypedMeasurement)]
     workbook_hashes = {item.provenance.workbook_sha256 for item in measurements}
     if len(workbook_hashes) > 1:
         raise ToolbeltError("workbook hash mismatch")
@@ -1063,9 +1125,15 @@ def calculation(
     except ZeroDivisionError as error:
         raise ToolbeltError("divide by zero") from error
     record_id = "calculation-" + hashlib.sha256(f"{formula.expression}:{values}:{units.units}".encode()).hexdigest()[:16]
-    locators = [f"{item.provenance.workbook_sha256}:{item.provenance.sheet}!{item.provenance.coordinate}" for item in inputs if isinstance(item, TypedMeasurement)]
+    locators = list(dict.fromkeys(
+        [f"{item.provenance.workbook_sha256}:{item.provenance.sheet}!{item.provenance.coordinate}" for item in inputs if isinstance(item, TypedMeasurement)]
+        + [locator for item in inputs if isinstance(item, CalculationRecord) for locator in item.source_locators]
+    ))
     input_ids = [item.id for item in inputs]
-    return CalculationRecord(record_id, MeasurementKey("toolbelt", formula.expression, "current", units.units), formula.expression, input_ids, output, units.units, locators, CalculationVerificationStatus.VERIFIED)
+    record = CalculationRecord(record_id, MeasurementKey("toolbelt", formula.expression, "current", units.units), formula.expression, input_ids, output, units.units, locators, CalculationVerificationStatus.VERIFIED)
+    if approved_workbook_sha256:
+        _remember_authoritative_calculation(record, approved_workbook_sha256)
+    return record
 
 
 def graph_context(graph: Any, record_id: str, limit: int = 50) -> dict[str, Any]:

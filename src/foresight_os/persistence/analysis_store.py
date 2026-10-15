@@ -254,12 +254,17 @@ class AnalysisStore:
             if self.pending_analysis_path.exists():
                 raise ValueError("cannot persist delivery receipt while a pending analysis revision exists")
             state = self.load_accepted()
+            source_revision = receipt.get("source_revision")
+            if state.revision_status.value != "ACCEPTED" or source_revision != state.revision:
+                raise ValueError("cannot persist delivery receipt for a non-current accepted revision")
             artifacts = []
             found = False
             for artifact in state.artifacts:
                 if artifact.id == artifact_id:
                     if artifact.kind != "presentation_spec":
                         raise ValueError("delivery receipt must attach to a presentation artifact")
+                    if artifact.id in state.invalidation.stale_artifact_ids or artifact.lifecycle.value != "CURRENT":
+                        raise ValueError("cannot persist delivery receipt for a stale presentation artifact")
                     artifacts.append(replace(artifact, delivery_receipt=dict(receipt)))
                     found = True
                 else:

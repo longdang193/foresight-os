@@ -1,14 +1,17 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from agent_framework import Agent, AgentResponse, ChatResponse, ChatResponseUpdate, Content, Message, ResponseStream
 from agent_framework.orchestrations import HandoffBuilder
 
 from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, RecipeName, RecipeStage, make_recipe
 from foresight_os.controller.budgets import BudgetState
 from foresight_os.persistence.ids import canonical_json_hash
+from foresight_os.domain.validation import ValidationError
 from foresight_os.analysis.result_committer import decode_stage_output
-from foresight_os.runtime.workflow import CanonicalStageResult, _canonical_result_hash, _close_agents, _run_native_stage, _workflow_output_value, run_recipe_async
+from foresight_os.runtime.workflow import CanonicalStageResult, _canonical_result_hash, _close_agents, _run_native_stage, _synthesize_stage_outputs, _workflow_output_value, run_recipe_async
 from foresight_os.runtime.metrics import RunMetrics
 
 
@@ -120,6 +123,49 @@ def test_multi_participant_stage_synthesizes_typed_outputs_before_commit():
     )
 
     assert [item["id"] for item in result["evidence"]] == ["e1", "e2"]
+
+
+def test_multi_participant_stage_deduplicates_identical_canonical_records():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "one"}, {"id": "two"}),
+        "typed-result",
+        "typed-result",
+        {},
+        synthesis_policy="aggregate-typed-results",
+    )
+
+    result = _synthesize_stage_outputs(
+        stage,
+        [
+            {"evidence": [{"id": "e1", "statement": "same"}], "claims": [], "calculations": [], "implications": [], "recommendations": [], "artifacts": [], "relationships": [], "assumptions": [], "uncertainty": [], "monitoring_indicators": []},
+            {"evidence": [{"id": "e1", "statement": "same"}], "claims": [], "calculations": [], "implications": [], "recommendations": [], "artifacts": [], "relationships": [], "assumptions": [], "uncertainty": [], "monitoring_indicators": []},
+        ],
+    )
+
+    assert result["evidence"] == [{"id": "e1", "statement": "same"}]
+
+
+def test_multi_participant_stage_rejects_conflicting_canonical_records():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "one"}, {"id": "two"}),
+        "typed-result",
+        "typed-result",
+        {},
+        synthesis_policy="aggregate-typed-results",
+    )
+
+    with pytest.raises(ValidationError, match="conflicting canonical record"):
+        _synthesize_stage_outputs(
+            stage,
+            [
+                {"evidence": [{"id": "e1", "statement": "first"}], "claims": [], "calculations": [], "implications": [], "recommendations": [], "artifacts": [], "relationships": [], "assumptions": [], "uncertainty": [], "monitoring_indicators": []},
+                {"evidence": [{"id": "e1", "statement": "second"}], "claims": [], "calculations": [], "implications": [], "recommendations": [], "artifacts": [], "relationships": [], "assumptions": [], "uncertainty": [], "monitoring_indicators": []},
+            ],
+        )
 
 
 def test_admitted_native_execution_validates_the_approved_recipe_snapshot():
