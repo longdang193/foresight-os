@@ -760,8 +760,15 @@ payloads, and disposable work outputs remain out of the plan's durable files.
   is `VERIFIED` for three local case shapes; recovery and source-integrity
   checks passed with no production-file changes.
 - Release comparison `work/optimization-overhead-20261015/release/comparison.json`
-  is `accepted=true`, with absolute values and deltas recorded and zero-valued
-  denominators treated as `0%` only when both sides are zero.
+  is `accepted=true` for release head `9ec3b1d`, with absolute values and
+  deltas recorded and zero-valued denominators treated as `0%` only when both
+  sides are zero. The accepted source-bound run measured XLSX p95 at
+  `38.059 ms` and peak allocation at `1,097,375` bytes versus the baseline
+  `39.572 ms` and `1,097,437` bytes.
+- Review cycle 1 corrections removed metadata-only source-hash reuse, removed
+  unbounded source-identity state, added regression coverage for
+  metadata-preserving changes, and replaced identical portability fixtures
+  with distinct row-coverage/value variants.
 - Final repository verification passed: `python -m pytest -q`,
   `python -m compileall -q src tests evaluation`, Markdown link coverage for
   33 paths, final portability receipt `work/optimization-overhead-20261015/portability/final-receipt.json`, and `git diff --check`.
