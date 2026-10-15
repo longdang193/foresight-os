@@ -179,7 +179,7 @@ async def _run_native_stage(
             if on_call is not None:
                 on_call()
         return [await agents[0].run(prompt)]
-    if tools_enabled and context.get("require_structured_output"):
+    if tools_enabled and context.get("require_structured_output") and pattern != ExecutionPattern.HANDOFF:
         options = {"response_format": context.get("structured_output_schema")}
         if pattern == ExecutionPattern.CONCURRENT:
             results = await asyncio.gather(
@@ -199,6 +199,9 @@ async def _run_native_stage(
             results: list[object] = []
             current_prompt = prompt
             for round_index in range(max_rounds):
+                budget = context.get("budget")
+                if budget is not None and not budget.reserve(rounds=1):
+                    raise BudgetExceededError("maximum group chat rounds exceeded")
                 agent = agents[round_index % len(agents)]
                 result = await run_agent_with_tool_fallback(
                     agent,

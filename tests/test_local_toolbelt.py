@@ -544,6 +544,37 @@ def test_calculation_provenance_qualifies_workbook_sheet_and_coordinate(workbook
     assert any(":Assumptions!B2" in locator for locator in record.source_locators)
     assert record.verification_status.value == "VERIFIED"
 
+
+def test_calculation_authority_keeps_same_value_inputs_separate(tmp_path):
+    source = tmp_path / "same-values.csv"
+    source.write_text("Metric,Value\nA,10\nB,10\n", encoding="utf-8")
+    result = spreadsheet_read(str(source))
+    first = next(item for item in result.measurements if item.provenance.coordinate == "B2")
+    second = next(item for item in result.measurements if item.provenance.coordinate == "B3")
+    units = {"units": "units"}
+
+    first_record = calculation(
+        [first],
+        formula={"expression": "same-value", "operation": "sum"},
+        units=units,
+        approved_workbook_sha256=result.workbook_sha256,
+    )
+    second_record = calculation(
+        [second],
+        formula={"expression": "same-value", "operation": "sum"},
+        units=units,
+        approved_workbook_sha256=result.workbook_sha256,
+    )
+
+    assert first_record.id != second_record.id
+    chained = calculation(
+        [first_record],
+        formula={"expression": "chained", "operation": "sum"},
+        units=units,
+        approved_workbook_sha256=result.workbook_sha256,
+    )
+    assert chained.input_ids == [first_record.id]
+
 def test_xlsx_reader_skips_blank_and_title_rows_before_data_header(tmp_path):
     source = tmp_path / "titled-range.xlsx"
     workbook = openpyxl.Workbook()

@@ -117,6 +117,65 @@ def test_handoff_uses_native_builder_and_allowed_route():
     assert len(workflow.get_executors_list()) >= 2
 
 
+def test_structured_tool_handoff_preserves_native_routing(monkeypatch):
+    captured = {}
+
+    class ToolAgent:
+        def __init__(self, agent_id):
+            self.id = agent_id
+            self.client = SimpleNamespace()
+            self.default_options = {"tools": [object()]}
+
+        async def close(self):
+            return None
+
+    class ToolClient:
+        def as_agent(self, **kwargs):
+            agent = ToolAgent(kwargs["id"])
+            captured.setdefault("agents", []).append(agent)
+            return agent
+
+    class Workflow:
+        async def run(self, prompt):
+            captured["prompt"] = prompt
+            return SimpleNamespace(get_outputs=lambda: ["participant-1"])
+
+    class Builder:
+        def __init__(self, participants, output_from):
+            captured["participants"] = participants
+
+        def with_start_agent(self, agent):
+            captured["start_agent"] = agent.id
+            return self
+
+        def add_handoff(self, source, targets):
+            captured["handoffs"] = [(source.id, tuple(target.id for target in targets))]
+            return self
+
+        def build(self):
+            return Workflow()
+
+    monkeypatch.setattr("agent_framework.orchestrations.HandoffBuilder", Builder)
+
+    outputs = asyncio.run(
+        _run_native_stage(
+            ExecutionPattern.HANDOFF,
+            "hello",
+            ToolClient(),
+            [
+                {"id": "participant-1", "purpose": "one", "handoff_targets": ("participant-2",)},
+                {"id": "participant-2", "purpose": "two"},
+                {"id": "participant-3", "purpose": "three"},
+            ],
+            run_context={"require_structured_output": True, "structured_output_schema": {"type": "object"}},
+        )
+    )
+
+    assert outputs == ["participant-1"]
+    assert captured["start_agent"] == "participant-1"
+    assert captured["handoffs"] == [("participant-1", ("participant-2",))]
+
+
 def test_composed_native_stages_pass_outputs_and_settle_metrics():
     result = asyncio.run(
         run_recipe_async(

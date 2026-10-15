@@ -1129,12 +1129,13 @@ def calculation(
         raise ToolbeltError(f"unsupported formula operation: {formula.operation}") from error
     except ZeroDivisionError as error:
         raise ToolbeltError("divide by zero") from error
-    record_id = "calculation-" + hashlib.sha256(f"{formula.expression}:{values}:{units.units}".encode()).hexdigest()[:16]
     locators = list(dict.fromkeys(
         [f"{item.provenance.workbook_sha256}:{item.provenance.sheet}!{item.provenance.coordinate}" for item in inputs if isinstance(item, TypedMeasurement)]
         + [locator for item in inputs if isinstance(item, CalculationRecord) for locator in item.source_locators]
     ))
     input_ids = [item.id for item in inputs]
+    identity = (formula.expression, values, units.units, input_ids, locators)
+    record_id = "calculation-" + hashlib.sha256(repr(identity).encode()).hexdigest()[:16]
     record = CalculationRecord(record_id, MeasurementKey("toolbelt", formula.expression, "current", units.units), formula.expression, input_ids, output, units.units, locators, CalculationVerificationStatus.VERIFIED)
     if approved_workbook_sha256:
         _remember_authoritative_calculation(record, approved_workbook_sha256)
