@@ -255,6 +255,26 @@ def test_committer_resolves_references_to_prior_stage_records(tmp_path):
     assert store.load_pending().claims[-1].evidence_ids == [prior_evidence_id]
 
 
+def test_current_provider_alias_cannot_redirect_existing_canonical_reference(tmp_path):
+    store = AnalysisStore(tmp_path / "case")
+    committer = CanonicalResultCommitter(store, "case")
+    first_stage = type("Stage", (), {"stage_id": "stage-1", "result_contract": ANALYSIS_STAGE_RESULT_CONTRACT})()
+    first = committer(first_stage, _payload(), {})
+    prior_evidence_id = next(item for item in first.result_references if item.startswith("evidence-"))
+    second_payload = _payload(
+        stage_id="stage-2",
+        evidence=[{**_payload()["evidence"][0], "id": prior_evidence_id, "excerpt": "different evidence"}],
+        claims=[{**_payload()["claims"][0], "evidence_ids": [prior_evidence_id], "relationship_ids": []}],
+        relationships=[],
+    )
+
+    second_stage = type("Stage", (), {"stage_id": "stage-2", "result_contract": ANALYSIS_STAGE_RESULT_CONTRACT})()
+    second = committer(second_stage, second_payload, {})
+
+    assert second.output["claims"][0]["evidence_ids"] == [prior_evidence_id]
+    assert len(store.load_pending().evidence) == 2
+
+
 def test_committer_rejects_same_id_with_different_persisted_content(tmp_path):
     store = AnalysisStore(tmp_path / "case")
     committer = CanonicalResultCommitter(store, "case")

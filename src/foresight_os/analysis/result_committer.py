@@ -522,12 +522,9 @@ def normalize_stage_result(
         for record_id, record in dict(existing_records or {}).items()
         if isinstance(record, Relationship) or has_field(record, "relation_type")
     }
-    evidence_aliases: dict[str, str] = dict(known_evidence_aliases)
-    calculation_aliases: dict[str, str] = dict(known_calculation_aliases)
-    record_aliases: dict[str, str] = {
-        **known_evidence_aliases,
-        **known_record_aliases,
-    }
+    evidence_aliases: dict[str, str] = {}
+    calculation_aliases: dict[str, str] = {}
+    record_aliases: dict[str, str] = {}
     evidence: list[Evidence] = []
     for index, raw in enumerate(_list(value.get("evidence"), "evidence")):
         item = _mapping(raw, f"evidence[{index}]")
@@ -562,7 +559,7 @@ def normalize_stage_result(
         input_ids = [
             _resolve(
                 entry,
-                {**known_evidence_aliases, **known_calculation_aliases, **evidence_aliases, **calculation_aliases},
+                {**evidence_aliases, **calculation_aliases, **known_evidence_aliases, **known_calculation_aliases},
                 f"calculations[{index}].input_ids",
             )
             for entry in _reference_list(item.get("input_ids"), f"calculations[{index}].input_ids")
@@ -602,7 +599,7 @@ def normalize_stage_result(
             evidence_ids = [
                 _resolve(
                     entry,
-                    {**known_evidence_aliases, **evidence_aliases},
+                    {**evidence_aliases, **known_evidence_aliases},
                     f"{collection}[{index}].evidence_ids",
                 )
                 for entry in _reference_list(item.get("evidence_ids", ()), f"{collection}[{index}].evidence_ids")
@@ -657,12 +654,20 @@ def normalize_stage_result(
         artifacts.append(artifact)
 
     relationships: list[Relationship] = []
-    relationship_aliases: dict[str, str] = dict(known_relationship_aliases)
+    relationship_aliases: dict[str, str] = {}
     for index, raw in enumerate(_list(value.get("relationships"), "relationships")):
         item = _mapping(raw, f"relationships[{index}]")
         _validate_fields(item, _RELATIONSHIP_FIELDS, f"relationships[{index}]")
-        from_id = _resolve(item.get("from_id"), {**known_record_aliases, **record_aliases}, f"relationships[{index}].from_id")
-        to_id = _resolve(item.get("to_id"), {**known_record_aliases, **record_aliases}, f"relationships[{index}].to_id")
+        from_id = _resolve(
+            item.get("from_id"),
+            {**record_aliases, **known_evidence_aliases, **known_record_aliases},
+            f"relationships[{index}].from_id",
+        )
+        to_id = _resolve(
+            item.get("to_id"),
+            {**record_aliases, **known_evidence_aliases, **known_record_aliases},
+            f"relationships[{index}].to_id",
+        )
         relation_type = _required_text(item, "relation_type", f"relationships[{index}]")
         try:
             relationship_rule(relation_type)
@@ -681,7 +686,7 @@ def normalize_stage_result(
     def resolve_relationships(record_id: str, label: str) -> list[str]:
         resolved: list[str] = []
         for reference in record_inputs[record_id]["relationship_ids"]:
-            relationship_id = relationship_aliases.get(reference)
+            relationship_id = relationship_aliases.get(reference) or known_relationship_aliases.get(reference)
             if relationship_id is None:
                 raise ValidationError(f"unknown reference: {label} -> {reference}")
             resolved.append(relationship_id)
