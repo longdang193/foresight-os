@@ -22,7 +22,7 @@ from foresight_os.domain.models import (
     Relationship,
     SourceLocator,
 )
-from foresight_os.domain.relationships import relationship_rule
+from foresight_os.domain.relationships import RELATIONSHIP_RULES, relationship_rule
 from foresight_os.domain.validation import ValidationError
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.persistence.ids import canonical_json_hash, deterministic_id
@@ -90,9 +90,12 @@ def analysis_stage_result_schema() -> dict[str, Any]:
                     "recommendations",
                     "relationships",
                     "artifacts",
+                    "assumptions",
+                    "uncertainty",
+                    "monitoring_indicators",
                 ],
                 "properties": {
-                    "contract": {"const": ANALYSIS_STAGE_RESULT_CONTRACT},
+                    "contract": {"type": "string", "const": ANALYSIS_STAGE_RESULT_CONTRACT},
                     "stage_id": {"type": "string", "minLength": 1},
                     "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}},
                     "calculations": {"type": "array", "items": {"$ref": "#/$defs/calculation"}},
@@ -109,7 +112,7 @@ def analysis_stage_result_schema() -> dict[str, Any]:
                     "measurement_key": {
                         "type": "object",
                         "additionalProperties": False,
-                        "required": ["region", "measure", "period", "units"],
+                        "required": ["region", "measure", "period", "units", "scenario", "version"],
                         "properties": {
                             "region": {"type": "string", "minLength": 1},
                             "measure": {"type": "string", "minLength": 1},
@@ -131,7 +134,7 @@ def analysis_stage_result_schema() -> dict[str, Any]:
                     "evidence": {
                         "type": "object",
                         "additionalProperties": False,
-                        "required": ["source_locator", "version", "date", "excerpt", "limitations"],
+                        "required": ["id", "source_locator", "version", "date", "excerpt", "limitations", "measurement_key"],
                         "properties": {
                             "id": {"type": "string", "minLength": 1},
                             "source_locator": {"$ref": "#/$defs/source_locator"},
@@ -139,13 +142,18 @@ def analysis_stage_result_schema() -> dict[str, Any]:
                             "date": {"type": "string", "minLength": 1},
                             "excerpt": {"type": "string", "minLength": 1},
                             "limitations": {"type": "array", "items": {"type": "string"}},
-                            "measurement_key": {"$ref": "#/$defs/measurement_key"},
+                            "measurement_key": {
+                                "anyOf": [
+                                    {"$ref": "#/$defs/measurement_key"},
+                                    {"type": "null"},
+                                ]
+                            },
                         },
                     },
                     "calculation": {
                         "type": "object",
                         "additionalProperties": False,
-                        "required": ["key", "formula", "input_ids", "output", "units", "source_locators"],
+                        "required": ["id", "key", "formula", "input_ids", "output", "units", "source_locators"],
                         "properties": {
                             "id": {"type": "string", "minLength": 1},
                             "key": {"$ref": "#/$defs/measurement_key"},
@@ -159,7 +167,20 @@ def analysis_stage_result_schema() -> dict[str, Any]:
                     "analytical_record": {
                         "type": "object",
                         "additionalProperties": False,
-                        "required": ["statement", "evidence_ids", "relationship_ids"],
+                        "required": [
+                            "id",
+                            "statement",
+                            "basis",
+                            "assessment",
+                            "lifecycle",
+                            "evidence_ids",
+                            "relationship_ids",
+                            "assumptions",
+                            "uncertainty",
+                            "confidence_rationale",
+                            "disconfirmation_conditions",
+                            "monitoring_indicators",
+                        ],
                         "properties": {
                             "id": {"type": "string", "minLength": 1},
                             "statement": {"type": "string", "minLength": 1},
@@ -170,7 +191,12 @@ def analysis_stage_result_schema() -> dict[str, Any]:
                             "relationship_ids": {"type": "array", "items": {"type": "string", "minLength": 1}},
                             "assumptions": {"type": "array", "items": {"type": "string"}},
                             "uncertainty": {"type": "array", "items": {"type": "string"}},
-                            "confidence_rationale": {"type": "string"},
+                            "confidence_rationale": {
+                                "anyOf": [
+                                    {"type": "string"},
+                                    {"type": "null"},
+                                ]
+                            },
                             "disconfirmation_conditions": {"type": "array", "items": {"type": "string"}},
                             "monitoring_indicators": {"type": "array", "items": {"type": "string"}},
                         },
@@ -178,7 +204,7 @@ def analysis_stage_result_schema() -> dict[str, Any]:
                     "artifact": {
                         "type": "object",
                         "additionalProperties": False,
-                        "required": ["kind", "path", "relationship_ids"],
+                        "required": ["id", "kind", "path", "lifecycle", "relationship_ids"],
                         "properties": {
                             "id": {"type": "string", "minLength": 1},
                             "kind": {"type": "string", "minLength": 1},
@@ -190,12 +216,12 @@ def analysis_stage_result_schema() -> dict[str, Any]:
                     "relationship": {
                         "type": "object",
                         "additionalProperties": False,
-                        "required": ["from_id", "to_id", "relation_type"],
+                        "required": ["id", "from_id", "to_id", "relation_type"],
                         "properties": {
                             "id": {"type": "string", "minLength": 1},
                             "from_id": {"type": "string", "minLength": 1},
                             "to_id": {"type": "string", "minLength": 1},
-                            "relation_type": {"type": "string", "minLength": 1},
+                            "relation_type": {"type": "string", "enum": sorted(RELATIONSHIP_RULES)},
                         },
                     },
                 },
@@ -280,16 +306,20 @@ class CanonicalResultCommitter:
     def __call__(self, stage: Any, output: object, context: Mapping[str, Any]) -> CanonicalStageResult:
         stage_id = str(getattr(stage, "stage_id", "stage"))
         contract = str(getattr(stage, "result_contract", ANALYSIS_STAGE_RESULT_CONTRACT))
-        normalized = output if isinstance(output, StageAnalyticalResult) else normalize_stage_result(output, expected_stage_id=stage_id, expected_contract=contract)
-        if normalized.stage_id != stage_id or normalized.contract != contract:
-            raise ValidationError("canonical result does not match the recipe stage contract")
-
         if self.store.pending_analysis_path.exists() or self.store.analysis_path.exists():
             current = self.store.load_pending()
         else:
             current = _initial_analysis_state(self.investigation_id)
         if current.investigation_id != self.investigation_id:
             raise ValueError("canonical result investigation does not match the analysis store")
+        normalized = output if isinstance(output, StageAnalyticalResult) else normalize_stage_result(
+            output,
+            expected_stage_id=stage_id,
+            expected_contract=contract,
+            existing_records=current.canonical_records(),
+        )
+        if normalized.stage_id != stage_id or normalized.contract != contract:
+            raise ValidationError("canonical result does not match the recipe stage contract")
 
         merged = replace(
             current,
@@ -320,7 +350,8 @@ class CanonicalResultCommitter:
         references = tuple(normalized_records)
         hashes = tuple(canonical_json_hash(normalized_records[reference]) for reference in references)
         payload = normalized.to_payload()
-        return CanonicalStageResult(references, hashes, payload, normalized_records)
+        output = normalized_records[references[0]] if len(references) == 1 else payload
+        return CanonicalStageResult(references, hashes, output, normalized_records)
 
 
 def _mapping(value: object, label: str) -> dict[str, Any]:
@@ -346,6 +377,8 @@ def _required_text(value: Mapping[str, Any], key: str, label: str) -> str:
 
 def _optional_text(value: Mapping[str, Any], key: str, label: str, default: str = "") -> str:
     result = value.get(key, default)
+    if result is None:
+        return default
     if not isinstance(result, str):
         raise ValidationError(f"{label}.{key} must be text")
     return result
@@ -447,6 +480,7 @@ def normalize_stage_result(
     *,
     expected_stage_id: str | None = None,
     expected_contract: str = ANALYSIS_STAGE_RESULT_CONTRACT,
+    existing_records: Mapping[str, object] | None = None,
 ) -> StageAnalyticalResult:
     """Normalize provider output and assign system-owned canonical identities."""
 
@@ -465,9 +499,35 @@ def normalize_stage_result(
     aliases: dict[str, str] = {}
     supplied_ids: set[str] = set()
     canonical_ids: set[str] = set()
-    evidence_aliases: dict[str, str] = {}
-    calculation_aliases: dict[str, str] = {}
-    record_aliases: dict[str, str] = {}
+    def has_field(record: object, field_name: str) -> bool:
+        return isinstance(record, Mapping) and field_name in record
+
+    known_evidence_aliases = {
+        record_id: record_id
+        for record_id, record in dict(existing_records or {}).items()
+        if isinstance(record, Evidence) or has_field(record, "source_locator")
+    }
+    known_calculation_aliases = {
+        record_id: record_id
+        for record_id, record in dict(existing_records or {}).items()
+        if isinstance(record, CalculationRecord) or has_field(record, "formula")
+    }
+    known_record_aliases = {
+        record_id: record_id
+        for record_id, record in dict(existing_records or {}).items()
+        if isinstance(record, (AnalyticalRecord, Artifact)) or has_field(record, "statement") or has_field(record, "path")
+    }
+    known_relationship_aliases = {
+        record_id: record_id
+        for record_id, record in dict(existing_records or {}).items()
+        if isinstance(record, Relationship) or has_field(record, "relation_type")
+    }
+    evidence_aliases: dict[str, str] = dict(known_evidence_aliases)
+    calculation_aliases: dict[str, str] = dict(known_calculation_aliases)
+    record_aliases: dict[str, str] = {
+        **known_evidence_aliases,
+        **known_record_aliases,
+    }
     evidence: list[Evidence] = []
     for index, raw in enumerate(_list(value.get("evidence"), "evidence")):
         item = _mapping(raw, f"evidence[{index}]")
@@ -499,7 +559,14 @@ def normalize_stage_result(
         item = _mapping(raw, f"calculations[{index}]")
         _validate_fields(item, _CALCULATION_FIELDS, f"calculations[{index}]")
         key = _measurement_key(item.get("key"), f"calculations[{index}].key")
-        input_ids = [_resolve(entry, {**evidence_aliases, **calculation_aliases}, f"calculations[{index}].input_ids") for entry in _reference_list(item.get("input_ids"), f"calculations[{index}].input_ids")]
+        input_ids = [
+            _resolve(
+                entry,
+                {**known_evidence_aliases, **known_calculation_aliases, **evidence_aliases, **calculation_aliases},
+                f"calculations[{index}].input_ids",
+            )
+            for entry in _reference_list(item.get("input_ids"), f"calculations[{index}].input_ids")
+        ]
         if not input_ids:
             raise ValidationError(f"calculations[{index}].input_ids must not be empty")
         formula = _required_text(item, "formula", f"calculations[{index}]")
@@ -532,7 +599,14 @@ def normalize_stage_result(
             basis = _enum_value(Basis, item.get("basis", "DERIVED"), f"{collection}[{index}].basis")
             assessment = _enum_value(Assessment, item.get("assessment", "UNASSESSED"), f"{collection}[{index}].assessment")
             lifecycle = _enum_value(Lifecycle, item.get("lifecycle", "CURRENT"), f"{collection}[{index}].lifecycle")
-            evidence_ids = [_resolve(entry, evidence_aliases, f"{collection}[{index}].evidence_ids") for entry in _reference_list(item.get("evidence_ids", ()), f"{collection}[{index}].evidence_ids")]
+            evidence_ids = [
+                _resolve(
+                    entry,
+                    {**known_evidence_aliases, **evidence_aliases},
+                    f"{collection}[{index}].evidence_ids",
+                )
+                for entry in _reference_list(item.get("evidence_ids", ()), f"{collection}[{index}].evidence_ids")
+            ]
             relationship_ids = _reference_list(item.get("relationship_ids", ()), f"{collection}[{index}].relationship_ids")
             assumptions = _text_list(item.get("assumptions", value.get("assumptions", [])), f"{collection}[{index}].assumptions")
             uncertainty = _text_list(item.get("uncertainty", value.get("uncertainty", [])), f"{collection}[{index}].uncertainty")
@@ -583,12 +657,12 @@ def normalize_stage_result(
         artifacts.append(artifact)
 
     relationships: list[Relationship] = []
-    relationship_aliases: dict[str, str] = {}
+    relationship_aliases: dict[str, str] = dict(known_relationship_aliases)
     for index, raw in enumerate(_list(value.get("relationships"), "relationships")):
         item = _mapping(raw, f"relationships[{index}]")
         _validate_fields(item, _RELATIONSHIP_FIELDS, f"relationships[{index}]")
-        from_id = _resolve(item.get("from_id"), record_aliases, f"relationships[{index}].from_id")
-        to_id = _resolve(item.get("to_id"), record_aliases, f"relationships[{index}].to_id")
+        from_id = _resolve(item.get("from_id"), {**known_record_aliases, **record_aliases}, f"relationships[{index}].from_id")
+        to_id = _resolve(item.get("to_id"), {**known_record_aliases, **record_aliases}, f"relationships[{index}].to_id")
         relation_type = _required_text(item, "relation_type", f"relationships[{index}]")
         try:
             relationship_rule(relation_type)

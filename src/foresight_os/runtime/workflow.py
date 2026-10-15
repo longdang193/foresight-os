@@ -83,6 +83,24 @@ async def _close_agents(agents: list[object]) -> list[BaseException]:
     return errors
 
 
+def _workflow_output_value(output: object) -> object:
+    nested_response = getattr(output, "agent_response", None)
+    if nested_response is not None and nested_response is not output:
+        return _workflow_output_value(nested_response)
+    value = getattr(output, "value", None)
+    if value is not None:
+        return value
+    text = getattr(output, "text", None)
+    if text is None:
+        return output
+    if isinstance(text, str):
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+    return text
+
+
 async def _run_native_stage(
     pattern: ExecutionPattern,
     prompt: str,
@@ -162,7 +180,7 @@ async def _run_native_stage(
             if budget is not None and not budget.reserve(rounds=len(observed_rounds)):
                 raise BudgetExceededError("maximum group chat rounds exceeded")
             metrics.chat_rounds += len(observed_rounds)
-    outputs = result.get_outputs()
+    outputs = [_workflow_output_value(output) for output in result.get_outputs()]
     return list(outputs) if outputs else [result]
 
 
@@ -503,6 +521,7 @@ async def run_recipe_async(
         stage_skill_hashes = tuple(skill.content_sha256 for skill in selected_skills)
         context.setdefault("skill_hashes_by_stage", {})[getattr(stage, "stage_id", "")] = stage_skill_hashes
         stage_context = dict(context)
+        stage_context["stage_id"] = str(getattr(stage, "stage_id", "stage"))
         stage_context["selected_skills"] = selected_skills
         stage_context["selected_skills_by_participant"] = selected_skills_by_participant
         cache_key = _stage_cache_key(stage, stage_input, stage_skill_ids, selected_skills_by_participant)

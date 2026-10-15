@@ -65,6 +65,26 @@ def test_factory_injects_recipe_bound_structured_output_schema():
     assert captured["default_options"]["response_format"] == schema
 
 
+def test_factory_binds_exact_stage_id_for_structured_results():
+    captured = {}
+
+    class Client:
+        def as_agent(self, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+    AgentFactory(Client()).create(
+        ParticipantConfig("source", "analyst", "audit sources"),
+        {"require_structured_output": True, "stage_id": "source-audit"},
+    )
+
+    assert "stage_id must be exactly 'source-audit'" in captured["instructions"]
+    assert "informs: claim/evidence/implication -> implication/recommendation" in captured["instructions"]
+    assert "omit the edge rather than inventing a relationship" in captured["instructions"]
+    assert "stage result must be self-contained" in captured["instructions"]
+    assert "Do not reference an ID that appears only in dependency_outputs" in captured["instructions"]
+
+
 def test_stage_local_skills_do_not_leak_between_stages():
     class Agent:
         async def run(self, prompt):
