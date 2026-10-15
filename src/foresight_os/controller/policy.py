@@ -564,7 +564,7 @@ def select_recipe(brief: WorkBrief, task_shape: TaskShape | None = None, overrid
             "ordered Work Brief stages",
             brief.stages,
             True,
-            _explicit_reviewer_requested(brief, task_shape),
+            True,
             brief,
         )
     if brief.desired_deliverables:
