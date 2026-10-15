@@ -762,9 +762,9 @@ payloads, and disposable work outputs remain out of the plan's durable files.
 - Release comparison `work/optimization-overhead-20261015/release/comparison.json`
   is `accepted=true` for the exact measured release head recorded in the
   receipt, with absolute values and deltas recorded and zero-valued
-  denominators treated as `0%` only when both sides are zero. The accepted
-  source-bound run measured XLSX p95 at `39.702 ms` and peak allocation at
-  `1,097,923` bytes versus the baseline `39.572 ms` and `1,097,437` bytes.
+  denominators treated as `0%` only when both sides are zero. The source-bound
+  XLSX p95, allocation, and per-pattern measurements remain in the receipt;
+  the comparator accepted them against the frozen baseline thresholds.
 - Review cycle 1 corrections removed metadata-only source-hash reuse, removed
   unbounded source-identity state, added regression coverage for
   metadata-preserving changes, and replaced identical portability fixtures
