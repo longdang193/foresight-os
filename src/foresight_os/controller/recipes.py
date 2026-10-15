@@ -72,6 +72,7 @@ class StageInput:
     relevant_constraints: tuple[str, ...] = ()
     dependency_outputs: tuple[tuple[str, object], ...] = ()
     research_needs: tuple[object, ...] = ()
+    analysis_contract_fingerprints: tuple[tuple[str, str], ...] = ()
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -82,6 +83,7 @@ class StageInput:
             "relevant_constraints": self.relevant_constraints,
             "dependency_outputs": {stage_id: output for stage_id, output in self.dependency_outputs},
             "research_needs": self.research_needs,
+            "analysis_contract_fingerprints": dict(self.analysis_contract_fingerprints),
         }
 
     def __str__(self) -> str:

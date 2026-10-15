@@ -136,6 +136,14 @@ def render_work_brief_markdown(brief: WorkBrief | dict[str, Any]) -> str:
     _append_bullets(lines, value.get("open_dependencies"), _NONE_DECLARED)
     lines.extend(["", "## Execution intent", ""])
     _render_intent(lines, value.get("execution_intent"))
+    lines.extend(["", "## Analysis inputs", ""])
+    contracts = value.get("analysis_inputs") or ()
+    if isinstance(contracts, dict):
+        contracts = [{**dict(item), "domain": str(domain)} for domain, item in contracts.items()]
+    if not contracts:
+        lines.append(f"- {_UNKNOWN}")
+    for contract in contracts:
+        lines.append(f"- {_inline(contract.get('domain'))}: fingerprint inputs are declared for {len(contract.get('required_tables', ())) or 'the declared'} table(s); units={_inline(contract.get('units'))}; periods={', '.join(_inline(item) for item in contract.get('periods', ())) or _UNKNOWN}")
     lines.extend(["", "## Proposed investigation", ""])
     stages = value.get("stages") or ()
     if not stages:

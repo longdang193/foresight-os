@@ -9,6 +9,8 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
+from foresight_os.analysis.workbook_inputs import require_table, row_evidence, table_rows
+from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
 from foresight_os.persistence.analysis_store import AnalysisStore
@@ -67,6 +69,7 @@ class SupplierAnalysis:
     monitoring_triggers: tuple[str, ...]
     recommendation: str
     state: AnalysisState
+    contract_fingerprint: str = ""
 
 @dataclass(frozen=True)
 class SupplierWorkflowResult:
@@ -82,39 +85,48 @@ def _number(value: Any) -> float | None:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 def _table(workbook: Any, sheet: str) -> Any:
-    for table in workbook.tables:
-        if table.sheet == sheet:
-            return table
-    raise ToolbeltError(f"supplier recipe requires sheet: {sheet}")
+    return require_table(workbook, sheet)
 
 def _rows(table: Any) -> list[dict[str, Any]]:
-    return [dict(zip(table.columns, row, strict=False)) for row in table.rows]
+    return table_rows(table)
 
 def _row_evidence(table: Any, index: int, digest: str) -> Evidence:
     values = dict(zip(table.columns, table.rows[index], strict=False))
-    provenance = table.row_provenance[index]
-    row_range = f"{provenance[0].coordinate}:{provenance[-1].coordinate}"
-    evidence_id = "supplier-evidence-" + hashlib.sha256(f"{digest}:{table.sheet}:{row_range}".encode()).hexdigest()[:16]
-    return Evidence(evidence_id, SourceLocator(digest, table.sheet, row_range, str(values.get("Currency", "EUR")), "supplier_resilience_recipe", f"{table.sheet} row"), digest, date.today().isoformat(), json.dumps(values, sort_keys=True, default=str))
+    return row_evidence(table, index, digest, f"{table.sheet} row", units=str(values.get("Currency", "EUR")), transformation="supplier_resilience_recipe", evidence_prefix="supplier")
 
 def _weighted(values: list[tuple[float, float]]) -> float:
     total = sum(weight for _, weight in values)
     return sum(value * weight for value, weight in values) / total if total else 0.0
 
-def _fx(currency: str) -> float:
-    return {"EUR": 1.0, "USD": 0.92, "CNY": 0.13}.get(currency, 1.0)
+def _fx(currency: str, rates: dict[str, float] | None = None, *, legacy: bool = True) -> float | None:
+    supported = rates if rates is not None else {"EUR": 1.0, "USD": 0.92, "CNY": 0.13}
+    if currency in supported:
+        return supported[currency]
+    return 1.0 if legacy and rates is None else None
 
-def _unit_cost_eur(row: dict[str, Any]) -> float:
-    return (_number(row.get("Unit_Cost")) or 0.0) * _fx(str(row.get("Currency", "EUR")))
+def _unit_cost_eur(row: dict[str, Any], rates: dict[str, float] | None = None, *, legacy: bool = True) -> float | None:
+    fx = _fx(str(row.get("Currency", "EUR")), rates, legacy=legacy)
+    return None if fx is None else (_number(row.get("Unit_Cost")) or 0.0) * fx
 
 def _record(record_id: str, statement: str, evidence_ids: list[str], assumptions: tuple[str, ...], uncertainty: tuple[str, ...], disconfirmation: tuple[str, ...], monitoring: tuple[str, ...]) -> AnalyticalRecord:
     return AnalyticalRecord(record_id, statement, Basis.DERIVED, Assessment.SUPPORTED, evidence_ids=list(dict.fromkeys(evidence_ids)), assumptions=assumptions, uncertainty=uncertainty, confidence_rationale="Derived from deterministic row-level calculations with explicit exclusions and assumptions.", disconfirmation_conditions=disconfirmation, monitoring_indicators=monitoring)
 
-def analyze_supplier_resilience(source: Path) -> SupplierAnalysis:
+def analyze_supplier_resilience(source: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None) -> SupplierAnalysis:
     source = Path(source)
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
     workbook = spreadsheet_read(source, SheetSelection(sheet_names=("Brief", "Supplier_Master", "Incidents", "Scenario_Assumptions", "Mitigation_Options"), include_hidden=True, include_hidden_rows=True))
     brief, supplier_table, incident_table, scenario_table, option_table = [_table(workbook, name) for name in ("Brief", "Supplier_Master", "Incidents", "Scenario_Assumptions", "Mitigation_Options")]
+    contract = AnalysisInputContract.from_dict(input_contract) if input_contract is not None else AnalysisInputContract(
+        domain="supplier_resilience",
+        required_tables=("Brief", "Supplier_Master", "Incidents", "Scenario_Assumptions", "Mitigation_Options"),
+        units="EUR",
+        reporting_currency="EUR",
+        conversion_rates={"EUR": 1.0, "USD": 0.92, "CNY": 0.13},
+        compatibility_assumption="legacy supplier workbook FX map: EUR=1.0, USD=0.92, CNY=0.13",
+    )
+    contract.validate()
+    conversion_rates = contract.conversion_rates or None
+    legacy_conversion = input_contract is None
     supplier_rows, incident_rows, scenario_rows, option_rows = [_rows(table) for table in (supplier_table, incident_table, scenario_table, option_table)]
     evidence: list[Evidence] = []
     by_row: dict[tuple[str, int], Evidence] = {}
@@ -137,13 +149,20 @@ def analyze_supplier_resilience(source: Path) -> SupplierAnalysis:
     valid_rows = [(index, row) for index, row in enumerate(supplier_rows) if index not in duplicate_indexes]
     family_values: dict[str, list[tuple[int, dict[str, Any], float]]] = {}
     for index, row in valid_rows:
-        spend = (_number(row.get("Annual_Spend")) or 0.0) * _fx(str(row.get("Currency", "EUR")))
+        fx = _fx(str(row.get("Currency", "EUR")), conversion_rates, legacy=legacy_conversion)
+        if fx is None:
+            issues.append(SupplierDataQualityIssue("UNSUPPORTED_CONVERSION", f"No declared conversion rate for {row.get('Currency')}.", (by_row[(supplier_table.sheet, index)].id,)))
+            continue
+        spend = (_number(row.get("Annual_Spend")) or 0.0) * fx
         family_values.setdefault(str(row.get("Part_Family")), []).append((index, row, spend))
     for family, items in family_values.items():
-        costs = sorted(_unit_cost_eur(row) for _, row, _ in items)
+        costs = sorted(value for _, row, _ in items if (value := _unit_cost_eur(row, conversion_rates, legacy=legacy_conversion)) is not None)
+        if not costs:
+            continue
         median = costs[len(costs) // 2] if len(costs) % 2 else (costs[len(costs) // 2 - 1] + costs[len(costs) // 2]) / 2
         for index, row, _ in items:
-            if (_number(row.get("Geo_Risk_1_5")) or 0.0) >= 4 and _unit_cost_eur(row) <= median * 0.8:
+            unit_cost = _unit_cost_eur(row, conversion_rates, legacy=legacy_conversion)
+            if unit_cost is not None and (_number(row.get("Geo_Risk_1_5")) or 0.0) >= 4 and unit_cost <= median * 0.8:
                 issues.append(SupplierDataQualityIssue("LOW_COST_HIGH_RISK", f"{row.get('Supplier')} is low-cost relative to {family} but has high geographic risk.", (by_row[(supplier_table.sheet, index)].id,)))
     metrics: list[SupplierConcentrationMetric] = []
     for family, items in sorted(family_values.items()):
@@ -190,7 +209,7 @@ def analyze_supplier_resilience(source: Path) -> SupplierAnalysis:
     state = AnalysisState("supplier-resilience", 1, evidence=evidence, claims=claims, implications=[implication], recommendations=[recommendation], relationships=relationships, revisions=[Revision("revision-1", 1, "supplier resilience analysis pending acceptance", [item.id for item in [*evidence, *calculations, *claims, implication, recommendation]])], invalidation=Invalidation(), revision_status=RevisionStatus.DRAFT, calculations=calculations)
     decision_question = next((str(row[1]) for row in brief.rows if row and row[0] == "Decision question" and len(row) > 1), "Does purchasing concentration create unacceptable strategic exposure?")
     horizon = next((str(row[1]) for row in brief.rows if row and row[0] == "Horizon" and len(row) > 1), "12–36 months")
-    return SupplierAnalysis(digest, decision_question, horizon, assumptions, tuple(issues), tuple(metrics), tuple(scenarios), options, ("Supplier-part HHI and top supplier share", "Qualified alternatives by critical family", "Disruption days and expedite premium", "Defect PPM and lead-time excursions", "Open data-quality exceptions"), recommendation.statement, state)
+    return SupplierAnalysis(digest, decision_question, horizon, assumptions, tuple(issues), tuple(metrics), tuple(scenarios), options, ("Supplier-part HHI and top supplier share", "Qualified alternatives by critical family", "Disruption days and expedite premium", "Defect PPM and lead-time excursions", "Open data-quality exceptions"), recommendation.statement, state, contract.fingerprint)
 
 def _money(value: float | None) -> str:
     return "n/a" if value is None else f"€{value:,.0f}"
@@ -228,9 +247,11 @@ def write_supplier_report(path: Path, supplier: SupplierAnalysis, state: Analysi
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_supplier_report(supplier, state), encoding="utf-8")
 
-def run_supplier_resilience_workflow(store: AnalysisStore, source: Path, *, human_decision: str = "REJECT", output_dir: Path | None = None) -> SupplierWorkflowResult:
+def run_supplier_resilience_workflow(store: AnalysisStore, source: Path, *, human_decision: str = "REJECT", output_dir: Path | None = None, input_contract: AnalysisInputContract | dict[str, Any] | None = None) -> SupplierWorkflowResult:
     try:
-        supplier = analyze_supplier_resilience(Path(source))
+        if input_contract is None and store.brief_path.exists():
+            input_contract = normalize_work_brief(store.load_brief()).contract_for_domain("supplier_resilience")
+        supplier = analyze_supplier_resilience(Path(source), input_contract=input_contract)
         pending = store.save_pending(supplier.state)
         review = review_analysis_state(pending)
         acceptance = review_and_accept_pending_analysis(store, pending, review, f"review-{pending.investigation_id}-{pending.revision}", human_decision=human_decision)

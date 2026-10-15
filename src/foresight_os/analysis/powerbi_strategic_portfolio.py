@@ -9,6 +9,8 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
+from foresight_os.analysis.workbook_inputs import require_table, row_evidence, table_rows
+from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
 from foresight_os.persistence.analysis_store import AnalysisStore
@@ -59,6 +61,9 @@ class PowerBIAnalysis:
     monitoring_triggers: tuple[str, ...]
     recommendation: str
     state: AnalysisState
+    contract_fingerprint: str = ""
+    baseline_period_label: str = "2025-01:2025-09"
+    comparison_period_label: str = "2026-01:2026-09"
 
 @dataclass(frozen=True)
 class PowerBIWorkflowResult:
@@ -71,23 +76,16 @@ class PowerBIWorkflowResult:
 
 
 def _table(workbook: Any, sheet: str) -> Any:
-    for table in workbook.tables:
-        if table.sheet == sheet:
-            return table
-    raise ToolbeltError(f"Power BI recipe requires sheet: {sheet}")
+    return require_table(workbook, sheet)
 
 def _rows(table: Any) -> list[dict[str, Any]]:
-    return [dict(zip(table.columns, row, strict=False)) for row in table.rows]
+    return table_rows(table)
 
 def _number(value: Any) -> float | None:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 def _row_evidence(table: Any, index: int, digest: str) -> Evidence:
-    values = dict(zip(table.columns, table.rows[index], strict=False))
-    provenance = table.row_provenance[index]
-    row_range = f"{provenance[0].coordinate}:{provenance[-1].coordinate}"
-    evidence_id = "powerbi-evidence-" + hashlib.sha256(f"{digest}:{table.sheet}:{row_range}".encode()).hexdigest()[:16]
-    return Evidence(evidence_id, SourceLocator(digest, table.sheet, row_range, "EUR", "powerbi_strategic_portfolio_recipe", f"{table.sheet} row"), digest, date.today().isoformat(), json.dumps(values, sort_keys=True, default=str))
+    return row_evidence(table, index, digest, f"{table.sheet} row", units="EUR", transformation="powerbi_strategic_portfolio_recipe", evidence_prefix="powerbi")
 
 def _record(record_id: str, statement: str, evidence_ids: list[str], assumptions: tuple[str, ...], uncertainty: tuple[str, ...], disconfirmation: tuple[str, ...], monitoring: tuple[str, ...]) -> AnalyticalRecord:
     return AnalyticalRecord(record_id, statement, Basis.DERIVED, Assessment.SUPPORTED, evidence_ids=list(dict.fromkeys(evidence_ids)), assumptions=assumptions, uncertainty=uncertainty, confidence_rationale="Derived from deduplicated, period-aligned facts and separately appraised forward signals.", disconfirmation_conditions=disconfirmation, monitoring_indicators=monitoring)
@@ -108,6 +106,23 @@ def _source_quality(value: str) -> float:
     return {"High": 3.0, "Medium": 2.0, "Low": 1.0}.get(value, 1.0)
 
 
+def _period_window(contract: AnalysisInputContract, year: int) -> tuple[int, int]:
+    for period in contract.periods:
+        value = str(period)
+        if not value.startswith(f"{year}-"):
+            continue
+        try:
+            start, end = value.split(":", 1)
+            return int(start[-2:]), int(end[-2:])
+        except (ValueError, IndexError):
+            break
+    return 1, 9
+
+
+def _period_label(year: int, window: tuple[int, int]) -> str:
+    return f"{year}-{window[0]:02d}:{year}-{window[1]:02d}"
+
+
 def _forward_signal_index(signal_rows: list[dict[str, Any]], segment: str | None = None) -> float:
     rows = [
         row for row in signal_rows
@@ -117,12 +132,29 @@ def _forward_signal_index(signal_rows: list[dict[str, Any]], segment: str | None
     values = [(_number(row.get("Change_Index")) or 0.0) for row in rows]
     return sum(values) / len(values) if values else 0.0
 
-def analyze_powerbi_strategic_portfolio(source: Path) -> PowerBIAnalysis:
+def analyze_powerbi_strategic_portfolio(source: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None) -> PowerBIAnalysis:
     source = Path(source)
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
     sheets = ("Brief", "Dim_Region", "Dim_Segment", "Fact_Performance", "Targets", "Forward_Signals", "Measure_Definitions", "Dashboard_Snapshot", "Strategic_Options", "Change_One_Input")
     workbook = spreadsheet_read(source, SheetSelection(sheet_names=sheets, include_hidden=True, include_hidden_rows=True))
     tables = {name: _table(workbook, name) for name in sheets}
+    contract = AnalysisInputContract.from_dict(input_contract) if input_contract is not None else AnalysisInputContract(
+        domain="powerbi_strategic_portfolio",
+        required_tables=sheets,
+        baseline_period="2025",
+        comparison_period="2026",
+        units="EUR",
+        periods=("2025-01:2025-09", "2026-01:2026-09"),
+        compatibility_assumption="legacy Power BI comparable-period defaults",
+    )
+    contract.validate()
+    baseline_year = int(contract.baseline_period or "2025")
+    comparison_year = int(contract.comparison_period or "2026")
+    baseline_window = _period_window(contract, baseline_year)
+    comparison_window = _period_window(contract, comparison_year)
+    baseline_label = _period_label(baseline_year, baseline_window)
+    comparison_label = _period_label(comparison_year, comparison_window)
+    selected_segments = set(contract.entity_scope)
     rows = {name: _rows(table) for name, table in tables.items() if name != "Brief"}
     evidence: list[Evidence] = []
     by_row: dict[tuple[str, int], Evidence] = {}
@@ -142,17 +174,17 @@ def analyze_powerbi_strategic_portfolio(source: Path) -> PowerBIAnalysis:
             issues.append(PowerBIDataQualityIssue("DUPLICATE_FACT", f"Duplicate fact row for {key}; the later row is excluded from reconciled KPIs.", (by_row[("Fact_Performance", seen[key])].id, by_row[("Fact_Performance", index)].id)))
         else:
             seen[key] = index
-    valid_facts = [(index, row) for index, row in enumerate(rows["Fact_Performance"]) if index not in duplicate_indexes]
-    def period_total(year: int, field: str) -> float:
-        return sum(_number(row.get(field)) or 0.0 for _, row in valid_facts if int(row.get("Year")) == year and int(row.get("Month")) <= 9)
-    revenue_2025 = period_total(2025, "Revenue_EUR")
-    revenue_2026 = period_total(2026, "Revenue_EUR")
-    gp_2026 = period_total(2026, "Gross_Profit_EUR")
+    valid_facts = [(index, row) for index, row in enumerate(rows["Fact_Performance"]) if index not in duplicate_indexes and (not selected_segments or str(row.get("Segment")) in selected_segments)]
+    def period_total(year: int, field: str, window: tuple[int, int]) -> float:
+        return sum(_number(row.get(field)) or 0.0 for _, row in valid_facts if int(row.get("Year")) == year and window[0] <= int(row.get("Month")) <= window[1])
+    revenue_2025 = period_total(baseline_year, "Revenue_EUR", baseline_window)
+    revenue_2026 = period_total(comparison_year, "Revenue_EUR", comparison_window)
+    gp_2026 = period_total(comparison_year, "Gross_Profit_EUR", comparison_window)
     yoy = revenue_2026 / revenue_2025 - 1 if revenue_2025 else 0.0
     targets = {(int(row.get("Year")), str(row.get("Region")), str(row.get("Segment"))): (index, row) for index, row in enumerate(rows["Targets"])}
     regions = [str(row.get("Region")) for row in rows["Dim_Region"]]
-    segments = [str(row.get("Segment")) for row in rows["Dim_Segment"]]
-    missing_targets = [(year, region, segment) for year in (2025, 2026) for region in regions for segment in segments if (year, region, segment) not in targets]
+    segments = [str(row.get("Segment")) for row in rows["Dim_Segment"] if not selected_segments or str(row.get("Segment")) in selected_segments]
+    missing_targets = [(year, region, segment) for year in (baseline_year, comparison_year) for region in regions for segment in segments if (year, region, segment) not in targets]
     for key in missing_targets:
         issues.append(PowerBIDataQualityIssue("MISSING_TARGET", f"Target is missing for {key[0]} / {key[1]} / {key[2]}; target attainment is incomplete.", tuple(by_row[("Targets", index)].id for index, row in enumerate(rows["Targets"]) if str(row.get("Region")) == key[1] and str(row.get("Segment")) == key[2]) or tuple()))
     latest_refresh = max((_date(row.get("Refresh_Timestamp")) for _, row in valid_facts), default=None)
@@ -162,7 +194,7 @@ def analyze_powerbi_strategic_portfolio(source: Path) -> PowerBIAnalysis:
             issues.append(PowerBIDataQualityIssue("STALE_REFRESH", f"{row.get('Page')} / {row.get('KPI')} refreshes at {refresh.date().isoformat()}, older than the latest fact refresh {latest_refresh.date().isoformat()}.", (by_row[("Dashboard_Snapshot", index)].id,)))
     measure_issue_rows = [index for index, row in enumerate(rows["Measure_Definitions"]) if str(row.get("Measure")) == "YoY Revenue %" and "full-year" in str(row.get("Validation_Note")).lower()]
     if measure_issue_rows:
-        issues.append(PowerBIDataQualityIssue("FILTER_CONTEXT_TRAP", "The YoY measure must compare 2026 Jan–Sep with 2025 Jan–Sep; a full-year versus YTD comparison is invalid.", tuple(by_row[("Measure_Definitions", index)].id for index in measure_issue_rows)))
+        issues.append(PowerBIDataQualityIssue("FILTER_CONTEXT_TRAP", f"The YoY measure must compare {comparison_label} with {baseline_label}; a full-year versus partial-period comparison is invalid.", tuple(by_row[("Measure_Definitions", index)].id for index in measure_issue_rows)))
     signal_rows = rows["Forward_Signals"]
     decision_signal_rows = [row for row in signal_rows if str(row.get("Type")) != "Narrative"]
     weighted_forward = sum((_number(row.get("Change_Index")) or 0.0) * _source_quality(str(row.get("Source_Quality"))) for row in decision_signal_rows) / sum(_source_quality(str(row.get("Source_Quality"))) for row in decision_signal_rows)
@@ -171,9 +203,9 @@ def analyze_powerbi_strategic_portfolio(source: Path) -> PowerBIAnalysis:
         issues.append(PowerBIDataQualityIssue("CONTRADICTORY_FORWARD_SIGNAL", "Booked dashboard growth is positive while leading order, pipeline, tender, budget, or macro signals weaken.", tuple(by_row[("Forward_Signals", index)].id for index, row in enumerate(signal_rows) if (_number(row.get("Change_Index")) or 0.0) < 0)))
     segment_assessments: list[PowerBISegmentAssessment] = []
     for segment in segments:
-        rev25 = sum(_number(row.get("Revenue_EUR")) or 0.0 for _, row in valid_facts if str(row.get("Segment")) == segment and int(row.get("Year")) == 2025 and int(row.get("Month")) <= 9)
-        rev26 = sum(_number(row.get("Revenue_EUR")) or 0.0 for _, row in valid_facts if str(row.get("Segment")) == segment and int(row.get("Year")) == 2026 and int(row.get("Month")) <= 9)
-        gp26 = sum(_number(row.get("Gross_Profit_EUR")) or 0.0 for _, row in valid_facts if str(row.get("Segment")) == segment and int(row.get("Year")) == 2026 and int(row.get("Month")) <= 9)
+        rev25 = sum(_number(row.get("Revenue_EUR")) or 0.0 for _, row in valid_facts if str(row.get("Segment")) == segment and int(row.get("Year")) == baseline_year and baseline_window[0] <= int(row.get("Month")) <= baseline_window[1])
+        rev26 = sum(_number(row.get("Revenue_EUR")) or 0.0 for _, row in valid_facts if str(row.get("Segment")) == segment and int(row.get("Year")) == comparison_year and comparison_window[0] <= int(row.get("Month")) <= comparison_window[1])
+        gp26 = sum(_number(row.get("Gross_Profit_EUR")) or 0.0 for _, row in valid_facts if str(row.get("Segment")) == segment and int(row.get("Year")) == comparison_year and comparison_window[0] <= int(row.get("Month")) <= comparison_window[1])
         segment_signals = [row for row in decision_signal_rows if str(row.get("Segment")) in {segment, "All"}]
         forward = _forward_signal_index(signal_rows, segment)
         action = "Selective/staged" if forward < 0 else "Protect/scale"
@@ -199,13 +231,13 @@ def analyze_powerbi_strategic_portfolio(source: Path) -> PowerBIAnalysis:
         for evidence_id in issue.evidence_ids:
             relationships.append(Relationship(f"powerbi-issue-{issue_index}-{issue.kind.lower()}-{evidence_id}", evidence_id, recommendation.id, "contradicts"))
     recommendation = replace(recommendation, relationship_ids=[item.id for item in relationships if item.to_id == recommendation.id])
-    calculations = [CalculationRecord("powerbi-revenue-2025-jan-sep", MeasurementKey("all", "revenue", "2025-01:2025-09", "EUR"), "sum(deduplicated Revenue_EUR where Year=2025 and Month<=9)", [by_row[("Fact_Performance", index)].id for index, row in valid_facts if int(row.get("Year")) == 2025 and int(row.get("Month")) <= 9], revenue_2025, "EUR", ["Fact_Performance:2025-01:2025-09"]), CalculationRecord("powerbi-revenue-2026-jan-sep", MeasurementKey("all", "revenue", "2026-01:2026-09", "EUR"), "sum(deduplicated Revenue_EUR where Year=2026 and Month<=9)", [by_row[("Fact_Performance", index)].id for index, row in valid_facts if int(row.get("Year")) == 2026 and int(row.get("Month")) <= 9], revenue_2026, "EUR", ["Fact_Performance:2026-01:2026-09"]), CalculationRecord("powerbi-yoy-growth", MeasurementKey("all", "yoy_revenue_growth", "2026-01:2026-09 vs 2025-01:2025-09", "ratio"), "revenue_2026_jan_sep / revenue_2025_jan_sep - 1", ["powerbi-revenue-2025-jan-sep", "powerbi-revenue-2026-jan-sep"], yoy, "ratio", ["Fact_Performance:comparable-period"])]
+    calculations = [CalculationRecord("powerbi-revenue-baseline", MeasurementKey("all", "revenue", baseline_label, "EUR"), f"sum(deduplicated Revenue_EUR where Year={baseline_year} and Month between {baseline_window[0]} and {baseline_window[1]})", [by_row[("Fact_Performance", index)].id for index, row in valid_facts if int(row.get("Year")) == baseline_year and baseline_window[0] <= int(row.get("Month")) <= baseline_window[1]], revenue_2025, "EUR", [f"Fact_Performance:{baseline_label}"]), CalculationRecord("powerbi-revenue-comparison", MeasurementKey("all", "revenue", comparison_label, "EUR"), f"sum(deduplicated Revenue_EUR where Year={comparison_year} and Month between {comparison_window[0]} and {comparison_window[1]})", [by_row[("Fact_Performance", index)].id for index, row in valid_facts if int(row.get("Year")) == comparison_year and comparison_window[0] <= int(row.get("Month")) <= comparison_window[1]], revenue_2026, "EUR", [f"Fact_Performance:{comparison_label}"]), CalculationRecord("powerbi-yoy-growth", MeasurementKey("all", "yoy_revenue_growth", f"{comparison_label} vs {baseline_label}", "ratio"), "revenue_comparison / revenue_baseline - 1", ["powerbi-revenue-baseline", "powerbi-revenue-comparison"], yoy, "ratio", ["Fact_Performance:comparable-period"])]
     changes = tuple(PowerBIChangeReassessment(str(row.get("Change_ID")), str(row.get("Expected_Reassessment")), _number(row.get("Replacement")) if row.get("Replacement") is not None else row.get("Replacement"), "Unrelated source appraisal remains unchanged.", "Reassess only the named evidence path before changing the portfolio recommendation.") for row in rows["Change_One_Input"])
     state = AnalysisState("powerbi-strategic-portfolio", 1, evidence=evidence, claims=claims, implications=[implication], recommendations=[recommendation], relationships=relationships, revisions=[Revision("revision-1", 1, "Power BI strategic portfolio analysis pending acceptance", [item.id for item in [*evidence, *calculations, *claims, implication, recommendation]])], invalidation=Invalidation(), revision_status=RevisionStatus.DRAFT, calculations=calculations)
     decision_question = next((str(row[1]) for row in tables["Brief"].rows if row and row[0] == "Decision question" and len(row) > 1), "Should management accelerate investment?")
     horizon = next((str(row[1]) for row in tables["Brief"].rows if row and row[0] == "Horizon" and len(row) > 1), "Next 12–24 months")
     options = tuple(dict(row) for row in rows["Strategic_Options"])
-    return PowerBIAnalysis(digest, decision_question, horizon, assumptions, tuple(issues), revenue_2025, revenue_2026, yoy, gp_2026, gp_2026 / revenue_2026 if revenue_2026 else 0.0, weighted_forward, tuple(segment_assessments), options, changes, ("Comparable-period revenue and YoY growth", "Analytics pipeline coverage and customer budget scrutiny", "Services renewal intent and aftermarket utilization", "Hardware order/tender signals", "Target completeness and dashboard refresh age"), recommendation.statement, state)
+    return PowerBIAnalysis(digest, decision_question, horizon, assumptions, tuple(issues), revenue_2025, revenue_2026, yoy, gp_2026, gp_2026 / revenue_2026 if revenue_2026 else 0.0, weighted_forward, tuple(segment_assessments), options, changes, ("Comparable-period revenue and YoY growth", "Analytics pipeline coverage and customer budget scrutiny", "Services renewal intent and aftermarket utilization", "Hardware order/tender signals", "Target completeness and dashboard refresh age"), recommendation.statement, state, contract.fingerprint, baseline_label, comparison_label)
 
 def _citations(state: AnalysisState, ids: tuple[str, ...] | list[str]) -> str:
     by_id = {item.id: item for item in state.evidence}
@@ -215,7 +247,7 @@ def render_powerbi_report(powerbi: PowerBIAnalysis, state: AnalysisState | None 
     state = state or powerbi.state
     if state.revision_status != RevisionStatus.ACCEPTED or any(not item.accepted for item in derive_finding_views(state)):
         raise ValueError("Power BI report requires current accepted findings")
-    lines = ["# Power BI Strategic Portfolio Executive Report", "", f"Decision question: {powerbi.decision_question}", f"Horizon: {powerbi.horizon}", f"Source workbook SHA-256: `{powerbi.source_sha256}`", "", "## What is changing?", "- The dashboard shows positive booked growth, but forward indicators and semantic-model caveats prevent a simple broad-acceleration conclusion.", "", "## Reconciled KPIs", "| KPI | Value | Definition |", "|---|---:|---|", f"| 2025 Jan–Sep revenue | €{powerbi.revenue_2025_jan_sep:,.2f} | Deduplicated comparable-period facts |", f"| 2026 Jan–Sep revenue | €{powerbi.revenue_2026_jan_sep:,.2f} | Deduplicated comparable-period facts |", f"| 2026 Jan–Sep YoY revenue growth | {powerbi.yoy_revenue_growth:.2%} | 2026 Jan–Sep versus 2025 Jan–Sep |", f"| 2026 Jan–Sep gross margin | {powerbi.gross_margin_2026_jan_sep:.2%} | Reconciled gross profit / revenue |", "", "## Filter-context checks", "- YoY uses Jan–Sep versus Jan–Sep; full-year 2025 versus 2026 YTD is not used.", "- Target attainment remains provisional where the Southern Europe Analytics denominator is missing.", "", "## Segment evidence", "| Segment | YoY growth | Gross margin | Forward index | Action | Evidence |", "|---|---:|---:|---:|---|---|"]
+    lines = ["# Power BI Strategic Portfolio Executive Report", "", f"Decision question: {powerbi.decision_question}", f"Horizon: {powerbi.horizon}", f"Source workbook SHA-256: `{powerbi.source_sha256}`", "", "## What is changing?", "- The dashboard shows positive booked growth, but forward indicators and semantic-model caveats prevent a simple broad-acceleration conclusion.", "", "## Reconciled KPIs", "| KPI | Value | Definition |", "|---|---:|---|", f"| {powerbi.baseline_period_label} revenue | €{powerbi.revenue_2025_jan_sep:,.2f} | Deduplicated comparable-period facts |", f"| {powerbi.comparison_period_label} revenue | €{powerbi.revenue_2026_jan_sep:,.2f} | Deduplicated comparable-period facts |", f"| YoY revenue growth | {powerbi.yoy_revenue_growth:.2%} | {powerbi.comparison_period_label} versus {powerbi.baseline_period_label} |", f"| {powerbi.comparison_period_label} gross margin | {powerbi.gross_margin_2026_jan_sep:.2%} | Reconciled gross profit / revenue |", "", "## Filter-context checks", f"- YoY uses {powerbi.comparison_period_label} versus {powerbi.baseline_period_label}; the comparison window is contract-selected.", "- Target attainment remains provisional where the Southern Europe Analytics denominator is missing.", "", "## Segment evidence", "| Segment | YoY growth | Gross margin | Forward index | Action | Evidence |", "|---|---:|---:|---:|---|---|"]
     lines.extend(f"| {item.segment} | {item.yoy_growth:.2%} | {item.gross_margin_2026:.2%} | {item.forward_signal_index:.2f} | {item.action} | {_citations(state, item.evidence_ids)} |" for item in powerbi.segment_assessments)
     lines.extend(["", "## Contradiction analysis"])
     lines.extend(f"- `{issue.kind}`: {issue.message} (source: {_citations(state, issue.evidence_ids)})" for issue in powerbi.data_quality_issues)
@@ -231,9 +263,11 @@ def render_powerbi_report(powerbi: PowerBIAnalysis, state: AnalysisState | None 
     lines.extend(f"- `{item.target_id}`: {item.review_status}/{item.review_outcome}; accepted={item.accepted}; evidence={_citations(state, item.evidence_ids)}" for item in derive_finding_views(state))
     return "\n".join(lines) + "\n"
 
-def run_powerbi_strategic_portfolio_workflow(store: AnalysisStore, source: Path, *, human_decision: str = "REJECT", output_dir: Path | None = None) -> PowerBIWorkflowResult:
+def run_powerbi_strategic_portfolio_workflow(store: AnalysisStore, source: Path, *, human_decision: str = "REJECT", output_dir: Path | None = None, input_contract: AnalysisInputContract | dict[str, Any] | None = None) -> PowerBIWorkflowResult:
     try:
-        powerbi = analyze_powerbi_strategic_portfolio(Path(source))
+        if input_contract is None and store.brief_path.exists():
+            input_contract = normalize_work_brief(store.load_brief()).contract_for_domain("powerbi_strategic_portfolio")
+        powerbi = analyze_powerbi_strategic_portfolio(Path(source), input_contract=input_contract)
         pending = store.save_pending(powerbi.state)
         review = review_analysis_state(pending)
         acceptance = review_and_accept_pending_analysis(store, pending, review, f"review-{pending.investigation_id}-{pending.revision}", human_decision=human_decision)

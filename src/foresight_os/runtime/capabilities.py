@@ -341,32 +341,27 @@ def prepare_capability_context(
     return context
 
 
-def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, context: Mapping[str, Any]):
+def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, context: Mapping[str, Any], adapter_parameters: frozenset[str] | None = None):
     scope = context.get("scope")
     semaphores = getattr(scope, "semaphores", None) if scope is not None else None
     if semaphores is None:
         semaphores = context.setdefault("_capability_semaphores", {})  # type: ignore[attr-defined]
     semaphore = semaphores.setdefault(definition.id, asyncio.Semaphore(max(1, definition.max_parallelism)))
     mode = definition.execution_mode
+    parameters = adapter_parameters
 
     def blocking_call(args: tuple[Any, ...], kwargs: dict[str, Any], cancel_event: asyncio.Event | None) -> Any:
         effective_kwargs = dict(kwargs)
         if definition.id in {"spreadsheet_read", "data_analysis"} and scope is not None:
-            try:
-                accepts_cache = "_cache" in inspect.signature(dispatch).parameters
-            except (TypeError, ValueError):
-                accepts_cache = False
+            accepts_cache = "_cache" in parameters if parameters is not None else False
             if accepts_cache:
                 if getattr(scope, "workbook_cache", None) is None:
                     from foresight_os.runtime.local_toolbelt import WorkbookReadCache
                     scope.workbook_cache = WorkbookReadCache()
                 effective_kwargs.setdefault("_cache", scope.workbook_cache)
         if cancel_event is not None:
-            try:
-                parameters = inspect.signature(dispatch).parameters
-            except (TypeError, ValueError):
-                parameters = {}
-            if "cancel_check" in parameters:
+            accepts_cancel = "cancel_check" in parameters if parameters is not None else False
+            if accepts_cancel:
                 effective_kwargs.setdefault("cancel_check", cancel_event.is_set)
         result = dispatch(*args, **effective_kwargs)
         if inspect.isawaitable(result):
@@ -496,7 +491,11 @@ class _InstrumentedMCPTool:
 def instrument_tool(tool: Any, definition: CapabilityDefinition, context: Mapping[str, Any]) -> Any:
     mcp_call = getattr(tool, "call_tool", None)
     if callable(mcp_call) and not callable(tool):
-        dispatch = _instrumented_dispatch(mcp_call, definition, context)
+        try:
+            adapter_parameters = frozenset(inspect.signature(mcp_call).parameters)
+        except (TypeError, ValueError):
+            adapter_parameters = frozenset()
+        dispatch = _instrumented_dispatch(mcp_call, definition, context, adapter_parameters)
         wrapped = _InstrumentedMCPTool(tool, dispatch)
         wrapped.capability_id = definition.id
         return wrapped
@@ -504,7 +503,13 @@ def instrument_tool(tool: Any, definition: CapabilityDefinition, context: Mappin
         return tool
 
     original = getattr(tool, "__foresight_original_callable__", None) or tool
-    dispatch = _instrumented_dispatch(original, definition, context)
+    try:
+        signature = inspect.signature(original)
+        adapter_parameters = frozenset(signature.parameters)
+    except (TypeError, ValueError):
+        signature = None
+        adapter_parameters = frozenset()
+    dispatch = _instrumented_dispatch(original, definition, context, adapter_parameters)
 
     @functools.wraps(tool)
     async def invoke(*args: Any, **kwargs: Any) -> Any:
@@ -513,11 +518,11 @@ def instrument_tool(tool: Any, definition: CapabilityDefinition, context: Mappin
     if not getattr(tool, "__name__", None):
         invoke.__name__ = definition.id
         invoke.__qualname__ = definition.id
-    signature = inspect.signature(tool)
-    invoke.__signature__ = signature.replace(
+    public_signature = inspect.signature(tool)
+    invoke.__signature__ = public_signature.replace(
         parameters=[
             parameter
-            for parameter in signature.parameters.values()
+            for parameter in public_signature.parameters.values()
             if parameter.name not in {"cancel_check", "_cache"}
         ]
     )

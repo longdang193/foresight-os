@@ -67,6 +67,14 @@ def test_stage_input_carries_research_needs_into_provider_payload():
     assert stage_input.to_payload()["research_needs"] == ("workbook measurements", "source details")
 
 
+def test_contract_identity_changes_stage_semantic_fingerprint():
+    stage = RecipeStage("stage-1", ExecutionPattern.DIRECT, ({"id": "analyst"},), "prompt", "typed-result", {})
+    first = StageInput("question", "2030", "assess", "result", analysis_contract_fingerprints=(("portfolio_resilience", "first"),))
+    second = StageInput("question", "2030", "assess", "result", analysis_contract_fingerprints=(("portfolio_resilience", "second"),))
+
+    assert _stage_fingerprints(stage, first, ())[0] != _stage_fingerprints(stage, second, ())[0]
+
+
 def test_semantic_and_policy_fingerprints_are_distinct():
     base = RecipeStage("stage-1", ExecutionPattern.DIRECT, ({"id": "analyst"},), "prompt", "typed-result", {}, objective="assess", expected_result="result")
     changed_policy = RecipeStage("stage-1", ExecutionPattern.DIRECT, ({"id": "analyst"},), "prompt", "typed-result", {"max_timeout_seconds": 120}, objective="assess", expected_result="result")

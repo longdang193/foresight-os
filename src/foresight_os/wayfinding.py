@@ -15,6 +15,7 @@ def create_work_brief(
     stages: list[WorkStage] | None = None,
     consequence_level: str = "standard",
     user_preferences: dict[str, object] | None = None,
+    analysis_inputs: dict[str, object] | None = None,
     producer: MethodProvenance | None = None,
 ) -> WorkBrief:
     resolved_scope = list(scope or [])
@@ -34,6 +35,7 @@ def create_work_brief(
         horizon=horizon,
         consequence_level=consequence_level,
         user_preferences=dict(user_preferences or {}),
+        analysis_inputs=dict(analysis_inputs or {}),
         producer=producer,
     )
 
@@ -54,6 +56,7 @@ def refine_work_brief(
     preferred_participants: tuple[str, ...] = (),
     required_capabilities: tuple[str, ...] = (),
     preferred_capabilities: tuple[str, ...] = (),
+    analysis_inputs: dict[str, object] | None = None,
 ) -> WorkBrief:
     intent = None
     if any((required_patterns, preferred_patterns, required_participants, preferred_participants, required_capabilities, preferred_capabilities)):
@@ -75,5 +78,6 @@ def refine_work_brief(
         horizon=brief.horizon if horizon is None else horizon,
         consequence_level=brief.consequence_level if consequence_level is None else consequence_level,
         user_preferences={**brief.user_preferences, **dict(user_preferences or {})},
+        analysis_inputs=brief.analysis_inputs if analysis_inputs is None else dict(analysis_inputs),
         execution_intent=intent if intent is not None else brief.execution_intent,
     )

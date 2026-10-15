@@ -10,6 +10,7 @@ from foresight_os.domain.approval import AdaptationEnvelope, ApprovalStatus, app
 from foresight_os.controller.recipes import ExecutionRecipe
 from foresight_os.analysis.result_committer import ANALYSIS_STAGE_RESULT_CONTRACT, CanonicalResultCommitter, analysis_stage_result_schema
 from foresight_os.persistence.analysis_store import AnalysisStore
+from foresight_os.domain.analysis_inputs import normalize_work_brief
 from foresight_os.persistence.ids import canonical_json_hash
 from foresight_os.runtime.capabilities import CapabilityUnavailableError, prepare_capability_context
 from foresight_os.runtime.workflow import run_recipe_async
@@ -161,6 +162,8 @@ class ExecutionGate:
                 raise ExecutionAdmissionError("approval was superseded before dispatch")
         if client is None:
             raise ExecutionAdmissionError("approved execution requires a configured client")
+        brief = self.store.load_brief()
+        normalized_intent = normalize_work_brief(brief)
         context = _local_capability_context(self.store, run_context)
         context.update({
             "execution_admitted": True,
@@ -173,6 +176,11 @@ class ExecutionGate:
             "require_structured_output": True,
             "structured_output_schema": analysis_stage_result_schema(),
             "canonical_result_committer": CanonicalResultCommitter(self.store, self.store.load_brief().investigation_id),
+            "normalized_intent": normalized_intent,
+            "analysis_contract_fingerprints": {
+                contract.domain: contract.fingerprint
+                for contract in normalized_intent.contracts
+            },
         })
         return await run_recipe_async(admission.recipe, prompt, client, admission.run_id, context)
 

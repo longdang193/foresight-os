@@ -5,6 +5,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
+from .analysis_inputs import AnalysisInputContract
 from .models import AnalysisState, EvidenceCandidate, ExecutionIntent, MethodProvenance, ResearchNeed, ResearchNeedKind, WorkBrief
 from foresight_os.controller.recipes import INDEPENDENT_VALIDATION_POLICY, ExecutionRecipe, TYPED_REVIEW_CHECK_IDS
 from foresight_os.domain.approval import ApprovalProjection, ApprovalRecord, AdaptationEnvelope
@@ -70,6 +71,11 @@ def _validate_schema(value: dict[str, Any], schema_name: str) -> None:
 def validate_work_brief(brief: WorkBrief | dict[str, Any]) -> dict[str, Any]:
     value = brief.to_dict() if isinstance(brief, WorkBrief) else dict(brief)
     value = _normalize_work_brief(value)
+    for contract_value in value.get("analysis_inputs", ()):
+        try:
+            AnalysisInputContract.from_dict(contract_value).validate()
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
     _validate_schema(value, "work_brief.schema.json")
     return value
 
@@ -171,6 +177,17 @@ def _normalize_work_brief(value: dict[str, Any]) -> dict[str, Any]:
         current.setdefault("limits", {})
         stages.append(current)
     normalized["stages"] = stages
+    if "analysis_inputs" in normalized:
+        contracts = normalized["analysis_inputs"]
+        if isinstance(contracts, dict):
+            contracts = [
+                {**dict(contract), "domain": str(domain)} if isinstance(contract, dict) else {"domain": str(domain)}
+                for domain, contract in contracts.items()
+            ]
+        normalized["analysis_inputs"] = [
+            AnalysisInputContract.from_dict(contract).to_dict()
+            for contract in contracts
+        ]
     normalized.setdefault("horizon", "unspecified")
     normalized.setdefault("consequence_level", "standard")
     return normalized
