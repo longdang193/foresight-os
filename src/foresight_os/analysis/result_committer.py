@@ -530,6 +530,14 @@ def _resolve(value: object, aliases: Mapping[str, str], label: str) -> str:
     return aliases[value]
 
 
+def _canonical_record_id(record_id: object, record: object) -> str:
+    if isinstance(record, Mapping):
+        value = record.get("id")
+    else:
+        value = getattr(record, "id", None)
+    return str(value if value is not None else record_id)
+
+
 def _source_locator(value: object, label: str) -> SourceLocator:
     item = _mapping(value, label)
     _validate_fields(item, _SOURCE_LOCATOR_FIELDS, label)
@@ -573,22 +581,22 @@ def normalize_stage_result(
         return isinstance(record, Mapping) and field_name in record
 
     known_evidence_aliases = {
-        record_id: record_id
+        record_id: _canonical_record_id(record_id, record)
         for record_id, record in dict(existing_records or {}).items()
         if isinstance(record, Evidence) or has_field(record, "source_locator")
     }
     known_calculation_aliases = {
-        record_id: record_id
+        record_id: _canonical_record_id(record_id, record)
         for record_id, record in dict(existing_records or {}).items()
         if isinstance(record, CalculationRecord) or has_field(record, "formula")
     }
     known_record_aliases = {
-        record_id: record_id
+        record_id: _canonical_record_id(record_id, record)
         for record_id, record in dict(existing_records or {}).items()
         if isinstance(record, (AnalyticalRecord, Artifact)) or has_field(record, "statement") or has_field(record, "path")
     }
     known_relationship_aliases = {
-        record_id: record_id
+        record_id: _canonical_record_id(record_id, record)
         for record_id, record in dict(existing_records or {}).items()
         if isinstance(record, Relationship) or has_field(record, "relation_type")
     }
@@ -596,6 +604,16 @@ def normalize_stage_result(
     calculation_aliases: dict[str, str] = {}
     record_aliases: dict[str, str] = {}
     record_kinds: dict[str, RecordKind] = dict(existing_record_kinds or {})
+    for record_id, record in dict(existing_records or {}).items():
+        canonical_id = _canonical_record_id(record_id, record)
+        if isinstance(record, Evidence) or has_field(record, "source_locator"):
+            kind = RecordKind.EVIDENCE
+        elif isinstance(record, (AnalyticalRecord, Artifact)) or has_field(record, "statement") or has_field(record, "path"):
+            kind = RecordKind.CLAIM if has_field(record, "statement") else RecordKind.ARTIFACT
+        else:
+            continue
+        record_kinds.setdefault(str(record_id), kind)
+        record_kinds.setdefault(canonical_id, kind)
     evidence: list[Evidence] = []
     for index, raw in enumerate(_list(value.get("evidence"), "evidence")):
         item = _mapping(raw, f"evidence[{index}]")

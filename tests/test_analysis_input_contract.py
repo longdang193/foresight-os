@@ -1,10 +1,12 @@
 from pathlib import Path
+from dataclasses import replace
 
 import pytest
 
 from foresight_os.analysis.supplier_resilience import analyze_supplier_resilience
 from foresight_os.analysis.portfolio_resilience import analyze_portfolio_resilience
 from foresight_os.analysis.powerbi_strategic_portfolio import analyze_powerbi_strategic_portfolio
+from foresight_os.analysis.technology_radar import analyze_technology_radar
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.models import WorkBrief
 from foresight_os.domain.validation import ValidationError, validate_work_brief
@@ -47,6 +49,11 @@ def test_invalid_contract_policy_is_rejected_before_analysis():
         validate_work_brief(_brief(supplier_resilience={"domain": "supplier_resilience", "duplicate_policy": "invented"}))
 
 
+def test_unknown_analysis_input_contract_fields_are_rejected_before_normalization():
+    with pytest.raises(ValidationError, match="unsupported fields: entity_scoep"):
+        validate_work_brief(_brief(supplier_resilience={"domain": "supplier_resilience", "entity_scoep": ["Power Electronics"]}))
+
+
 def test_explicit_incomplete_supplier_conversion_does_not_use_legacy_fx():
     source = Path("tests/fixtures/exercise/02_Supplier_Resilience.xlsx")
     analysis = analyze_supplier_resilience(
@@ -82,6 +89,32 @@ def test_supplier_entity_scope_and_reject_policy_are_enforced():
     assert "EMPTY_ENTITY_SCOPE" in {issue.kind for issue in scoped.data_quality_issues}
     with pytest.raises(ValueError, match="duplicate policy reject"):
         analyze_supplier_resilience(source, AnalysisInputContract(domain="supplier_resilience", duplicate_policy="reject"))
+
+
+def test_supplier_scenario_scope_filters_rows_and_reports_unknown_requests():
+    source = Path("tests/fixtures/exercise/02_Supplier_Resilience.xlsx")
+    contract = AnalysisInputContract(
+        domain="supplier_resilience",
+        scenarios=("Short outage",),
+        reporting_currency="EUR",
+        conversion_rates={"EUR": 1.0, "USD": 0.92, "CNY": 0.13},
+    )
+    scoped = analyze_supplier_resilience(source, contract)
+    assert {item.scenario for item in scoped.scenarios} == {"Short outage"}
+
+    unknown = analyze_supplier_resilience(source, replace(contract, scenarios=("NO_SUCH_SCENARIO",)))
+    assert unknown.scenarios == ()
+    assert any(issue.kind == "UNKNOWN_SCENARIO_SCOPE" for issue in unknown.data_quality_issues)
+
+
+def test_technology_scenario_scope_filters_generated_scenarios_and_reports_unknown_requests():
+    source = Path("tests/fixtures/exercise/04_Technology_Radar.xlsx")
+    scoped = analyze_technology_radar(source, AnalysisInputContract(domain="technology_radar", scenarios=("Base",)))
+    assert {item.scenario for item in scoped.scenarios} == {"Base"}
+
+    unknown = analyze_technology_radar(source, AnalysisInputContract(domain="technology_radar", scenarios=("NO_SUCH_SCENARIO",)))
+    assert unknown.scenarios == ()
+    assert any(issue.kind == "UNKNOWN_SCENARIO_SCOPE" for issue in unknown.data_quality_issues)
 
 
 def test_portfolio_column_mapping_and_reporting_units_reach_calculations(tmp_path):

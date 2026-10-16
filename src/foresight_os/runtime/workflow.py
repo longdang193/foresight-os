@@ -370,28 +370,90 @@ def _synthesize_stage_outputs(
             return outputs[-1] if outputs else None
         raise ValidationError("typed stage synthesis requires mapping outputs")
     typed_outputs = all("contract" in output and "stage_id" in output for output in outputs)
-    if not typed_outputs:
-        normalized_outputs: list[Mapping[str, Any]] = []
-        for output in outputs:
-            if "contract" in output and "stage_id" in output:
-                normalized_outputs.append(
-                    normalize_stage_result(
-                        output,
-                        expected_stage_id=str(getattr(stage, "stage_id", "stage")),
-                        existing_records=existing_records,
-                        tolerate_invalid_relationships=tolerate_invalid_relationships,
-                    ).to_contract_payload()
-                )
-            else:
-                normalized_outputs.append(output)
-        outputs = normalized_outputs
-    first = dict(outputs[0])
+    normalized_outputs: list[Mapping[str, Any]] = []
     collections = ("evidence", "calculations", "claims", "implications", "recommendations", "artifacts", "relationships")
+
+    peer_candidates: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
+    if typed_outputs:
+        for output in outputs:
+            for key in collections:
+                entries = output.get(key, [])
+                if not isinstance(entries, (list, tuple)):
+                    raise ValidationError(f"typed stage synthesis requires a list for {key}")
+                for entry in entries:
+                    if isinstance(entry, Mapping) and entry.get("id"):
+                        peer_candidates.setdefault((key, str(entry["id"])), []).append(entry)
+
+    def peer_records_for(index: int) -> dict[str, object]:
+        records: dict[str, object] = {}
+        for peer_index, output in enumerate(outputs):
+            if peer_index == index:
+                continue
+            for key in collections:
+                for entry in output.get(key, []):
+                    if not isinstance(entry, Mapping) or not entry.get("id"):
+                        continue
+                    record_id = str(entry["id"])
+                    candidates = peer_candidates.get((key, record_id), [])
+                    if candidates and all(_canonical_result_hash(candidate) == _canonical_result_hash(candidates[0]) for candidate in candidates):
+                        records.setdefault(record_id, entry)
+        return records
+
+    preliminary_outputs: list[Mapping[str, Any]] = []
+    for index, output in enumerate(outputs):
+        if "contract" in output and "stage_id" in output:
+            dependency_records = dict(existing_records or {})
+            for record_id, record in peer_records_for(index).items():
+                dependency_records.setdefault(record_id, record)
+            preliminary_outputs.append(
+                normalize_stage_result(
+                    output,
+                    expected_stage_id=str(getattr(stage, "stage_id", "stage")),
+                    existing_records=dependency_records,
+                    tolerate_invalid_relationships=tolerate_invalid_relationships,
+                ).to_contract_payload()
+            )
+        else:
+            preliminary_outputs.append(output)
+
+    normalized_alias_targets: dict[str, set[str]] = {}
+    normalized_alias_records: dict[str, object] = {}
+    for raw_output, normalized in zip(outputs, preliminary_outputs):
+        if "contract" in raw_output and "stage_id" in raw_output:
+            for key in collections:
+                raw_entries = raw_output.get(key, [])
+                normalized_entries = normalized.get(key, [])
+                for raw_entry, normalized_entry in zip(raw_entries, normalized_entries):
+                    if not isinstance(raw_entry, Mapping) or not isinstance(normalized_entry, Mapping):
+                        continue
+                    raw_id = raw_entry.get("id")
+                    canonical_id = normalized_entry.get("id")
+                    if raw_id and canonical_id:
+                        normalized_alias_targets.setdefault(str(raw_id), set()).add(str(canonical_id))
+                        normalized_alias_records.setdefault(str(raw_id), normalized_entry)
+    canonical_alias_records = dict(existing_records or {})
+    for record_id, record in normalized_alias_records.items():
+        if len(normalized_alias_targets.get(record_id, ())) == 1:
+            canonical_alias_records.setdefault(record_id, record)
+
+    for output in preliminary_outputs:
+        if "contract" in output and "stage_id" in output:
+            normalized_outputs.append(
+                normalize_stage_result(
+                    output,
+                    expected_stage_id=str(getattr(stage, "stage_id", "stage")),
+                    existing_records=canonical_alias_records,
+                    tolerate_invalid_relationships=tolerate_invalid_relationships,
+                ).to_contract_payload()
+            )
+        else:
+            normalized_outputs.append(output)
+    outputs = normalized_outputs
+    first = dict(outputs[0])
 
     def merge_records(key: str) -> list[object]:
         merged: list[object] = []
         by_id: dict[str, object] = {}
-        by_semantic_key: dict[str, str] = {}
         for output in outputs:
             entries = output.get(key, [])
             if entries is None:
@@ -405,11 +467,6 @@ def _synthesize_stage_outputs(
                     continue
                 existing = by_id.get(str(record_id))
                 if existing is None:
-                    if typed_outputs:
-                        semantic_key = _canonical_result_hash({field: value for field, value in entry.items() if field != "id"})
-                        if semantic_key in by_semantic_key:
-                            continue
-                        by_semantic_key[semantic_key] = str(record_id)
                     by_id[str(record_id)] = entry
                     merged.append(entry)
                     continue
@@ -430,7 +487,7 @@ def _synthesize_stage_outputs(
         return normalize_stage_result(
             first,
             expected_stage_id=str(getattr(stage, "stage_id", "stage")),
-            existing_records=existing_records,
+            existing_records=canonical_alias_records,
             tolerate_invalid_relationships=tolerate_invalid_relationships,
         ).to_contract_payload()
     return first

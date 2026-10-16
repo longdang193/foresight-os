@@ -10,7 +10,7 @@ from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, R
 from foresight_os.controller.budgets import BudgetState
 from foresight_os.persistence.ids import canonical_json_hash
 from foresight_os.domain.validation import ValidationError
-from foresight_os.analysis.result_committer import decode_stage_output
+from foresight_os.analysis.result_committer import ANALYSIS_STAGE_RESULT_CONTRACT, decode_stage_output
 from foresight_os.runtime.workflow import CanonicalStageResult, _canonical_result_hash, _close_agents, _dependency_stage_ids, _expand_dependency_records, _run_native_stage, _synthesize_stage_outputs, _workflow_output_value, run_recipe_async
 from foresight_os.runtime.metrics import BudgetExceededError, RunMetrics
 import foresight_os.runtime.workflow as workflow_module
@@ -47,6 +47,50 @@ class CountingChatClient(FakeChatClient):
         return super().get_response(messages, **kwargs)
 
 
+def _typed_stage_result(stage_id: str, evidence_id: str, statement: str, *, contract: str = ANALYSIS_STAGE_RESULT_CONTRACT) -> dict:
+    return {
+        "contract": contract,
+        "stage_id": stage_id,
+        "evidence": [{
+            "id": evidence_id,
+            "source_locator": {
+                "file_version": "fixture-v1",
+                "sheet": "Summary",
+                "range": "A1",
+                "units": "count",
+                "transformation": "none",
+                "calculation": "none",
+            },
+            "version": "v1",
+            "date": "2026-10-16",
+            "excerpt": statement,
+            "limitations": [],
+        }],
+        "calculations": [],
+        "claims": [{
+            "id": "claim-placeholder",
+            "statement": statement,
+            "basis": "OBSERVED",
+            "assessment": "UNASSESSED",
+            "lifecycle": "CURRENT",
+            "evidence_ids": [evidence_id],
+            "relationship_ids": [],
+            "assumptions": [],
+            "uncertainty": [],
+            "confidence_rationale": "",
+            "disconfirmation_conditions": [],
+            "monitoring_indicators": [],
+        }],
+        "implications": [],
+        "recommendations": [],
+        "artifacts": [],
+        "relationships": [],
+        "assumptions": [],
+        "uncertainty": [],
+        "monitoring_indicators": [],
+    }
+
+
 def _recipe(patterns: tuple[ExecutionPattern, ...]) -> ExecutionRecipe:
     base = make_recipe(RecipeName.ANALYZE_REVIEW)
     stages = tuple(
@@ -72,6 +116,65 @@ def test_native_sequential_concurrent_and_group_chat_execute_with_installed_buil
     for pattern in (ExecutionPattern.SEQUENTIAL, ExecutionPattern.CONCURRENT, ExecutionPattern.GROUP_CHAT):
         outputs = asyncio.run(_run_native_stage(pattern, "hello", client, [{"purpose": "one"}, {"purpose": "two"}]))
         assert outputs
+
+
+def test_typed_participants_are_canonicalized_before_merge_and_preserve_distinct_records():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "one"}, {"id": "two"}),
+        "typed-result",
+        "typed-result",
+        {},
+        synthesis_policy="aggregate-typed-results",
+    )
+
+    result = _synthesize_stage_outputs(
+        stage,
+        [
+            _typed_stage_result("stage-1", "same-provider-id", "first observation"),
+            _typed_stage_result("stage-1", "same-provider-id", "second observation"),
+        ],
+    )
+
+    assert len(result["evidence"]) == 2
+    assert len(result["claims"]) == 2
+    assert {claim["evidence_ids"][0] for claim in result["claims"]} == {evidence["id"] for evidence in result["evidence"]}
+
+
+def test_typed_equivalent_participant_graphs_deduplicate_without_dangling_references():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "one"}, {"id": "two"}),
+        "typed-result",
+        "typed-result",
+        {},
+        synthesis_policy="aggregate-typed-results",
+    )
+
+    first = _typed_stage_result("stage-1", "first-provider-id", "same observation")
+    second = _typed_stage_result("stage-1", "second-provider-id", "same observation")
+    result = _synthesize_stage_outputs(stage, [first, second])
+
+    assert len(result["evidence"]) == 1
+    assert len(result["claims"]) == 1
+    assert result["claims"][0]["evidence_ids"] == [result["evidence"][0]["id"]]
+
+
+def test_typed_participant_stage_contract_is_validated_before_merge():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "one"}, {"id": "two"}),
+        "typed-result",
+        "typed-result",
+        {},
+        synthesis_policy="aggregate-typed-results",
+    )
+
+    with pytest.raises(ValidationError, match="stage_id must be stage-1"):
+        _synthesize_stage_outputs(stage, [_typed_stage_result("stage-1", "one", "ok"), _typed_stage_result("other-stage", "two", "bad")])
 
 
 def test_native_sequential_reviewer_retains_original_stage_context(monkeypatch):

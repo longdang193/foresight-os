@@ -220,10 +220,13 @@ def _normalize_work_brief(value: dict[str, Any]) -> dict[str, Any]:
                 {**dict(contract), "domain": str(domain)} if isinstance(contract, dict) else {"domain": str(domain)}
                 for domain, contract in contracts.items()
             ]
-        normalized["analysis_inputs"] = [
-            AnalysisInputContract.from_dict(contract).to_dict()
-            for contract in contracts
-        ]
+        normalized_contracts = []
+        for contract in contracts:
+            try:
+                normalized_contracts.append(AnalysisInputContract.from_dict(contract).to_dict())
+            except ValueError as exc:
+                raise ValidationError(str(exc)) from exc
+        normalized["analysis_inputs"] = normalized_contracts
     normalized.setdefault("horizon", "unspecified")
     normalized.setdefault("consequence_level", "standard")
     return normalized
