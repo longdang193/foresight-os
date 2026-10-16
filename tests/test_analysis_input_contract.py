@@ -336,6 +336,14 @@ def test_powerbi_column_mapping_reaches_revenue_calculation(tmp_path):
     assert analysis.revenue_2026_jan_sep > 0
 
 
+def test_powerbi_missing_column_mapping_does_not_fallback_to_canonical_data():
+    with pytest.raises(ToolbeltError, match="MISSING_MAPPED_COLUMN.*Missing"):
+        analyze_powerbi_strategic_portfolio(
+            Path("tests/fixtures/exercise/05_PowerBI_Strategic_Portfolio.xlsx"),
+            AnalysisInputContract(domain="powerbi_strategic_portfolio", column_mappings={"Revenue_EUR": "Missing"}),
+        )
+
+
 def test_powerbi_column_mapping_reaches_optional_refresh_timestamp_consumption(tmp_path):
     from openpyxl import load_workbook
 

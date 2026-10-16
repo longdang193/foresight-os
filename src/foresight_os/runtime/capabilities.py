@@ -534,14 +534,14 @@ def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, cont
                         if getattr(scope, "workbook_context", None) is None:
                             scope.workbook_context = WorkbookContext()
                         workbook_context = scope.workbook_context
-                        parameters = parameters or frozenset()
-                        if "_cache" in parameters:
+                        effective_parameters = parameters or frozenset()
+                        if "_cache" in effective_parameters:
                             effective_kwargs.setdefault("_cache", workbook_context.cache)
-                        if "_workbook_context" in parameters:
+                        if "_workbook_context" in effective_parameters:
                             effective_kwargs.setdefault("_workbook_context", workbook_context)
-                        if "_authority_index" in parameters:
+                        if "_authority_index" in effective_parameters:
                             effective_kwargs.setdefault("_authority_index", workbook_context.authority_index)
-                        if "_stats" in parameters:
+                        if "_stats" in effective_parameters:
                             effective_kwargs.setdefault("_stats", workbook_context.stats)
                     result = dispatch(*args, **effective_kwargs)
                     if inspect.isawaitable(result):

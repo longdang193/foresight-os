@@ -8,7 +8,7 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
-from foresight_os.analysis.workbook_inputs import apply_table_column_mappings, read_workbook, require_row_columns, require_table, row_evidence, table_rows
+from foresight_os.analysis.workbook_inputs import apply_table_column_mappings, read_workbook, require_row_columns, require_table, row_evidence, table_rows, validate_mapping_targets
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, _PeriodSpec, _parse_period, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
@@ -186,8 +186,20 @@ def analyze_powerbi_strategic_portfolio(source: Path, input_contract: AnalysisIn
         **required_columns,
         "Fact_Performance": (*required_columns["Fact_Performance"], "Refresh_Timestamp"),
     }
+    validate_mapping_targets(
+        (header for table in tables.values() for header in getattr(table, "columns", ())),
+        contract.column_mappings,
+    )
+    table_mappings = {
+        name: {
+            str(canonical): str(source)
+            for canonical, source in contract.column_mappings.items()
+            if str(source) in {str(header) for header in getattr(table, "columns", ())}
+        }
+        for name, table in tables.items()
+    }
     rows = {
-        name: apply_table_column_mappings(table, _rows(table), contract.column_mappings, consumed_columns[name])
+        name: apply_table_column_mappings(table, _rows(table), table_mappings[name], consumed_columns[name])
         for name, table in tables.items()
         if name != "Brief"
     }
