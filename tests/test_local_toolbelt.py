@@ -21,11 +21,47 @@ from foresight_os.runtime.local_toolbelt import (
     _implicit_xlsx_bounds,
     calculation,
     data_analysis,
+    domain_validation,
     spreadsheet_read,
     WorkbookReadCache,
     bind_local_toolbelt,
 )
 from foresight_os.domain.models import Evidence, SourceLocator
+
+
+def test_domain_validation_rejects_unsupported_candidate_fields_at_tool_boundary():
+    candidate = {
+        "candidate_id": "candidate-1",
+        "capability_id": "web_search",
+        "source": "source",
+        "request": "request",
+        "excerpt": "excerpt",
+        "provenance": {"source": "source"},
+        "scorecard_weights": {"market": 0.5},
+    }
+
+    with pytest.raises(ToolbeltError, match="unsupported evidence candidate fields.*scorecard_weights"):
+        domain_validation(candidate)
+
+
+def test_domain_validation_rejects_stage_result_payloads_with_clear_boundary_error():
+    stage_result = {
+        "contract": "analysis-stage-result/v1",
+        "stage_id": "market-channel-assessment",
+        "evidence": [],
+        "claims": [],
+        "calculations": [],
+        "implications": [],
+        "recommendations": [],
+        "artifacts": [],
+        "relationships": [],
+        "assumptions": [],
+        "uncertainty": [],
+        "monitoring_indicators": [],
+    }
+
+    with pytest.raises(ToolbeltError, match="stage result payloads are not valid domain_validation inputs"):
+        domain_validation(stage_result)
 
 
 def test_provider_tool_paths_are_json_string_boundaries():
@@ -201,6 +237,87 @@ def test_workbook_read_cache_evicts_old_entries_without_unpacking_error(tmp_path
     spreadsheet_read(str(second), _cache=cache)
 
     assert cache.size > 0
+
+
+def test_workbook_read_cache_refreshes_source_hash_across_selections(tmp_path: Path):
+    source = tmp_path / "refreshed.csv"
+    source.write_text("Region,Value\nNorth,10\nSouth,20\n", encoding="utf-8")
+    cache = WorkbookReadCache()
+
+    first = spreadsheet_read(source, SheetSelection(ranges=((source.stem, "A1:B2"),)), _cache=cache)
+    second = spreadsheet_read(source, SheetSelection(ranges=((source.stem, "A2:B3"),)), _cache=cache)
+
+    assert first.workbook_sha256 == second.workbook_sha256
+    assert first.tables[0].rows != second.tables[0].rows
+
+
+def test_workbook_read_cache_rejects_stale_source_content(tmp_path: Path):
+    source = tmp_path / "changed.csv"
+    source.write_text("Region,Value\nNorth,10\n", encoding="utf-8")
+    cache = WorkbookReadCache()
+
+    first = spreadsheet_read(source, _cache=cache)
+    source.write_text("Region,Value\nNorth,99\n", encoding="utf-8")
+    second = spreadsheet_read(source, _cache=cache)
+
+    assert first.workbook_sha256 != second.workbook_sha256
+    changed = next(item for item in second.measurements if item.provenance.coordinate == "B2")
+    assert changed.value == 99
+    assert changed.provenance.workbook_sha256 == second.workbook_sha256
+
+
+def test_workbook_read_cache_rejects_metadata_preserving_source_changes(monkeypatch, tmp_path: Path):
+    source = tmp_path / "metadata-preserving.csv"
+    source.write_text("Region,Value\nNorth,10\n", encoding="utf-8")
+    fixed_stat = source.stat()
+    monkeypatch.setattr(Path, "stat", lambda self: fixed_stat)
+    cache = WorkbookReadCache()
+
+    first = spreadsheet_read(source, _cache=cache)
+    source.write_text("Region,Value\nNorth,99\n", encoding="utf-8")
+    second = spreadsheet_read(source, _cache=cache)
+
+    assert first.workbook_sha256 != second.workbook_sha256
+    changed = next(item for item in second.measurements if item.provenance.coordinate == "B2")
+    assert changed.value == 99
+    assert changed.provenance.workbook_sha256 == second.workbook_sha256
+
+
+def test_workbook_read_cache_does_not_retain_unbounded_source_identity_state(tmp_path: Path):
+    cache = WorkbookReadCache(max_entries=1)
+    for index in range(30):
+        source = tmp_path / f"source-{index}.csv"
+        source.write_text(f"Region,Value\nNorth,{index}\n", encoding="utf-8")
+        spreadsheet_read(source, _cache=cache)
+
+    assert cache.size == 1
+    assert cache.bytes_used <= cache.max_bytes
+    assert not hasattr(cache, "_source_versions")
+
+
+def test_workbook_and_analysis_entries_share_one_cache_budget(workbook_path):
+    cache = WorkbookReadCache(max_entries=2)
+    table = spreadsheet_read(workbook_path, _cache=cache).tables[0]
+    data_analysis(table, AnalysisOperation("duplicates", key_columns=("Region", "Metric", "Value")), _cache=cache)
+    spreadsheet_read(workbook_path, SheetSelection(sheet_names=("Assumptions",)), _cache=cache)
+
+    assert cache.size <= 2
+    assert cache.bytes_used <= cache.max_bytes
+
+
+def test_failed_and_cancelled_reads_never_publish_cache_entries(tmp_path: Path):
+    source = tmp_path / "unsettled.csv"
+    source.write_text("Region,Value\nNorth,10\nSouth,20\n", encoding="utf-8")
+
+    failed_cache = WorkbookReadCache()
+    with pytest.raises(ToolbeltError, match="row limit"):
+        spreadsheet_read(source, limits=ToolbeltLimits(max_rows=1), _cache=failed_cache)
+    assert failed_cache.size == 0
+
+    cancelled_cache = WorkbookReadCache()
+    with pytest.raises(ToolbeltError, match="cancelled"):
+        spreadsheet_read(source, cancel_check=lambda: True, _cache=cancelled_cache)
+    assert cancelled_cache.size == 0
 
 
 def _make_workbook(path: Path) -> None:
@@ -665,3 +782,61 @@ def test_xlsx_reader_skips_blank_and_title_rows_before_data_header(tmp_path):
 
     assert table.columns == ("Region", "Value", "Unit")
     assert table.rows == (("North", 10, "EUR"), ("South", 20, "EUR"))
+
+
+def test_xlsx_reader_keeps_bounded_rows_when_cached_dimension_is_shorter(tmp_path):
+    source = tmp_path / "bounded-selection.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Data"
+    sheet.append(["Region", "Value"])
+    sheet.append(["North", 10])
+    workbook.save(source)
+
+    result = spreadsheet_read(
+        source,
+        SheetSelection(ranges=(("Data", "A1:B5"),), include_hidden=True, include_hidden_rows=True),
+    )
+
+    table = next(item for item in result.tables if item.sheet == "Data")
+    assert table.source_range == "A1:B5"
+    assert table.columns == ("Region", "Value")
+    assert table.rows == (("North", 10), (None, None), (None, None), (None, None))
+
+
+def test_xlsx_reader_range_selection_restricts_selected_sheets(tmp_path):
+    source = tmp_path / "multi-sheet-selection.xlsx"
+    workbook = openpyxl.Workbook()
+    first = workbook.active
+    first.title = "First"
+    first.append(["Region", "Value"])
+    first.append(["North", 10])
+    second = workbook.create_sheet("Second")
+    second.append(["Region", "Value"])
+    second.append(["South", 20])
+    workbook.save(source)
+
+    result = spreadsheet_read(
+        source,
+        SheetSelection(ranges=(("First", "A1:B2"),), include_hidden=True, include_hidden_rows=True),
+    )
+
+    assert {item.sheet for item in result.tables} == {"First"}
+
+
+@pytest.mark.parametrize(
+    ("selection", "message"),
+    [
+        ({"sheet_names": True}, "sheet_names must be a list"),
+        ({"ranges": True}, "ranges must be a list"),
+        ({"ranges": [["Data"]]}, "ranges entries must contain two values"),
+    ],
+)
+def test_xlsx_reader_rejects_malformed_selection_shapes(selection, message, tmp_path):
+    source = tmp_path / "malformed-selection.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.save(source)
+
+    with pytest.raises(ToolbeltError, match=message):
+        spreadsheet_read(source, selection)

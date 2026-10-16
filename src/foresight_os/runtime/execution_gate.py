@@ -10,6 +10,7 @@ from foresight_os.domain.approval import AdaptationEnvelope, ApprovalStatus, app
 from foresight_os.controller.recipes import ExecutionRecipe
 from foresight_os.analysis.result_committer import ANALYSIS_STAGE_RESULT_CONTRACT, CanonicalResultCommitter, analysis_stage_result_schema
 from foresight_os.persistence.analysis_store import AnalysisStore
+from foresight_os.domain.analysis_inputs import normalize_work_brief
 from foresight_os.persistence.ids import canonical_json_hash
 from foresight_os.runtime.capabilities import CapabilityUnavailableError, prepare_capability_context
 from foresight_os.runtime.workflow import run_recipe_async
@@ -30,6 +31,13 @@ def _required_capability_ids(recipe: ExecutionRecipe) -> tuple[str, ...]:
         for participant in recipe.roles:
             values.extend(str(item) for item in participant.get("capability_ids", participant.get("capabilities", ())))
     return tuple(dict.fromkeys(item for item in values if item))
+
+
+def _local_capability_context(store: AnalysisStore, run_context: dict[str, Any] | None) -> dict[str, Any]:
+    context = dict(run_context or {})
+    context.setdefault("local_workspace", store.root)
+    context.setdefault("document_roots", (store.root, Path.cwd()))
+    return context
 
 
 def _assert_store_writable(store: AnalysisStore) -> None:
@@ -125,7 +133,7 @@ class ExecutionGate:
                 raise ExecutionAdmissionError("persisted recipe no longer matches the approved snapshot")
             if approval.investigation_id != brief.investigation_id:
                 raise ExecutionAdmissionError("approval investigation does not match the WorkBrief")
-            _preflight_recipe(self.store, recipe, dict(run_context or {}))
+            _preflight_recipe(self.store, recipe, _local_capability_context(self.store, run_context))
             return ApprovedExecution(
                 work_dir=self.store.root,
                 prompt=prompt,
@@ -154,7 +162,9 @@ class ExecutionGate:
                 raise ExecutionAdmissionError("approval was superseded before dispatch")
         if client is None:
             raise ExecutionAdmissionError("approved execution requires a configured client")
-        context = dict(run_context or {})
+        brief = self.store.load_brief()
+        normalized_intent = normalize_work_brief(brief)
+        context = _local_capability_context(self.store, run_context)
         context.update({
             "execution_admitted": True,
             "approved_recipe_fingerprint": admission.recipe_fingerprint,
@@ -166,6 +176,11 @@ class ExecutionGate:
             "require_structured_output": True,
             "structured_output_schema": analysis_stage_result_schema(),
             "canonical_result_committer": CanonicalResultCommitter(self.store, self.store.load_brief().investigation_id),
+            "normalized_intent": normalized_intent,
+            "analysis_contract_fingerprints": {
+                contract.domain: contract.fingerprint
+                for contract in normalized_intent.contracts
+            },
         })
         return await run_recipe_async(admission.recipe, prompt, client, admission.run_id, context)
 

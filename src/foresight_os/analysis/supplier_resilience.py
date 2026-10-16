@@ -9,6 +9,8 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
+from foresight_os.analysis.workbook_inputs import apply_column_mappings, require_row_columns, require_table, row_evidence, table_rows
+from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
 from foresight_os.persistence.analysis_store import AnalysisStore
@@ -48,7 +50,7 @@ class SupplierScenarioProjection:
 @dataclass(frozen=True)
 class SupplierMitigationOption:
     action: str
-    one_time_cost_eur: float
+    one_time_cost_eur: float | None
     lead_time_months: float
     reversibility: str
     description: str
@@ -67,6 +69,8 @@ class SupplierAnalysis:
     monitoring_triggers: tuple[str, ...]
     recommendation: str
     state: AnalysisState
+    contract_fingerprint: str = ""
+    reporting_currency: str = "EUR"
 
 @dataclass(frozen=True)
 class SupplierWorkflowResult:
@@ -82,40 +86,64 @@ def _number(value: Any) -> float | None:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 def _table(workbook: Any, sheet: str) -> Any:
-    for table in workbook.tables:
-        if table.sheet == sheet:
-            return table
-    raise ToolbeltError(f"supplier recipe requires sheet: {sheet}")
+    return require_table(workbook, sheet)
 
 def _rows(table: Any) -> list[dict[str, Any]]:
-    return [dict(zip(table.columns, row, strict=False)) for row in table.rows]
+    return table_rows(table)
 
 def _row_evidence(table: Any, index: int, digest: str) -> Evidence:
     values = dict(zip(table.columns, table.rows[index], strict=False))
-    provenance = table.row_provenance[index]
-    row_range = f"{provenance[0].coordinate}:{provenance[-1].coordinate}"
-    evidence_id = "supplier-evidence-" + hashlib.sha256(f"{digest}:{table.sheet}:{row_range}".encode()).hexdigest()[:16]
-    return Evidence(evidence_id, SourceLocator(digest, table.sheet, row_range, str(values.get("Currency", "EUR")), "supplier_resilience_recipe", f"{table.sheet} row"), digest, date.today().isoformat(), json.dumps(values, sort_keys=True, default=str))
+    return row_evidence(table, index, digest, f"{table.sheet} row", units=str(values.get("Currency", "EUR")), transformation="supplier_resilience_recipe", evidence_prefix="supplier")
 
 def _weighted(values: list[tuple[float, float]]) -> float:
     total = sum(weight for _, weight in values)
     return sum(value * weight for value, weight in values) / total if total else 0.0
 
-def _fx(currency: str) -> float:
-    return {"EUR": 1.0, "USD": 0.92, "CNY": 0.13}.get(currency, 1.0)
+def _fx(currency: str, rates: dict[str, float] | None = None, *, legacy: bool = True) -> float | None:
+    supported = rates if rates is not None else {"EUR": 1.0, "USD": 0.92, "CNY": 0.13}
+    if currency in supported:
+        return supported[currency]
+    return 1.0 if legacy and rates is None else None
 
-def _unit_cost_eur(row: dict[str, Any]) -> float:
-    return (_number(row.get("Unit_Cost")) or 0.0) * _fx(str(row.get("Currency", "EUR")))
+def _unit_cost_eur(row: dict[str, Any], rates: dict[str, float] | None = None, *, legacy: bool = True) -> float | None:
+    fx = _fx(str(row.get("Currency", "EUR")), rates, legacy=legacy)
+    return None if fx is None else (_number(row.get("Unit_Cost")) or 0.0) * fx
 
 def _record(record_id: str, statement: str, evidence_ids: list[str], assumptions: tuple[str, ...], uncertainty: tuple[str, ...], disconfirmation: tuple[str, ...], monitoring: tuple[str, ...]) -> AnalyticalRecord:
     return AnalyticalRecord(record_id, statement, Basis.DERIVED, Assessment.SUPPORTED, evidence_ids=list(dict.fromkeys(evidence_ids)), assumptions=assumptions, uncertainty=uncertainty, confidence_rationale="Derived from deterministic row-level calculations with explicit exclusions and assumptions.", disconfirmation_conditions=disconfirmation, monitoring_indicators=monitoring)
 
-def analyze_supplier_resilience(source: Path) -> SupplierAnalysis:
+def analyze_supplier_resilience(source: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None) -> SupplierAnalysis:
     source = Path(source)
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
     workbook = spreadsheet_read(source, SheetSelection(sheet_names=("Brief", "Supplier_Master", "Incidents", "Scenario_Assumptions", "Mitigation_Options"), include_hidden=True, include_hidden_rows=True))
     brief, supplier_table, incident_table, scenario_table, option_table = [_table(workbook, name) for name in ("Brief", "Supplier_Master", "Incidents", "Scenario_Assumptions", "Mitigation_Options")]
-    supplier_rows, incident_rows, scenario_rows, option_rows = [_rows(table) for table in (supplier_table, incident_table, scenario_table, option_table)]
+    contract = AnalysisInputContract.from_dict(input_contract) if input_contract is not None else AnalysisInputContract(
+        domain="supplier_resilience",
+        required_tables=("Brief", "Supplier_Master", "Incidents", "Scenario_Assumptions", "Mitigation_Options"),
+        units="EUR",
+        reporting_currency="EUR",
+        conversion_rates={"EUR": 1.0, "USD": 0.92, "CNY": 0.13},
+        compatibility_assumption="legacy supplier workbook FX map: EUR=1.0, USD=0.92, CNY=0.13",
+    )
+    contract.validate()
+    conversion_rates = contract.conversion_rates
+    reporting_unit = contract.reporting_currency or contract.units or "EUR"
+    legacy_conversion = input_contract is None
+    supplier_rows, incident_rows, scenario_rows, option_rows = [apply_column_mappings(_rows(table), contract.column_mappings) for table in (supplier_table, incident_table, scenario_table, option_table)]
+    for sheet, rows, columns in (
+        (supplier_table.sheet, supplier_rows, ("Line_ID", "Supplier", "Country", "Part_Family", "Annual_Spend", "Currency", "Criticality_1_5", "Lead_Time_Days", "Defect_PPM", "Qualified_Alternatives", "Geo_Risk_1_5", "Unit_Cost")),
+        (incident_table.sheet, incident_rows, ("Incident_ID", "Date", "Supplier", "Part_Family", "Disruption_Days", "Expedite_Premium_pct")),
+        (scenario_table.sheet, scenario_rows, ("Scenario", "Outage_Days", "Expedite_Premium", "Demand_at_Risk_pct")),
+        (option_table.sheet, option_rows, ("Action", "One_Time_Cost_EUR", "Lead_Time_Months", "Reversibility", "Description")),
+    ):
+        require_row_columns(rows, sheet, columns)
+    supplier_rows = [dict(row, __source_index=index) for index, row in enumerate(supplier_rows)]
+    selected_entities = set(contract.entity_scope)
+    if selected_entities:
+        supplier_rows = [
+            row for row in supplier_rows
+            if any(str(row.get(field, "")) in selected_entities for field in ("Supplier", "Country", "Part_Family"))
+        ]
     evidence: list[Evidence] = []
     by_row: dict[tuple[str, int], Evidence] = {}
     for table in (supplier_table, incident_table, scenario_table, option_table):
@@ -123,28 +151,47 @@ def analyze_supplier_resilience(source: Path) -> SupplierAnalysis:
             by_row[(table.sheet, index)] = _row_evidence(table, index, digest)
             evidence.append(by_row[(table.sheet, index)])
     issues: list[SupplierDataQualityIssue] = []
+    available_scenarios = {str(row.get("Scenario")) for row in scenario_rows}
+    selected_scenarios = set(contract.scenarios)
+    if selected_scenarios:
+        unknown_scenarios = sorted(selected_scenarios - available_scenarios)
+        if unknown_scenarios:
+            issues.append(SupplierDataQualityIssue("UNKNOWN_SCENARIO_SCOPE", f"Requested scenarios are not present in the workbook: {unknown_scenarios}.", tuple(by_row[(scenario_table.sheet, index)].id for index in range(len(scenario_rows)))))
+    if selected_entities and not supplier_rows:
+        issues.append(SupplierDataQualityIssue("EMPTY_ENTITY_SCOPE", f"No supplier rows match the declared entity scope: {sorted(selected_entities)}.", ()))
     duplicate_indexes: set[int] = set()
     seen: dict[tuple[Any, ...], int] = {}
     for index, row in enumerate(supplier_rows):
         key = (row.get("Line_ID"), row.get("Supplier"), row.get("Part_Family"))
         if key in seen:
             duplicate_indexes.add(index)
-            issues.append(SupplierDataQualityIssue("DUPLICATE_LINE", f"Duplicate supplier-part line for {key}.", (by_row[(supplier_table.sheet, seen[key])].id, by_row[(supplier_table.sheet, index)].id)))
+            issues.append(SupplierDataQualityIssue("DUPLICATE_LINE", f"Duplicate supplier-part line for {key}.", (by_row[(supplier_table.sheet, seen[key])].id, by_row[(supplier_table.sheet, row["__source_index"])].id)))
         else:
-            seen[key] = index
+            seen[key] = row["__source_index"]
         if row.get("Qualified_Alternatives") is None:
-            issues.append(SupplierDataQualityIssue("MISSING_ALTERNATIVES", f"Qualified alternatives are missing for {row.get('Line_ID')}.", (by_row[(supplier_table.sheet, index)].id,)))
+            issues.append(SupplierDataQualityIssue("MISSING_ALTERNATIVES", f"Qualified alternatives are missing for {row.get('Line_ID')}.", (by_row[(supplier_table.sheet, row["__source_index"])].id,)))
+    if contract.duplicate_policy == "reject" and any(issue.kind == "DUPLICATE_LINE" for issue in issues):
+        raise ValueError("duplicate policy reject: supplier duplicate rows are present")
+    if contract.missing_value_policy == "reject" and any(issue.kind == "MISSING_ALTERNATIVES" for issue in issues):
+        raise ValueError("missing-value policy reject: supplier alternatives are missing")
     valid_rows = [(index, row) for index, row in enumerate(supplier_rows) if index not in duplicate_indexes]
     family_values: dict[str, list[tuple[int, dict[str, Any], float]]] = {}
     for index, row in valid_rows:
-        spend = (_number(row.get("Annual_Spend")) or 0.0) * _fx(str(row.get("Currency", "EUR")))
+        fx = _fx(str(row.get("Currency", "EUR")), conversion_rates, legacy=legacy_conversion)
+        if fx is None:
+            issues.append(SupplierDataQualityIssue("UNSUPPORTED_CONVERSION", f"No declared conversion rate for {row.get('Currency')}.", (by_row[(supplier_table.sheet, row["__source_index"])].id,)))
+            continue
+        spend = (_number(row.get("Annual_Spend")) or 0.0) * fx
         family_values.setdefault(str(row.get("Part_Family")), []).append((index, row, spend))
     for family, items in family_values.items():
-        costs = sorted(_unit_cost_eur(row) for _, row, _ in items)
+        costs = sorted(value for _, row, _ in items if (value := _unit_cost_eur(row, conversion_rates, legacy=legacy_conversion)) is not None)
+        if not costs:
+            continue
         median = costs[len(costs) // 2] if len(costs) % 2 else (costs[len(costs) // 2 - 1] + costs[len(costs) // 2]) / 2
         for index, row, _ in items:
-            if (_number(row.get("Geo_Risk_1_5")) or 0.0) >= 4 and _unit_cost_eur(row) <= median * 0.8:
-                issues.append(SupplierDataQualityIssue("LOW_COST_HIGH_RISK", f"{row.get('Supplier')} is low-cost relative to {family} but has high geographic risk.", (by_row[(supplier_table.sheet, index)].id,)))
+            unit_cost = _unit_cost_eur(row, conversion_rates, legacy=legacy_conversion)
+            if unit_cost is not None and (_number(row.get("Geo_Risk_1_5")) or 0.0) >= 4 and unit_cost <= median * 0.8:
+                issues.append(SupplierDataQualityIssue("LOW_COST_HIGH_RISK", f"{row.get('Supplier')} is low-cost relative to {family} but has high geographic risk.", (by_row[(supplier_table.sheet, row["__source_index"])].id,)))
     metrics: list[SupplierConcentrationMetric] = []
     for family, items in sorted(family_values.items()):
         by_supplier: dict[str, float] = {}
@@ -154,16 +201,27 @@ def analyze_supplier_resilience(source: Path) -> SupplierAnalysis:
             by_country[str(row.get("Country"))] = by_country.get(str(row.get("Country")), 0.0) + spend
         total = sum(by_supplier.values())
         shares = [value / total for value in by_supplier.values()] if total else []
-        metrics.append(SupplierConcentrationMetric(family, total, max(by_supplier.values(), default=0.0) / total if total else 0.0, max(by_country.values(), default=0.0) / total if total else 0.0, sum(share * share for share in shares), _weighted([(_number(row.get("Criticality_1_5")) or 0.0, spend) for _, row, spend in items]), _weighted([(_number(row.get("Qualified_Alternatives")) or 0.0, spend) for _, row, spend in items]), _weighted([(_number(row.get("Lead_Time_Days")) or 0.0, spend) for _, row, spend in items]), _weighted([(_number(row.get("Defect_PPM")) or 0.0, spend) for _, row, spend in items]), _weighted([(_number(row.get("Geo_Risk_1_5")) or 0.0, spend) for _, row, spend in items]), tuple(by_row[(supplier_table.sheet, index)].id for index, _, _ in items)))
+        metrics.append(SupplierConcentrationMetric(family, total, max(by_supplier.values(), default=0.0) / total if total else 0.0, max(by_country.values(), default=0.0) / total if total else 0.0, sum(share * share for share in shares), _weighted([(_number(row.get("Criticality_1_5")) or 0.0, spend) for _, row, spend in items]), _weighted([(_number(row.get("Qualified_Alternatives")) or 0.0, spend) for _, row, spend in items]), _weighted([(_number(row.get("Lead_Time_Days")) or 0.0, spend) for _, row, spend in items]), _weighted([(_number(row.get("Defect_PPM")) or 0.0, spend) for _, row, spend in items]), _weighted([(_number(row.get("Geo_Risk_1_5")) or 0.0, spend) for _, row, spend in items]), tuple(by_row[(supplier_table.sheet, row["__source_index"])].id for _, row, _ in items)))
     scenarios: list[SupplierScenarioProjection] = []
     for scenario_index, row in enumerate(scenario_rows):
         name = str(row.get("Scenario"))
+        if selected_scenarios and name not in selected_scenarios:
+            continue
         risk = _number(row.get("Demand_at_Risk_pct")) or 0.0
         premium = _number(row.get("Expedite_Premium")) or 0.0
         for metric in metrics:
             scenarios.append(SupplierScenarioProjection(name, metric.part_family, risk, metric.spend_eur * risk, metric.spend_eur * risk * premium, _number(row.get("Outage_Days")) or 0.0, tuple(dict.fromkeys((*metric.evidence_ids, by_row[(scenario_table.sheet, scenario_index)].id)))))
-    options = tuple(SupplierMitigationOption(str(row.get("Action")), _number(row.get("One_Time_Cost_EUR")) or 0.0, _number(row.get("Lead_Time_Months")) or 0.0, str(row.get("Reversibility")), str(row.get("Description")), (by_row[(option_table.sheet, index)].id,)) for index, row in enumerate(option_rows))
-    assumptions = ("EUR is the reporting currency; deterministic conversions are EUR=1.00, USD=0.92, and CNY=0.13.", "The later exact supplier-part duplicate is excluded from quality-adjusted metrics and remains visible as an issue.", "Missing qualified alternatives are not imputed; zero alternatives means none are recorded, while blank remains unresolved.", "Outage exposure is family spend × demand-at-risk × stated expedite premium; it is a prioritization proxy, not a realized-loss forecast.", "Spend concentration is not treated as strategic risk without criticality, substitution, geography, quality, and lead-time context.")
+    options_list: list[SupplierMitigationOption] = []
+    for index, row in enumerate(option_rows):
+        source_currency = str(row.get("Currency") or row.get("Unit") or "EUR")
+        factor = 1.0 if source_currency == reporting_unit else conversion_rates.get(source_currency)
+        if factor is None:
+            issues.append(SupplierDataQualityIssue("UNSUPPORTED_CONVERSION", f"No declared conversion rate from {source_currency} to {reporting_unit}.", (by_row[(option_table.sheet, index)].id,)))
+        cost = _number(row.get("One_Time_Cost_EUR"))
+        options_list.append(SupplierMitigationOption(str(row.get("Action")), cost * factor if cost is not None and factor is not None else None, _number(row.get("Lead_Time_Months")) or 0.0, str(row.get("Reversibility")), str(row.get("Description")), (by_row[(option_table.sheet, index)].id,)))
+    options = tuple(options_list)
+    conversion_assumption = "EUR is the reporting currency; deterministic conversions are EUR=1.00, USD=0.92, and CNY=0.13." if legacy_conversion else f"{reporting_unit} is the reporting currency; declared conversion rates are applied only to monetary inputs."
+    assumptions = (conversion_assumption, "The later exact supplier-part duplicate is excluded from quality-adjusted metrics and remains visible as an issue.", "Missing qualified alternatives are not imputed; zero alternatives means none are recorded, while blank remains unresolved.", "Outage exposure is family spend × demand-at-risk × stated expedite premium; it is a prioritization proxy, not a realized-loss forecast.", "Spend concentration is not treated as strategic risk without criticality, substitution, geography, quality, and lead-time context.")
     all_ids = [item.id for item in evidence]
     claims: list[AnalyticalRecord] = []
     relationships: list[Relationship] = []
@@ -186,14 +244,14 @@ def analyze_supplier_resilience(source: Path) -> SupplierAnalysis:
             relationships.append(Relationship(f"supplier-issue-{issue_index}-{issue.kind.lower()}-{evidence_id}", evidence_id, recommendation.id, "contradicts"))
     recommendation = replace(recommendation, relationship_ids=[item.id for item in relationships if item.to_id == recommendation.id])
     calculations = [CalculationRecord(f"supplier-{metric.part_family.lower().replace(' ', '-')}-hhi", MeasurementKey(metric.part_family, "supplier_hhi", "current", "index"), "sum((supplier_spend / total_family_spend)^2)", list(metric.evidence_ids), metric.supplier_hhi, "index", [f"Supplier_Master:{item}" for item in metric.evidence_ids]) for metric in metrics]
-    calculations.extend(CalculationRecord(f"supplier-{item.scenario.lower().replace(' ', '-')}-{item.part_family.lower().replace(' ', '-')}", MeasurementKey(item.part_family, "expedite_cost", item.scenario, "EUR", item.scenario), "family_spend_eur * demand_at_risk_pct * expedite_premium", list(item.evidence_ids), item.expedite_cost_eur, "EUR", [f"Supplier_Master:{item}" for item in item.evidence_ids]) for item in scenarios)
+    calculations.extend(CalculationRecord(f"supplier-{item.scenario.lower().replace(' ', '-')}-{item.part_family.lower().replace(' ', '-')}", MeasurementKey(item.part_family, "expedite_cost", item.scenario, reporting_unit, item.scenario), "family_spend * demand_at_risk_pct * expedite_premium", list(item.evidence_ids), item.expedite_cost_eur, reporting_unit, [f"Supplier_Master:{item}" for item in item.evidence_ids]) for item in scenarios)
     state = AnalysisState("supplier-resilience", 1, evidence=evidence, claims=claims, implications=[implication], recommendations=[recommendation], relationships=relationships, revisions=[Revision("revision-1", 1, "supplier resilience analysis pending acceptance", [item.id for item in [*evidence, *calculations, *claims, implication, recommendation]])], invalidation=Invalidation(), revision_status=RevisionStatus.DRAFT, calculations=calculations)
     decision_question = next((str(row[1]) for row in brief.rows if row and row[0] == "Decision question" and len(row) > 1), "Does purchasing concentration create unacceptable strategic exposure?")
     horizon = next((str(row[1]) for row in brief.rows if row and row[0] == "Horizon" and len(row) > 1), "12–36 months")
-    return SupplierAnalysis(digest, decision_question, horizon, assumptions, tuple(issues), tuple(metrics), tuple(scenarios), options, ("Supplier-part HHI and top supplier share", "Qualified alternatives by critical family", "Disruption days and expedite premium", "Defect PPM and lead-time excursions", "Open data-quality exceptions"), recommendation.statement, state)
+    return SupplierAnalysis(digest, decision_question, horizon, assumptions, tuple(issues), tuple(metrics), tuple(scenarios), options, ("Supplier-part HHI and top supplier share", "Qualified alternatives by critical family", "Disruption days and expedite premium", "Defect PPM and lead-time excursions", "Open data-quality exceptions"), recommendation.statement, state, contract.fingerprint, reporting_unit)
 
-def _money(value: float | None) -> str:
-    return "n/a" if value is None else f"€{value:,.0f}"
+def _money(value: float | None, currency: str = "EUR") -> str:
+    return "n/a" if value is None else f"{currency} {value:,.0f}"
 
 def _citations(state: AnalysisState, ids: tuple[str, ...] | list[str]) -> str:
     by_id = {item.id: item for item in state.evidence}
@@ -203,15 +261,15 @@ def render_supplier_report(supplier: SupplierAnalysis, state: AnalysisState | No
     state = state or supplier.state
     if state.revision_status != RevisionStatus.ACCEPTED or any(not item.accepted for item in derive_finding_views(state)):
         raise ValueError("supplier report requires current accepted findings")
-    lines = ["# Supplier Resilience Executive Report", "", f"Decision question: {supplier.decision_question}", f"Horizon: {supplier.horizon}", f"Source workbook SHA-256: `{supplier.source_sha256}`", "", "## What is changing?", "- Strategic exposure is driven by concentration combined with criticality, substitution difficulty, geography, quality, and lead time—not spend concentration alone.", "- The quality-adjusted view excludes only the later duplicate line; missing alternatives remain unresolved and visible.", "", "## Concentration metrics", "| Part family | Spend EUR | Top supplier | Top country | HHI | Criticality | Alternatives | Lead time | Defect PPM | Geo risk | Evidence |", "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|"]
+    lines = ["# Supplier Resilience Executive Report", "", f"Decision question: {supplier.decision_question}", f"Horizon: {supplier.horizon}", f"Reporting currency: {supplier.reporting_currency}", f"Source workbook SHA-256: `{supplier.source_sha256}`", "", "## What is changing?", "- Strategic exposure is driven by concentration combined with criticality, substitution difficulty, geography, quality, and lead time—not spend concentration alone.", "- The quality-adjusted view excludes only the later duplicate line; missing alternatives remain unresolved and visible.", "", "## Concentration metrics", f"| Part family | Spend {supplier.reporting_currency} | Top supplier | Top country | HHI | Criticality | Alternatives | Lead time | Defect PPM | Geo risk | Evidence |", "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|"]
     for item in sorted(supplier.concentration_metrics, key=lambda value: value.criticality_weighted * value.top_supplier_share, reverse=True):
-        lines.append(f"| {item.part_family} | {_money(item.spend_eur)} | {item.top_supplier_share:.1%} | {item.top_country_share:.1%} | {item.supplier_hhi:.3f} | {item.criticality_weighted:.1f}/5 | {item.alternatives_weighted:.1f} | {item.lead_time_weighted_days:.0f} d | {item.defect_weighted_ppm:.0f} | {item.geo_risk_weighted:.1f}/5 | {_citations(state, item.evidence_ids)} |")
+        lines.append(f"| {item.part_family} | {_money(item.spend_eur, supplier.reporting_currency)} | {item.top_supplier_share:.1%} | {item.top_country_share:.1%} | {item.supplier_hhi:.3f} | {item.criticality_weighted:.1f}/5 | {item.alternatives_weighted:.1f} | {item.lead_time_weighted_days:.0f} d | {item.defect_weighted_ppm:.0f} | {item.geo_risk_weighted:.1f}/5 | {_citations(state, item.evidence_ids)} |")
     lines.extend(["", "## Outage scenarios", "Scenario exposure is modeled as family spend × demand at risk, with expedite cost applying the stated scenario premium.", "| Scenario | Part family | Outage days | Demand at risk | Affected spend | Expedite cost | Evidence |", "|---|---|---:|---:|---:|---:|---|"])
     for item in supplier.scenarios:
-        lines.append(f"| {item.scenario} | {item.part_family} | {item.outage_days:g} | {item.demand_at_risk_pct:.1%} | {_money(item.affected_spend_eur)} | {_money(item.expedite_cost_eur)} | {_citations(state, item.evidence_ids)} |")
+        lines.append(f"| {item.scenario} | {item.part_family} | {item.outage_days:g} | {item.demand_at_risk_pct:.1%} | {_money(item.affected_spend_eur, supplier.reporting_currency)} | {_money(item.expedite_cost_eur, supplier.reporting_currency)} | {_citations(state, item.evidence_ids)} |")
     lines.extend(["", "## Sourcing alternatives", "| Action | One-time cost | Lead time | Reversibility | Description | Evidence |", "|---|---:|---:|---|---|---|"])
     for item in supplier.options:
-        lines.append(f"| {item.action} | {_money(item.one_time_cost_eur)} | {item.lead_time_months:g} months | {item.reversibility} | {item.description} | {_citations(state, item.evidence_ids)} |")
+        lines.append(f"| {item.action} | {_money(item.one_time_cost_eur, supplier.reporting_currency)} | {item.lead_time_months:g} months | {item.reversibility} | {item.description} | {_citations(state, item.evidence_ids)} |")
     lines.extend(["", "## Counterarguments"])
     lines.extend(f"- `{issue.kind}`: {issue.message} (source: {_citations(state, issue.evidence_ids)})" for issue in supplier.data_quality_issues)
     lines.append("- A high HHI is not automatically a diversification mandate when criticality is low or substitutes are plentiful; low spend can still matter when criticality and substitution difficulty are high.")
@@ -228,9 +286,11 @@ def write_supplier_report(path: Path, supplier: SupplierAnalysis, state: Analysi
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_supplier_report(supplier, state), encoding="utf-8")
 
-def run_supplier_resilience_workflow(store: AnalysisStore, source: Path, *, human_decision: str = "REJECT", output_dir: Path | None = None) -> SupplierWorkflowResult:
+def run_supplier_resilience_workflow(store: AnalysisStore, source: Path, *, human_decision: str = "REJECT", output_dir: Path | None = None, input_contract: AnalysisInputContract | dict[str, Any] | None = None) -> SupplierWorkflowResult:
     try:
-        supplier = analyze_supplier_resilience(Path(source))
+        if input_contract is None and store.brief_path.exists():
+            input_contract = normalize_work_brief(store.load_brief()).contract_for_domain("supplier_resilience")
+        supplier = analyze_supplier_resilience(Path(source), input_contract=input_contract)
         pending = store.save_pending(supplier.state)
         review = review_analysis_state(pending)
         acceptance = review_and_accept_pending_analysis(store, pending, review, f"review-{pending.investigation_id}-{pending.revision}", human_decision=human_decision)

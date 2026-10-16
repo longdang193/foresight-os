@@ -68,12 +68,49 @@ class AgentFactory:
             instructions += (
                 " For spreadsheet_read, pass source as a string and use the selected sheet or range "
                 "to bound the read. Omit limits unless a concrete measured safety bound is required; "
-                "do not invent low max_rows or max_cells values that could truncate the selected sheet."
+                "do not invent low max_rows or max_cells values that could truncate the selected sheet. "
+                "Keep source set to the approved workbook path; never use workbook_sha256, a hash, or "
+                "a provenance digest as the source path."
+            )
+        if "data_analysis" in required_capabilities:
+            instructions += (
+                " For data_analysis, operation kind must be one of aggregate, sum, mean, scenario, "
+                "sensitivity, compare, join, nulls, missing, or duplicates; summary is unsupported. "
+                "Use value_column for aggregate, sum, mean, scenario, and sensitivity; use columns "
+                "for compare; use key_columns for duplicates."
+            )
+        if "document_read" in required_capabilities:
+            instructions += (
+                " For document_read, pass a relative path from an approved local source root and an "
+                "optional max_chars bound; do not request arbitrary filesystem paths."
+            )
+        if "artifact_generation" in required_capabilities:
+            instructions += (
+                " For artifact_generation, pass a relative artifact name, complete content, and one "
+                "of text, markdown, or json; generated files are provisional local outputs and do not "
+                "constitute external delivery."
+            )
+        if "domain_validation" in required_capabilities:
+            instructions += (
+                " For domain_validation, pass either a complete analysis payload or an evidence candidate "
+                "with only candidate_id, capability_id, source, request, excerpt, provenance, limitations, "
+                "acquisition_kind, retrieved_at, query, context, raw_result, and retrieval_proof; do not "
+                "pass scorecard weights, claims, recommendations, stage results, stage_id, objective, "
+                "decision_question, horizon, research_needs, relevant_constraints, dependency_outputs, "
+                "or other stage metadata as candidate fields."
+            )
+        if "calculation" in required_capabilities:
+            instructions += (
+                " For calculation, use only spreadsheet measurements returned by spreadsheet_read or "
+                "verified calculation records; never pass domain Evidence, prose excerpts, coordinates, "
+                "or fabricated measurement mappings as calculation inputs."
             )
         if context.get("require_structured_output") and context.get("stage_id"):
             instructions += (
                 f" The output field stage_id must be exactly {context['stage_id']!r}; "
-                "do not invent or substitute a generic stage identifier."
+                "do not invent or substitute a generic stage identifier. Return only one JSON "
+                "object matching analysis-stage-result/v1 after tool use; do not return prose, "
+                "markdown fences, or commentary."
             )
             relationship_guidance = "; ".join(
                 f"{relation}: {'/'.join(sorted(kind.value for kind in rule.sources))} -> "
@@ -83,12 +120,29 @@ class AgentFactory:
             instructions += (
                 " Relationship edges must follow the canonical endpoint rules: "
                 f"{relationship_guidance}. Only emit an edge when both endpoint kinds match; "
-                "if uncertain, omit the edge rather than inventing a relationship."
+                "never emit same-kind claim-to-claim or implication-to-implication edges; "
+                "if uncertain, omit the edge rather than inventing a relationship, and remove its "
+                "ID from relationship_ids. "
+                "Use informs for claim/evidence/implication -> implication/recommendation; "
+                "use produces only from claim/implication/recommendation to artifact."
             )
             instructions += (
                 " The stage result must be self-contained: include every evidence record used by "
                 "this stage in the current payload, and re-declare dependency evidence before "
-                "referencing it. Do not reference an ID that appears only in dependency_outputs."
+                "referencing it. Before any claim, implication, or recommendation references an "
+                "evidence ID from dependency_outputs, copy that evidence record verbatim into the "
+                "current evidence collection; never reference dependency-only evidence. Every "
+                "relationship_ids entry must refer to a relationship "
+                "declared in the current relationships collection or an existing canonical "
+                "relationship; never reference an ID that appears only in dependency_outputs. "
+                "Before returning, audit every evidence_ids, relationship_ids, input_ids, from_id, "
+                "and to_id value against an ID declared in the current payload; remove any "
+                "reference without a matching local record."
+            )
+            instructions += (
+                " When re-declaring an existing dependency record, copy every field verbatim; do not "
+                "rewrite evidence, claims, implications, recommendations, or relationships under an "
+                "existing ID. use a new record ID for a revised interpretation."
             )
             instructions += (
                 " Every calculations[].input_ids value must match an id declared in the current "
@@ -96,6 +150,15 @@ class AgentFactory:
                 "locator, or tool-result label as an input id. Do not emit duplicate relationship "
                 "edges with the same endpoints and relation type."
             )
+            if "spreadsheet_read" in required_capabilities:
+                instructions += (
+                    " For spreadsheet_read selection, encode ranges as a list of "
+                    "[sheet_name, cell_range] pairs, for example [[\"Channel Dynamic\", \"A1:H20\"]]. "
+                    "When ranges or tables are used, also provide sheet_names for every selected "
+                    "sheet and keep each range within the sheet's used area; do not request a "
+                    "blanket workbook read or padded rows and columns. Read one sheet per call "
+                    "when auditing a workbook so the returned evidence stays bounded."
+                )
         kwargs: dict[str, Any] = {
             "id": config.id,
             "name": config.id,

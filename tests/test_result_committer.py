@@ -117,6 +117,24 @@ def test_invalid_contract_provenance_and_references_are_rejected(payload, messag
         normalize_stage_result(payload)
 
 
+def test_dependency_only_relationship_reference_is_rejected():
+    prior = normalize_stage_result(_payload())
+    dependency_claim = prior.claims[0]
+    payload = _payload(
+        relationships=[],
+        claims=[{
+            **_payload()["claims"][0],
+            "relationship_ids": [prior.relationships[0].id],
+        }],
+    )
+
+    with pytest.raises(ValidationError, match="unknown reference: claims.relationship_ids"):
+        normalize_stage_result(
+            payload,
+            existing_records={dependency_claim.id: dependency_claim},
+        )
+
+
 def test_duplicate_provider_aliases_are_rejected():
     duplicate = _payload()
     duplicate["evidence"].append({**duplicate["evidence"][0], "excerpt": "second"})
@@ -132,6 +150,43 @@ def test_duplicate_relationship_edges_are_canonicalized_once():
     result = normalize_stage_result(duplicate)
 
     assert len(result.relationships) == 1
+
+
+def test_invalid_relationship_endpoint_types_are_rejected_during_normalization():
+    payload = _payload(
+        claims=[],
+        implications=[
+            {
+                "id": "provider-implication",
+                "statement": "The observed share informs a planning implication.",
+                "basis": "DERIVED",
+                "assessment": "UNASSESSED",
+                "evidence_ids": [],
+                "relationship_ids": ["provider-invalid-edge"],
+            }
+        ],
+        recommendations=[
+            {
+                "id": "provider-recommendation",
+                "statement": "Use the implication to shape the next decision.",
+                "basis": "ASSUMED",
+                "assessment": "UNASSESSED",
+                "evidence_ids": [],
+                "relationship_ids": [],
+            }
+        ],
+        relationships=[
+            {
+                "id": "provider-invalid-edge",
+                "from_id": "provider-implication",
+                "to_id": "provider-recommendation",
+                "relation_type": "produces",
+            }
+        ],
+    )
+
+    with pytest.raises(ValidationError, match="invalid endpoints for relationship produces"):
+        normalize_stage_result(payload)
 
 
 @pytest.mark.parametrize("output", [True, float("nan"), float("inf"), "not-a-number"])
@@ -214,17 +269,19 @@ def test_multi_participant_validation_uses_correction_budget(monkeypatch):
     )
     synthesis_calls = 0
     native_calls = 0
+    prompts = []
 
     async def fake_native(*args, **kwargs):
         nonlocal native_calls
         native_calls += 1
+        prompts.append(args[1])
         return [{"status": "raw"}, {"status": "raw"}]
 
     def fake_synthesis(*args, **kwargs):
         nonlocal synthesis_calls
         synthesis_calls += 1
         if synthesis_calls == 1:
-            raise ValidationError("invalid aggregate")
+            raise ValidationError("invalid endpoints for relationship informs: claim -> claim")
         return {"status": "ready"}
 
     monkeypatch.setattr(workflow_module, "_run_native_stage", fake_native)
@@ -245,6 +302,63 @@ def test_multi_participant_validation_uses_correction_budget(monkeypatch):
 
     assert result.metrics.correction_rounds == 1
     assert native_calls == 2
+    assert "remove the invalid relationship" in prompts[1]
+
+
+def test_tool_enabled_multi_participant_correction_can_dispatch_again(monkeypatch):
+    base = make_recipe(RecipeName.DIRECT)
+    participants = (
+        {"id": "analyst", "purpose": "analyze", "capability_ids": ("spreadsheet_read",)},
+        {"id": "reviewer", "purpose": "review", "capability_ids": ("domain_validation",)},
+    )
+    stage = RecipeStage("stage-1", ExecutionPattern.SEQUENTIAL, participants, "prompt", "typed-result", {"max_total_agent_calls": 12})
+    recipe = ExecutionRecipe(
+        base.name,
+        base.pattern,
+        base.roles,
+        base.max_agent_steps,
+        base.max_correction_rounds,
+        12,
+        base.completion,
+        base.escalation,
+        base.partial_result,
+        stages=(stage,),
+    )
+    synthesis_calls = 0
+
+    async def fake_native(*args, **kwargs):
+        reserve_call = args[5]["reserve_agent_call"]
+        record_call = args[5]["record_agent_call"]
+        for _ in range(6):
+            assert reserve_call()
+            record_call()
+        return [{"status": "raw"}, {"status": "raw"}]
+
+    def fake_synthesis(*args, **kwargs):
+        nonlocal synthesis_calls
+        synthesis_calls += 1
+        if synthesis_calls == 1:
+            raise ValidationError("canonical validation requires a correction")
+        return {"status": "ready"}
+
+    monkeypatch.setattr(workflow_module, "_run_native_stage", fake_native)
+    monkeypatch.setattr(workflow_module, "_synthesize_stage_outputs", fake_synthesis)
+
+    def committer(stage, output, context):
+        return CanonicalStageResult(("result",), (canonical_json_hash(output),), output)
+
+    result = asyncio.run(
+        run_recipe_async(
+            recipe,
+            "question",
+            client=object(),
+            run_id="tool-enabled-correction-budget",
+            run_context={"canonical_result_committer": committer},
+        )
+    )
+
+    assert result.metrics.correction_rounds == 1
+    assert result.metrics.model_calls == 12
 
 
 def test_schema_is_strict_and_binds_contract():
@@ -417,6 +531,296 @@ def test_committer_rejects_same_id_with_different_persisted_content(tmp_path):
         committer(stage, _payload(), {})
 
 
+def test_normalizer_can_drop_invalid_relationships_only_after_explicit_retry():
+    payload = _payload(
+        relationships=[
+            {
+                "id": "provider-support",
+                "from_id": "provider-claim",
+                "to_id": "provider-claim",
+                "relation_type": "informs",
+            }
+        ]
+    )
+
+    normalized = normalize_stage_result(payload, tolerate_invalid_relationships=True)
+
+    assert normalized.relationships == ()
+    assert normalized.claims[0].relationship_ids == []
+
+
+def test_normalizer_can_drop_unknown_relationship_endpoints_after_explicit_retry():
+    payload = _payload(
+        relationships=[
+            {
+                "id": "provider-support",
+                "from_id": "missing-evidence",
+                "to_id": "provider-claim",
+                "relation_type": "supports",
+            }
+        ]
+    )
+
+    normalized = normalize_stage_result(payload, tolerate_invalid_relationships=True)
+
+    assert normalized.relationships == ()
+    assert normalized.claims[0].relationship_ids == []
+
+
+def test_normalizer_can_drop_unresolved_relationship_references_after_explicit_retry():
+    payload = _payload(
+        relationships=[],
+        claims=[{**_payload()["claims"][0], "relationship_ids": ["missing-relationship"]}],
+    )
+
+    normalized = normalize_stage_result(payload, tolerate_invalid_relationships=True)
+
+    assert normalized.relationships == ()
+    assert normalized.claims[0].relationship_ids == []
+
+
+def test_workflow_retries_and_drops_unknown_record_relationship_reference(tmp_path):
+    store = AnalysisStore(tmp_path / "case")
+    base = make_recipe(RecipeName.DIRECT)
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.DIRECT,
+        ({"id": "analyst", "purpose": "analyze"},),
+        "prompt",
+        "typed-result",
+        {},
+    )
+    recipe = ExecutionRecipe(
+        base.name,
+        base.pattern,
+        base.roles,
+        base.max_agent_steps,
+        base.max_correction_rounds,
+        base.max_total_agent_calls,
+        base.completion,
+        base.escalation,
+        base.partial_result,
+        stages=(stage,),
+    )
+    invalid = _payload(
+        claims=[],
+        implications=[{
+            "id": "provider-implication",
+            "statement": "The observed share informs a planning implication.",
+            "basis": "DERIVED",
+            "assessment": "UNASSESSED",
+            "evidence_ids": [],
+            "relationship_ids": ["missing-relationship"],
+        }],
+        relationships=[],
+    )
+
+    class Agent:
+        async def run(self, prompt, **kwargs):
+            return SimpleNamespace(value=invalid, text="")
+
+    class Client:
+        def as_agent(self, **kwargs):
+            return Agent()
+
+    result = asyncio.run(
+        run_recipe_async(
+            recipe,
+            "question",
+            client=Client(),
+            run_id="relationship-reference-correction",
+            run_context={"canonical_result_committer": CanonicalResultCommitter(store, "case")},
+        )
+    )
+
+    assert result.metrics.correction_rounds == 1
+    assert store.load_pending().implications[0].relationship_ids == []
+
+
+def test_synthesis_can_drop_invalid_relationships_after_explicit_retry():
+    base = make_recipe(RecipeName.DIRECT)
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "one"}, {"id": "two"}),
+        "prompt",
+        "typed-result",
+        {},
+    )
+    payload = _payload(
+        relationships=[
+            {
+                "id": "invalid-edge",
+                "from_id": "provider-claim",
+                "to_id": "provider-claim",
+                "relation_type": "informs",
+            }
+        ]
+    )
+
+    synthesized = _synthesize_stage_outputs(
+        stage,
+        [payload, payload],
+        tolerate_invalid_relationships=True,
+    )
+
+    assert synthesized["relationships"] == []
+
+
+def test_synthesis_can_preserve_first_conflicting_record_after_explicit_retry():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "one"}, {"id": "two"}),
+        "prompt",
+        "typed-result",
+        {},
+    )
+    outputs = [
+        {"evidence": [{"id": "e1", "statement": "first"}], "claims": [], "calculations": [], "implications": [], "recommendations": [], "artifacts": [], "relationships": [], "assumptions": [], "uncertainty": [], "monitoring_indicators": []},
+        {"evidence": [{"id": "e1", "statement": "second"}], "claims": [], "calculations": [], "implications": [], "recommendations": [], "artifacts": [], "relationships": [], "assumptions": [], "uncertainty": [], "monitoring_indicators": []},
+    ]
+
+    synthesized = _synthesize_stage_outputs(stage, outputs, tolerate_conflicting_records=True)
+
+    assert synthesized["evidence"] == [{"id": "e1", "statement": "first"}]
+
+
+def test_synthesis_preserves_trusted_existing_evidence_when_peer_reuses_its_alias():
+    prior = normalize_stage_result(_payload())
+    prior_evidence = prior.evidence[0]
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "one"}, {"id": "two"}),
+        "prompt",
+        "typed-result",
+        {},
+    )
+    conflicting = _payload(
+        evidence=[{**_payload()["evidence"][0], "id": prior_evidence.id, "excerpt": "different evidence"}],
+        claims=[{**_payload()["claims"][0], "evidence_ids": [prior_evidence.id], "relationship_ids": []}],
+        relationships=[],
+    )
+
+    synthesized = _synthesize_stage_outputs(
+        stage,
+        [conflicting, conflicting],
+        existing_records={prior_evidence.id: prior_evidence},
+    )
+
+    assert synthesized["claims"][0]["evidence_ids"] == [prior_evidence.id]
+
+
+def test_synthesis_resolves_calculation_aliases_across_three_participant_hops():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "one"}, {"id": "two"}, {"id": "three"}),
+        "prompt",
+        "typed-result",
+        {},
+    )
+    evidence = _payload()["evidence"][0]
+    outputs = [
+        _payload(
+            calculations=[{
+                "id": "calculation-one",
+                "key": {"region": "Vietnam", "measure": "share", "period": "2026", "units": "percent"},
+                "formula": "42",
+                "input_ids": ["provider-evidence"],
+                "output": 42,
+                "units": "percent",
+                "source_locators": ["Summary!B2"],
+            }],
+        ),
+        _payload(
+            evidence=[],
+            claims=[],
+            relationships=[],
+            calculations=[{
+                "id": "calculation-two",
+                "key": {"region": "Vietnam", "measure": "share-adjusted", "period": "2026", "units": "percent"},
+                "formula": "calculation-one + 1",
+                "input_ids": ["calculation-one"],
+                "output": 43,
+                "units": "percent",
+                "source_locators": ["derived"],
+            }],
+        ),
+        _payload(
+            evidence=[],
+            claims=[],
+            relationships=[],
+            calculations=[{
+                "id": "calculation-three",
+                "key": {"region": "Vietnam", "measure": "share-final", "period": "2026", "units": "percent"},
+                "formula": "calculation-two + 1",
+                "input_ids": ["calculation-two"],
+                "output": 44,
+                "units": "percent",
+                "source_locators": ["derived"],
+            }],
+        ),
+    ]
+    outputs[0]["evidence"] = [evidence]
+
+    synthesized = _synthesize_stage_outputs(stage, outputs)
+
+    calculations = {item["formula"]: item for item in synthesized["calculations"]}
+    assert calculations["calculation-one + 1"]["input_ids"] == [calculations["42"]["id"]]
+    assert calculations["calculation-two + 1"]["input_ids"] == [calculations["calculation-one + 1"]["id"]]
+
+
+def test_synthesis_keeps_valid_relationship_alias_after_an_invalid_relationship_is_filtered():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "one"}, {"id": "two"}),
+        "prompt",
+        "typed-result",
+        {},
+    )
+    output = _payload(
+        claims=[{**_payload()["claims"][0], "relationship_ids": ["valid-support"]}],
+        relationships=[
+            {
+                "id": "invalid-support",
+                "from_id": "missing-evidence",
+                "to_id": "provider-claim",
+                "relation_type": "supports",
+            },
+            {
+                "id": "valid-support",
+                "from_id": "provider-evidence",
+                "to_id": "provider-claim",
+                "relation_type": "supports",
+            },
+        ],
+    )
+    peer_output = _payload(
+        evidence=[],
+        claims=[{
+            "id": "peer-claim",
+            "statement": "The valid edge remains usable.",
+            "basis": "DERIVED",
+            "assessment": "UNASSESSED",
+            "evidence_ids": [],
+            "relationship_ids": ["valid-support"],
+        }],
+        relationships=[],
+    )
+
+    synthesized = _synthesize_stage_outputs(
+        stage,
+        [output, peer_output],
+        tolerate_invalid_relationships=True,
+    )
+
+    assert synthesized["claims"][0]["relationship_ids"]
+    assert synthesized["claims"][0]["relationship_ids"][0] == synthesized["relationships"][0]["id"]
+
+
 def test_workflow_hydrates_canonical_records_from_persisted_state_for_cache_reuse(tmp_path):
     store = AnalysisStore(tmp_path / "case")
     evidence = Evidence(
@@ -559,6 +963,110 @@ def test_workflow_uses_one_correction_round_for_canonical_validation_feedback():
     )
 
     assert result.outputs[-1]["status"] == "ready"
+    assert result.metrics.correction_rounds == 1
+    assert len(prompts) == 2
+    assert "canonical validation" in prompts[1]
+
+
+def test_workflow_explains_dependency_record_redeclaration_on_unknown_reference():
+    base = make_recipe(RecipeName.DIRECT)
+    stage = RecipeStage("stage-1", ExecutionPattern.DIRECT, ({"id": "analyst", "purpose": "analyze"},), "prompt", "typed-result", {})
+    recipe = ExecutionRecipe(
+        base.name,
+        base.pattern,
+        base.roles,
+        base.max_agent_steps,
+        base.max_correction_rounds,
+        base.max_total_agent_calls,
+        base.completion,
+        base.escalation,
+        base.partial_result,
+        stages=(stage,),
+    )
+    prompts = []
+
+    class Agent:
+        async def run(self, prompt, **kwargs):
+            prompts.append(prompt)
+            return SimpleNamespace(value={"status": "invalid" if len(prompts) == 1 else "ready"}, text="")
+
+    class Client:
+        def as_agent(self, **kwargs):
+            return Agent()
+
+    def committer(stage, output, context):
+        if len(prompts) == 1:
+            raise ValidationError("unknown reference: implications[0].evidence_ids -> dependency-evidence")
+        return CanonicalStageResult(("result",), (canonical_json_hash(output),), output)
+
+    asyncio.run(
+        run_recipe_async(
+            recipe,
+            "question",
+            client=Client(),
+            run_id="dependency-reference-correction",
+            run_context={"canonical_result_committer": committer},
+        )
+    )
+
+    assert "copy the exact referenced evidence" in prompts[1]
+    assert "every from_id and to_id must refer to a record declared" in prompts[1]
+    assert '"dependency_outputs"' in prompts[1]
+    assert "audit every evidence_ids" in prompts[1]
+    assert "never reference a record that exists only under dependency_outputs" in prompts[1]
+    assert "Every text-list item" in prompts[1]
+
+
+def test_workflow_retries_same_id_conflict_as_canonical_validation(tmp_path):
+    store = AnalysisStore(tmp_path / "case")
+    committer = CanonicalResultCommitter(store, "case")
+    stage = type("Stage", (), {"stage_id": "stage-1", "result_contract": ANALYSIS_STAGE_RESULT_CONTRACT})()
+    committer(stage, _payload(), {})
+    persisted = json.loads(store.pending_analysis_path.read_text(encoding="utf-8"))
+    persisted["evidence"][0]["limitations"] = ["tampered persisted content"]
+    store.pending_analysis_path.write_text(json.dumps(persisted), encoding="utf-8")
+
+    base = make_recipe(RecipeName.DIRECT)
+    recipe_stage = RecipeStage("stage-1", ExecutionPattern.DIRECT, ({"id": "analyst", "purpose": "analyze"},), "prompt", "typed-result", {})
+    recipe = ExecutionRecipe(
+        base.name,
+        base.pattern,
+        base.roles,
+        base.max_agent_steps,
+        base.max_correction_rounds,
+        base.max_total_agent_calls,
+        base.completion,
+        base.escalation,
+        base.partial_result,
+        stages=(recipe_stage,),
+    )
+    prompts = []
+
+    class Agent:
+        async def run(self, prompt, **kwargs):
+            prompts.append(prompt)
+            value = _payload() if len(prompts) == 1 else _payload(evidence=[{**_payload()["evidence"][0], "limitations": ["tampered persisted content"]}])
+            return SimpleNamespace(value=value, text="")
+
+    class Client:
+        def as_agent(self, **kwargs):
+            return Agent()
+
+    result = asyncio.run(
+        run_recipe_async(
+            recipe,
+            "question",
+            client=Client(),
+            run_id="same-id-correction",
+            run_context={
+                "analysis_store": store,
+                "canonical_result_committer": committer,
+                "require_structured_output": True,
+                "structured_output_schema": analysis_stage_result_schema(),
+            },
+        )
+    )
+
     assert result.metrics.correction_rounds == 1
     assert len(prompts) == 2
     assert "canonical validation" in prompts[1]

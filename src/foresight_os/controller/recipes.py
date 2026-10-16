@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from foresight_os.controller.profiles import Profile
+from foresight_os.runtime.capabilities import DEFAULT_CAPABILITIES
 from foresight_os.runtime.maf_probe import vertical_slice_guardrail
 
 
@@ -72,6 +73,7 @@ class StageInput:
     relevant_constraints: tuple[str, ...] = ()
     dependency_outputs: tuple[tuple[str, object], ...] = ()
     research_needs: tuple[object, ...] = ()
+    analysis_contract_fingerprints: tuple[tuple[str, str], ...] = ()
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -82,6 +84,7 @@ class StageInput:
             "relevant_constraints": self.relevant_constraints,
             "dependency_outputs": {stage_id: output for stage_id, output in self.dependency_outputs},
             "research_needs": self.research_needs,
+            "analysis_contract_fingerprints": dict(self.analysis_contract_fingerprints),
         }
 
     def __str__(self) -> str:
@@ -193,6 +196,37 @@ class RecipeStage:
         )
 
 
+def _role_capability_ids(role: object) -> tuple[str, ...]:
+    if isinstance(role, dict):
+        values = role.get("capability_ids", role.get("capabilities", ()))
+    else:
+        values = getattr(role, "capability_ids", ())
+    return tuple(str(item) for item in values or () if str(item))
+
+
+def _uses_runtime_capability(values: object) -> bool:
+    return any(str(item) in DEFAULT_CAPABILITIES for item in values or ())
+
+
+def minimum_stage_agent_calls(
+    stage: object,
+    correction_rounds: int,
+    fallback_roles: tuple[object, ...] = (),
+    capabilities: tuple[str, ...] | None = None,
+) -> int:
+    stage_participants = tuple(getattr(stage, "participants", ()))
+    if not hasattr(stage, "capabilities") and fallback_roles:
+        roles = tuple(fallback_roles)
+    else:
+        roles = stage_participants or tuple(fallback_roles) or ({"id": "participant-1"},)
+    correction_factor = 1 + max(0, int(correction_rounds))
+    stage_capability_values = getattr(stage, "capabilities", ()) if capabilities is None else capabilities
+    return sum(
+        (3 if _uses_runtime_capability(stage_capability_values) or _uses_runtime_capability(_role_capability_ids(role)) else 1) * correction_factor
+        for role in roles
+    )
+
+
 @dataclass(frozen=True)
 class ExecutionRecipe:
     name: RecipeName
@@ -252,6 +286,18 @@ class ExecutionRecipe:
             reuse_policy=str(value.get("reuse_policy", "")),
             adaptation_policy=tuple(value.get("adaptation_policy", ())),
         )
+
+
+def minimum_agent_call_budget(recipe: ExecutionRecipe) -> int:
+    if recipe.stages:
+        return sum(
+            minimum_stage_agent_calls(stage, recipe.max_correction_rounds, tuple(recipe.roles))
+            for stage in recipe.stages
+        )
+    return sum(
+        (3 if _uses_runtime_capability(_role_capability_ids(role)) else 1) * (1 + max(0, int(recipe.max_correction_rounds)))
+        for role in (tuple(recipe.roles) or ({"id": "participant-1"},))
+    )
 
 
 def make_recipe(name: RecipeName) -> ExecutionRecipe:

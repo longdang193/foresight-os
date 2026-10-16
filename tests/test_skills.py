@@ -79,12 +79,97 @@ def test_factory_binds_exact_stage_id_for_structured_results():
     )
 
     assert "stage_id must be exactly 'source-audit'" in captured["instructions"]
+    assert "Return only one JSON object matching analysis-stage-result/v1" in captured["instructions"]
     assert "informs: claim/evidence/implication -> implication/recommendation" in captured["instructions"]
+    assert "produces only from claim/implication/recommendation to artifact" in captured["instructions"]
     assert "omit the edge rather than inventing a relationship" in captured["instructions"]
     assert "stage result must be self-contained" in captured["instructions"]
-    assert "Do not reference an ID that appears only in dependency_outputs" in captured["instructions"]
+    assert "never reference dependency-only evidence" in captured["instructions"]
+    assert "Every relationship_ids entry must refer to a relationship" in captured["instructions"]
+    assert "never reference an ID that appears only in dependency_outputs" in captured["instructions"]
+    assert "audit every evidence_ids" in captured["instructions"]
+    assert "copy every field verbatim" in captured["instructions"]
+    assert "use a new record ID for a revised interpretation" in captured["instructions"]
     assert "never use a spreadsheet coordinate" in captured["instructions"]
     assert "Do not emit duplicate relationship edges" in captured["instructions"]
+
+
+def test_factory_documents_spreadsheet_selection_shape():
+    captured = {}
+
+    class Client:
+        def as_agent(self, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+    AgentFactory(Client()).create(
+        ParticipantConfig("source", "analyst", "audit workbook", capability_ids=("spreadsheet_read",)),
+        {
+            "require_structured_output": True,
+            "stage_id": "source-audit",
+            "capability_resolver": CapabilityResolver(),
+            "local_capabilities": {"spreadsheet_read": lambda source, selection=None, limits=None: None},
+        },
+    )
+
+    assert "ranges as a list of [sheet_name, cell_range] pairs" in captured["instructions"]
+    assert "also provide sheet_names for every selected sheet" in captured["instructions"]
+    assert "do not request a blanket workbook read" in captured["instructions"]
+    assert "Read one sheet per call" in captured["instructions"]
+    assert "never use workbook_sha256" in captured["instructions"]
+
+
+def test_factory_documents_supported_data_analysis_operations():
+    captured = {}
+
+    class Client:
+        def as_agent(self, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+    AgentFactory(Client()).create(
+        ParticipantConfig("analyst", "analyst", "analyze workbook", capability_ids=("data_analysis",)),
+        {"tools_by_participant": {"analyst": []}},
+    )
+
+    assert "operation kind must be one of aggregate, sum, mean" in captured["instructions"]
+    assert "summary is unsupported" in captured["instructions"]
+
+
+def test_factory_documents_domain_validation_candidate_contract():
+    captured = {}
+
+    class Client:
+        def as_agent(self, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+    AgentFactory(Client()).create(
+        ParticipantConfig("validator", "validator", "validate evidence", capability_ids=("domain_validation",)),
+        {"tools_by_participant": {"validator": []}},
+    )
+
+    assert "with only candidate_id, capability_id, source, request, excerpt" in captured["instructions"]
+    assert "do not pass scorecard weights" in captured["instructions"]
+    assert "stage results" in captured["instructions"]
+    assert "dependency_outputs" in captured["instructions"]
+
+
+def test_factory_documents_calculation_input_contract():
+    captured = {}
+
+    class Client:
+        def as_agent(self, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+    AgentFactory(Client()).create(
+        ParticipantConfig("analyst", "analyst", "calculate metrics", capability_ids=("calculation",)),
+        {"tools_by_participant": {"analyst": []}},
+    )
+
+    assert "only spreadsheet measurements returned by spreadsheet_read" in captured["instructions"]
+    assert "never pass domain Evidence" in captured["instructions"]
 
 
 def test_stage_local_skills_do_not_leak_between_stages():

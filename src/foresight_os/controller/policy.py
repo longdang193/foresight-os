@@ -8,6 +8,7 @@ from foresight_os.controller.recipes import (
     RecipeStage,
     ReviewCheckKind,
     make_recipe,
+    minimum_stage_agent_calls,
 )
 from foresight_os.controller.task_shape import TaskShape
 from foresight_os.domain.models import ResearchNeed, ResearchNeedKind, WorkBrief
@@ -212,12 +213,30 @@ def _stage_pattern_override(stage: object):
     return required_patterns or None
 
 
+def _explicit_reviewer_requested(brief: WorkBrief | None, task_shape: TaskShape | None) -> bool:
+    if task_shape is not None and task_shape.review_required:
+        return True
+    if brief is None:
+        return False
+    intent = getattr(brief, "execution_intent", None)
+    if "reviewer" in {str(item) for item in getattr(intent, "required_participants", ())}:
+        return True
+    for stage in getattr(brief, "stages", ()):
+        if "reviewer" in {str(item) for item in getattr(stage, "participants", ())}:
+            return True
+        stage_intent = getattr(stage, "execution_intent", None)
+        if "reviewer" in {str(item) for item in getattr(stage_intent, "required_participants", ())}:
+            return True
+    return False
+
+
 def _recipe_for_patterns(
     patterns: tuple[ExecutionPattern, ...],
     source: str,
     rationale: str,
     work_stages=(),
     review_required: bool = False,
+    reviewer_execution_required: bool = False,
     brief: WorkBrief | None = None,
 ) -> ExecutionRecipe:
     if not patterns:
@@ -292,6 +311,7 @@ def _recipe_for_patterns(
     )
 
     stage_count = len(work_stages) or len(patterns)
+    max_agent_steps = max(base.max_agent_steps, stage_count)
     max_total_agent_calls = max(base.max_total_agent_calls, stage_count)
     if work_stages and source == "explicit_override" and len(patterns) not in (1, len(work_stages)):
         raise ValueError("pattern list must contain one pattern or exactly one pattern per WorkStage")
@@ -310,6 +330,14 @@ def _recipe_for_patterns(
     def review_runtime_capabilities(stage: object) -> tuple[str, ...]:
         declared = set(review_policy.reviewer_capability_ids)
         return tuple(item for item in ("web_search", "page_retrieval", "document_read", "spreadsheet_read", "data_analysis", "calculation", "graph_context", "internal_knowledge", "domain_validation", "artifact_generation") if item in declared)
+
+    def stage_call_budget(stage: object, pattern: ExecutionPattern, is_last: bool) -> int:
+        return minimum_stage_agent_calls(
+            stage,
+            base.max_correction_rounds,
+            tuple(stage_roles(stage, pattern, is_last)),
+            capabilities=stage_capabilities(stage)[0],
+        )
 
     def stage_roles(stage: object, pattern: ExecutionPattern, is_last: bool) -> list[dict[str, object]]:
         _, required_stage_participants = stage_requirements(stage)
@@ -331,9 +359,11 @@ def _recipe_for_patterns(
             roles = [dict(role) for role in make_recipe(recipe_names[pattern]).roles]
             for index, role in enumerate(roles, 1):
                 role.setdefault("id", f"participant-{index}")
+        if pattern == ExecutionPattern.SEQUENTIAL and not requested_ids and not reviewer_execution_required:
+            roles = [role for role in roles if role.get("purpose") != "review"]
 
         needs_collaborator = pattern in {ExecutionPattern.HANDOFF, ExecutionPattern.GROUP_CHAT} or (
-            review_required and is_last and pattern != ExecutionPattern.DIRECT
+            reviewer_execution_required and is_last and pattern != ExecutionPattern.DIRECT
         )
         if needs_collaborator and len(roles) < 2:
             roles.append(
@@ -344,11 +374,22 @@ def _recipe_for_patterns(
                     "profile": "normal",
                 }
             )
-        if review_required and is_last and pattern != ExecutionPattern.DIRECT and not any(role.get("purpose") == "review" for role in roles):
+        if reviewer_execution_required and is_last and pattern != ExecutionPattern.DIRECT and not any(role.get("purpose") == "review" for role in roles):
             roles.append({"id": "reviewer", "role": "reviewer", "purpose": "review", "profile": "normal"})
         if pattern == ExecutionPattern.HANDOFF and len(roles) > 1:
             roles[0].setdefault("handoff_targets", (roles[1]["id"],))
         return roles
+
+    if work_stages:
+        planned_agent_calls = sum(
+            stage_call_budget(
+                work_stages[index - 1],
+                stage_patterns[index - 1],
+                index == stage_count,
+            )
+            for index in range(1, stage_count + 1)
+        )
+        max_total_agent_calls = max(max_total_agent_calls, planned_agent_calls)
 
     stages = tuple(
         RecipeStage(
@@ -373,8 +414,21 @@ def _recipe_for_patterns(
                     if index <= len(work_stages)
                     else {}
                 ),
-                "max_agent_steps": base.max_agent_steps,
-                "max_total_agent_calls": max_total_agent_calls,
+                "max_agent_steps": max_agent_steps,
+                "max_total_agent_calls": max(
+                    int(
+                        (
+                            getattr(work_stages[index - 1], "limits", {})
+                            if index <= len(work_stages)
+                            else {}
+                        ).get("max_total_agent_calls", base.max_total_agent_calls)
+                    ),
+                    stage_call_budget(
+                        work_stages[index - 1] if index <= len(work_stages) else object(),
+                        stage_patterns[index - 1],
+                        index == stage_count,
+                    )
+                ),
             },
             tuple(getattr(work_stages[index - 1], "skill_ids", ())) if index <= len(work_stages) else (),
             getattr(work_stages[index - 1], "objective", "") if index <= len(work_stages) else "",
@@ -410,11 +464,14 @@ def _recipe_for_patterns(
         )
         for index in range(1, stage_count + 1)
     )
+    recipe_roles = base.roles
+    if ExecutionPattern.SEQUENTIAL in patterns and not reviewer_execution_required:
+        recipe_roles = [role for role in recipe_roles if role.get("purpose") != "review"]
     return ExecutionRecipe(
         base.name,
         patterns[0].value,
-        base.roles,
-        base.max_agent_steps,
+        recipe_roles,
+        max_agent_steps,
         base.max_correction_rounds,
         max_total_agent_calls,
         base.completion,
@@ -471,7 +528,8 @@ def select_recipe(brief: WorkBrief, task_shape: TaskShape | None = None, overrid
             "explicit_override",
             "valid explicit execution-pattern override",
             brief.stages,
-            bool(task_shape and task_shape.review_required),
+            _explicit_reviewer_requested(brief, task_shape),
+            _explicit_reviewer_requested(brief, task_shape),
             brief,
         )
     if task_shape is not None:
@@ -490,7 +548,8 @@ def select_recipe(brief: WorkBrief, task_shape: TaskShape | None = None, overrid
                 "task_shape",
                 "structural task-shape mapping",
                 brief.stages,
-                task_shape.review_required,
+                _explicit_reviewer_requested(brief, task_shape),
+                _explicit_reviewer_requested(brief, task_shape),
                 brief,
             )
         return _recipe_for_patterns((ExecutionPattern.DIRECT,), "task_shape", "direct task shape", brief.stages, brief=brief)
@@ -501,17 +560,25 @@ def select_recipe(brief: WorkBrief, task_shape: TaskShape | None = None, overrid
             "ordered Work Brief stages",
             brief.stages,
             True,
+            True,
             brief,
         )
     if brief.desired_deliverables:
         if intent is None or not (required_capabilities or required_participants):
-            return make_recipe(RecipeName.ANALYZE_REVIEW)
+            return _recipe_for_patterns(
+                (ExecutionPattern.SEQUENTIAL,),
+                "work_brief",
+                "desired deliverables require bounded analysis and independent validation",
+                brief=brief,
+                review_required=True,
+            )
         return _recipe_for_patterns(
             (ExecutionPattern.SEQUENTIAL,),
             "work_brief",
             "desired deliverables require bounded analysis and review",
             brief.stages,
             True,
+            _explicit_reviewer_requested(brief, task_shape),
             brief,
         )
     if intent is not None and (required_capabilities or required_participants):
@@ -521,6 +588,7 @@ def select_recipe(brief: WorkBrief, task_shape: TaskShape | None = None, overrid
             "mandatory execution intent requires bounded analysis and review",
             brief.stages,
             True,
+            _explicit_reviewer_requested(brief, task_shape),
             brief,
         )
     return make_recipe(RecipeName.DIRECT)

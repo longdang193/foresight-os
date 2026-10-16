@@ -9,6 +9,9 @@ that a report can be traced back to the evidence and revision that produced it.
 ```text
 WorkBrief
   -> typed human intent and research needs
+  -> NormalizedIntent and domain AnalysisInputContract declarations
+  -> verified XLSX tables and source-row provenance
+  -> domain analysis and independent validation
   -> controller policy and complete ExecutionRecipe
   -> derived ApprovalPackage and durable ApprovalRecord
   -> shared execution gate
@@ -36,6 +39,15 @@ capability constraints are retained only when explicitly supplied; research
 needs remain the preferred input for later controller capability resolution.
 Legacy pattern overrides are translated at load time and are not re-emitted.
 
+`WorkBrief.analysis_inputs` is the single persisted declaration of domain input
+scope. `normalize_work_brief()` derives one ephemeral `NormalizedIntent` per
+execution, including deterministic contract fingerprints; it is not a second
+registry or analytical state store. The five production XLSX analyzers consume
+their selected periods, entities, scenarios, units, mappings, and conversions
+from these contracts while retaining domain-specific calculations and review
+state. `AnalysisStore` remains the owner of accepted evidence, calculations,
+findings, invalidation, and provenance.
+
 Strategic Wayfinding is a host-facing procedure under
 `.agents/skills/foresight-wayfinding/`. Packaged runtime analytical skills stay
 under `src/foresight_os/skills/` and are selected by the controller; the host
@@ -53,6 +65,11 @@ Accepted presentation delivery is a separate host-facing procedure under
 current presentation-spec hash, invokes one requested adapter, and persists a
 matching receipt through `AnalysisStore`. Provider success without local proof
 remains failed or blocked.
+
+Source-grounded validation is a separate host-facing procedure under
+`.agents/skills/foresight-validation/`. It reuses the selected deterministic
+checks, review records, dependency invalidation, and human acceptance owners;
+it does not add a second validator or durable status hierarchy.
 
 ### 2. Controller and recipe
 
@@ -134,7 +151,10 @@ approved committer.
 mutations are kept separately until accepted. A continuation can invalidate
 dependent findings, create a new revision, and preserve the reason for the
 change. Finding views only mark a record accepted when its current review is
-valid and no unresolved objection or missing input remains.
+valid and no unresolved objection or missing input remains. They also provide a
+compact derived summary (`supported`, `uncertain`, `correction-needed`, or
+`human-review-pending`) while retaining source, validation, and execution detail
+for progressive disclosure.
 
 ## Artifact flow
 

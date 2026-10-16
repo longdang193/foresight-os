@@ -4,12 +4,13 @@ import ast
 import csv
 import hashlib
 import io
+from itertools import zip_longest
 import operator
 import posixpath
 import re
 import zipfile
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from datetime import date, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -17,7 +18,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import openpyxl
 
-from foresight_os.domain.models import CalculationRecord, CalculationVerificationStatus, Evidence, MeasurementKey, SourceLocator
+from foresight_os.domain.models import CalculationRecord, CalculationVerificationStatus, Evidence, EvidenceCandidate, MeasurementKey, SourceLocator
 from foresight_os.domain.validation import validate_analysis, validate_evidence_candidate
 
 
@@ -116,6 +117,9 @@ class WorkbookReadCache:
         self._analysis_entries: dict[tuple[Any, ...], tuple[AnalysisResult, int]] = {}
         self._bytes = 0
 
+    def source_hash(self, source: Path) -> str:
+        return _sha256_file(source)
+
     def key(
         self,
         source: Path,
@@ -123,11 +127,12 @@ class WorkbookReadCache:
         limits: ToolbeltLimits,
         *,
         snapshot: SourceSnapshot | None = None,
+        source_hash: str | None = None,
     ) -> tuple[Any, ...]:
         canonical = str(source.resolve())
         selection_key = repr(selection)
         limit_key = repr(limits)
-        digest = snapshot.sha256 if snapshot is not None else _sha256_file(source)
+        digest = snapshot.sha256 if snapshot is not None else source_hash or self.source_hash(source)
         return canonical, digest, selection_key, limit_key
 
     def get(self, key: tuple[Any, ...]) -> WorkbookReadResult | None:
@@ -135,17 +140,7 @@ class WorkbookReadCache:
         return entry[0] if entry is not None else None
 
     def put(self, key: tuple[Any, ...], result: WorkbookReadResult) -> None:
-        estimated = max(1, len(repr(result)))
-        if estimated > self.max_bytes:
-            return
-        previous = self._entries.pop(key, None)
-        if previous is not None:
-            self._bytes -= previous[1]
-        while self._entries and (len(self._entries) >= self.max_entries or self._bytes + estimated > self.max_bytes):
-            _, size = self._entries.pop(next(iter(self._entries)))
-            self._bytes -= size
-        self._entries[key] = (result, estimated)
-        self._bytes += estimated
+        self._put(self._entries, key, result)
 
     def analysis_key(self, table: TypedTable, operation: AnalysisOperation, limits: ToolbeltLimits) -> tuple[Any, ...]:
         return ("analysis", table.id, repr(operation), repr(limits))
@@ -155,16 +150,20 @@ class WorkbookReadCache:
         return entry[0] if entry is not None else None
 
     def put_analysis(self, key: tuple[Any, ...], result: AnalysisResult) -> None:
+        self._put(self._analysis_entries, key, result)
+
+    def _put(self, entries: dict[tuple[Any, ...], tuple[Any, int]], key: tuple[Any, ...], result: Any) -> None:
         estimated = max(1, len(repr(result)))
         if estimated > self.max_bytes:
             return
-        previous = self._analysis_entries.pop(key, None)
+        previous = entries.pop(key, None)
         if previous is not None:
             self._bytes -= previous[1]
-        while self._analysis_entries and (len(self._analysis_entries) >= self.max_entries or self._bytes + estimated > self.max_bytes):
-            _, size = self._analysis_entries.pop(next(iter(self._analysis_entries)))
+        while self._entry_count >= self.max_entries or self._bytes + estimated > self.max_bytes:
+            oldest = self._entries if self._entries else self._analysis_entries
+            _, size = oldest.pop(next(iter(oldest)))
             self._bytes -= size
-        self._analysis_entries[key] = (result, estimated)
+        entries[key] = (result, estimated)
         self._bytes += estimated
 
     def clear(self) -> None:
@@ -174,6 +173,14 @@ class WorkbookReadCache:
 
     @property
     def size(self) -> int:
+        return self._entry_count
+
+    @property
+    def bytes_used(self) -> int:
+        return self._bytes
+
+    @property
+    def _entry_count(self) -> int:
         return len(self._entries) + len(self._analysis_entries)
 
     @property
@@ -267,8 +274,10 @@ def _coerce_sheet_selection(value: SheetSelection | Mapping[str, Any] | None) ->
         entries = value.get(name, ()) or ()
         if not entries and value.get(singular_name) is not None:
             entries = (value[singular_name],)
+        if isinstance(entries, (str, bytes)) or not isinstance(entries, Sequence):
+            raise ToolbeltError(f"spreadsheet selection {name} must be a list of pairs")
         for item in entries:
-            if not isinstance(item, Sequence) or len(item) != 2:
+            if isinstance(item, (str, bytes)) or not isinstance(item, Sequence) or len(item) != 2:
                 raise ToolbeltError(f"spreadsheet selection {name} entries must contain two values")
             result.append((str(item[0]), str(item[1])))
         return tuple(result)
@@ -276,6 +285,10 @@ def _coerce_sheet_selection(value: SheetSelection | Mapping[str, Any] | None) ->
     sheet_names = value.get("sheet_names", ()) or ()
     if not sheet_names and value.get("sheet") is not None:
         sheet_names = (value["sheet"],)
+    if isinstance(sheet_names, str):
+        sheet_names = (sheet_names,)
+    elif isinstance(sheet_names, (bytes, bool)) or not isinstance(sheet_names, Sequence):
+        raise ToolbeltError("spreadsheet selection sheet_names must be a list of sheet names")
     return SheetSelection(
         sheet_names=tuple(str(item) for item in sheet_names),
         ranges=pairs("ranges", "range"),
@@ -647,7 +660,12 @@ def _formula_references(formula: str | None) -> tuple[tuple[str, str], ...]:
 
 
 def _in_selection(sheet: str, selection: SheetSelection | None) -> bool:
-    return selection is None or not selection.sheet_names or sheet in selection.sheet_names
+    if selection is None:
+        return True
+    if selection.sheet_names:
+        return sheet in selection.sheet_names
+    selected_sheets = {selected_sheet for selected_sheet, _ in (*selection.ranges, *selection.tables)}
+    return not selected_sheets or sheet in selected_sheets
 
 
 def _implicit_xlsx_bounds(ws) -> tuple[int, int, int, int] | None:
@@ -684,9 +702,21 @@ def _delimited_value(value: str) -> Any:
             return value
 
 
-def _read_delimited(snapshot: SourceSnapshot, selection: SheetSelection | None, limits: ToolbeltLimits, cancel_check: Callable[[], bool] | None) -> WorkbookReadResult:
-    source = Path(snapshot.source)
-    digest = snapshot.sha256
+def _read_delimited(
+    snapshot_or_source: SourceSnapshot | Path,
+    selection: SheetSelection | None,
+    limits: ToolbeltLimits,
+    cancel_check: Callable[[], bool] | None,
+    digest: str | None = None,
+) -> WorkbookReadResult:
+    if isinstance(snapshot_or_source, SourceSnapshot):
+        source = Path(snapshot_or_source.source)
+        digest = snapshot_or_source.sha256
+        content = snapshot_or_source.content
+    else:
+        source = Path(snapshot_or_source)
+        digest = digest or _sha256_file(source)
+        content = source.read_bytes()
     sheet = source.stem
     if selection and selection.sheet_names and sheet not in selection.sheet_names:
         return WorkbookReadResult(str(source), digest, (), (), ())
@@ -698,7 +728,7 @@ def _read_delimited(snapshot: SourceSnapshot, selection: SheetSelection | None, 
     raw_rows: list[tuple[Any, ...]] = []
     cell_count = 0
     selected_row_count = 0
-    with io.StringIO(snapshot.content.decode("utf-8-sig"), newline="") as handle:
+    with io.StringIO(content.decode("utf-8-sig"), newline="") as handle:
         for row_number, row in enumerate(csv.reader(handle, delimiter=delimiter), 1):
             _check_cancel(cancel_check)
             if range_bounds and row_number > range_bounds[3]:
@@ -843,6 +873,7 @@ def spreadsheet_read(
         raise ToolbeltError("source snapshot does not match requested source")
     _check_cancel(cancel_check)
     cache_key = None
+    digest = None
     if _cache is not None:
         cache_key = _cache.key(source, selection, limits, snapshot=snapshot)
         cached_result = _cache.get(cache_key)
@@ -857,6 +888,8 @@ def spreadsheet_read(
     if source.suffix.lower() in {".csv", ".tsv"}:
         result = _read_delimited(snapshot, selection, limits, cancel_check)
         _remember_authoritative_measurements(result.measurements, _authority_index)
+        if _cache is not None and cache_key is not None:
+            _cache.put(cache_key, result)
         return result
     if source.suffix.lower() not in {".xlsx", ".xlsm", ".xltx", ".xltm"}:
         raise ToolbeltError("unsupported spreadsheet format")
@@ -913,18 +946,20 @@ def spreadsheet_read(
                 row_measurements: list[tuple[TypedMeasurement, ...]] = []
                 source_rows = ws.iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col)
                 cached_rows = cached[ws.title].iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col)
-                for source_row, cached_row in zip(source_rows, cached_rows, strict=True):
+                for source_row, cached_row in zip_longest(source_rows, cached_rows, fillvalue=()):
                     _check_cancel(cancel_check)
+                    if not source_row:
+                        raise ToolbeltError("cached workbook contains rows without source values")
                     row = source_row[0].row
                     if row in hidden_rows and not (selection and selection.include_hidden_rows):
                         continue
                     values: list[Any] = []
                     provenance: list[CellProvenance] = []
                     row_cells: list[TypedMeasurement] = []
-                    for cell, cached_cell in zip(source_row, cached_row, strict=True):
+                    for cell, cached_cell in zip_longest(source_row, cached_row, fillvalue=None):
                         _check_cancel(cancel_check)
                         formula = cell.value if isinstance(cell.value, str) and cell.value.startswith("=") else None
-                        cached_value = _coerce(cached_cell.value) if formula else None
+                        cached_value = _coerce(cached_cell.value) if formula and cached_cell is not None else None
                         raw_value = cached_value if formula and cached_value is not None else cell.value
                         value = _coerce(raw_value)
                         if formula:
@@ -1388,10 +1423,22 @@ def graph_context(graph: Any, record_id: str, limit: int = 50) -> dict[str, Any]
 def domain_validation(value: Any) -> dict[str, Any]:
     if isinstance(value, Evidence):
         return {"valid": bool(value.id and value.excerpt and value.source_locator.file_version), "kind": "evidence"}
+    if isinstance(value, Mapping) and "stage_id" in value:
+        raise ToolbeltError("stage result payloads are not valid domain_validation inputs")
     if isinstance(value, dict) and {"evidence", "claims"}.issubset(value):
         validate_analysis(value)
         return {"valid": True, "kind": "analysis"}
-    candidate = validate_evidence_candidate(value)
+    if isinstance(value, Mapping):
+        allowed_fields = {item.name for item in fields(EvidenceCandidate)}
+        unsupported_fields = sorted(set(value) - allowed_fields)
+        if unsupported_fields:
+            raise ToolbeltError(
+                "unsupported evidence candidate fields: " + ", ".join(unsupported_fields)
+            )
+    try:
+        candidate = validate_evidence_candidate(value)
+    except TypeError as error:
+        raise ToolbeltError(f"invalid evidence candidate: {error}") from error
     return {"valid": True, "kind": "candidate", "candidate_id": candidate.candidate_id}
 
 

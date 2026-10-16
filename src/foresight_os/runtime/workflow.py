@@ -23,6 +23,7 @@ from foresight_os.controller.budgets import BudgetState
 from foresight_os.domain.validation import ValidationError
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import RevisionStatus
+from foresight_os.domain.relationships import RecordKind
 from foresight_os.runtime.metrics import (
     BudgetExceededError,
     CleanupError,
@@ -96,6 +97,46 @@ async def _close_agents(agents: list[object]) -> list[BaseException]:
 
 def _workflow_output_value(output: object) -> object:
     return decode_stage_output(output)
+
+
+def _expand_dependency_records(
+    dependency_records: Mapping[str, object],
+    canonical_records: Mapping[str, object],
+) -> dict[str, object]:
+    expanded = dict(dependency_records)
+    pending = list(expanded.values())
+    while pending:
+        record = pending.pop()
+        references: list[str] = []
+        for field_name in ("evidence_ids", "relationship_ids", "input_ids", "from_id", "to_id"):
+            value = record.get(field_name) if isinstance(record, Mapping) else getattr(record, field_name, None)
+            if isinstance(value, str):
+                references.append(value)
+            elif isinstance(value, (list, tuple)):
+                references.extend(item for item in value if isinstance(item, str))
+        for reference in references:
+            if reference in expanded or reference not in canonical_records:
+                continue
+            referenced_record = canonical_records[reference]
+            expanded[reference] = referenced_record
+            pending.append(referenced_record)
+    return expanded
+
+
+def _dependency_stage_ids(stage: Any, stages_by_id: Mapping[str, Any]) -> tuple[str, ...]:
+    ordered: list[str] = []
+    pending = list(getattr(stage, "dependencies", ()) or ())
+    seen: set[str] = set()
+    while pending:
+        stage_id = str(pending.pop(0))
+        if stage_id in seen:
+            continue
+        seen.add(stage_id)
+        ordered.append(stage_id)
+        ancestor = stages_by_id.get(stage_id)
+        if ancestor is not None:
+            pending.extend(str(item) for item in getattr(ancestor, "dependencies", ()) or ())
+    return tuple(ordered)
 
 
 async def _run_native_stage(
@@ -219,7 +260,11 @@ async def _run_native_stage(
                     on_call=on_call,
                 )
                 results.append(result)
-                current_prompt = f"Challenge this proposal and return the required structured result:\n{result}"
+                current_prompt = (
+                    f"Retain the original stage input and source context:\n{prompt}\n\n"
+                    "Challenge this proposal and return the required structured result:\n"
+                    f"{result}"
+                )
                 if metrics is not None:
                     metrics.chat_rounds += 1
             return results
@@ -235,7 +280,11 @@ async def _run_native_stage(
             )
             results.append(result)
             if index + 1 < len(agents):
-                current_prompt = f"Review this proposal and return the required structured result:\n{result}"
+                current_prompt = (
+                    f"Retain the original stage input and source context:\n{prompt}\n\n"
+                    "Review this proposal and return the required structured result:\n"
+                    f"{result}"
+                )
         return results
     if tools_enabled:
         result = await workflow.run(prompt)
@@ -318,6 +367,8 @@ def _synthesize_stage_outputs(
     *,
     allow_legacy_fallback: bool = False,
     existing_records: Mapping[str, object] | None = None,
+    tolerate_invalid_relationships: bool = False,
+    tolerate_conflicting_records: bool = False,
 ) -> object:
     if len(outputs) == 1 and not failures:
         return outputs[0]
@@ -330,29 +381,130 @@ def _synthesize_stage_outputs(
         if allow_legacy_fallback:
             return outputs[-1] if outputs else None
         raise _synthesis_error("MALFORMED_OUTPUT", "typed stage synthesis requires mapping outputs")
+    typed_outputs = all("contract" in output and "stage_id" in output for output in outputs)
     limits = dict(getattr(stage, "limits", {}) or {})
     max_records = _positive_limit(limits.get("max_synthesis_records"), default=10_000, label="max_synthesis_records")
     max_relationships = _positive_limit(limits.get("max_synthesis_relationships"), default=10_000, label="max_synthesis_relationships")
     normalized_outputs: list[Mapping[str, Any]] = []
-    for output in outputs:
-        if "contract" in output and "stage_id" in output:
-            try:
-                normalized_outputs.append(
-                    normalize_stage_result(
-                        output,
-                        expected_stage_id=str(getattr(stage, "stage_id", "stage")),
-                        existing_records=existing_records,
-                    ).to_contract_payload()
+    alias_records: dict[str, object] = {}
+    alias_kinds: dict[str, RecordKind] = {}
+    collections = ("evidence", "calculations", "claims", "implications", "recommendations", "artifacts", "relationships")
+    collection_kinds = {
+        "evidence": RecordKind.EVIDENCE,
+        "claims": RecordKind.CLAIM,
+        "implications": RecordKind.IMPLICATION,
+        "recommendations": RecordKind.RECOMMENDATION,
+        "artifacts": RecordKind.ARTIFACT,
+    }
+
+    if typed_outputs:
+        seed_outputs: list[Mapping[str, Any]] = list(outputs)
+        total_entries = sum(len(output.get(key, [])) for output in seed_outputs for key in collections)
+        for _ in range(max(3, total_entries + 2)):
+            peer_candidates: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
+            for output in seed_outputs:
+                for key in collections:
+                    for entry in output.get(key, []):
+                        if isinstance(entry, Mapping) and entry.get("id"):
+                            peer_candidates.setdefault((key, str(entry["id"])), []).append(entry)
+
+            def peer_records_for(index: int) -> dict[str, object]:
+                records: dict[str, object] = {}
+                for peer_index, output in enumerate(seed_outputs):
+                    if peer_index == index:
+                        continue
+                    for key in collections:
+                        for entry in output.get(key, []):
+                            if not isinstance(entry, Mapping) or not entry.get("id"):
+                                continue
+                            record_id = str(entry["id"])
+                            candidates = peer_candidates.get((key, record_id), [])
+                            if candidates and all(_canonical_result_hash(candidate) == _canonical_result_hash(candidates[0]) for candidate in candidates):
+                                records.setdefault(record_id, entry)
+                return records
+
+            def peer_record_kinds_for(index: int) -> dict[str, RecordKind]:
+                kinds: dict[str, RecordKind] = {}
+                for peer_index, output in enumerate(seed_outputs):
+                    if peer_index == index:
+                        continue
+                    for key, kind in collection_kinds.items():
+                        for entry in output.get(key, []):
+                            if not isinstance(entry, Mapping) or not entry.get("id"):
+                                continue
+                            record_id = str(entry["id"])
+                            candidates = peer_candidates.get((key, record_id), [])
+                            if not candidates or not all(_canonical_result_hash(candidate) == _canonical_result_hash(candidates[0]) for candidate in candidates):
+                                continue
+                            previous = kinds.get(record_id)
+                            if previous is None or previous == kind:
+                                kinds[record_id] = kind
+                            else:
+                                kinds.pop(record_id, None)
+                return kinds
+
+            next_outputs: list[Mapping[str, Any]] = []
+            next_alias_targets: dict[str, set[str]] = {}
+            next_alias_records: dict[str, object] = {}
+            next_alias_kinds: dict[str, set[RecordKind]] = {}
+            for index, output in enumerate(seed_outputs):
+                dependency_records = dict(alias_records)
+                for record_id, record in (existing_records or {}).items():
+                    dependency_records.setdefault(record_id, record)
+                for record_id, record in peer_records_for(index).items():
+                    dependency_records.setdefault(record_id, record)
+                dependency_record_kinds = dict(alias_kinds)
+                dependency_record_kinds.update(peer_record_kinds_for(index))
+                normalized, output_aliases, output_kinds = normalize_stage_result(
+                    output,
+                    expected_stage_id=str(getattr(stage, "stage_id", "stage")),
+                    existing_records=dependency_records,
+                    existing_record_kinds=dependency_record_kinds,
+                    tolerate_invalid_relationships=tolerate_invalid_relationships,
+                    prefer_current_aliases=True,
+                    trusted_existing_records=existing_records or {},
+                    return_aliases=True,
                 )
-            except ValidationError as error:
-                if getattr(error, "code", None) is not None:
-                    raise
-                raise _synthesis_error("MALFORMED_OUTPUT", str(error)) from error
-        else:
-            normalized_outputs.append(output)
+                next_outputs.append(normalized.to_contract_payload())
+                canonical_records = normalized.canonical_records()
+                for alias, canonical_id in output_aliases.items():
+                    record = canonical_records.get(canonical_id)
+                    if record is None:
+                        continue
+                    next_alias_targets.setdefault(alias, set()).add(canonical_id)
+                    next_alias_records.setdefault(alias, record)
+                    kind = output_kinds.get(alias) or output_kinds.get(canonical_id)
+                    if kind is not None:
+                        next_alias_kinds.setdefault(alias, set()).add(kind)
+                        next_alias_kinds.setdefault(canonical_id, set()).add(kind)
+
+            filtered_alias_records: dict[str, object] = {}
+            filtered_alias_kinds: dict[str, RecordKind] = {}
+            for alias, record in next_alias_records.items():
+                if len(next_alias_targets.get(alias, ())) == 1:
+                    filtered_alias_records[alias] = record
+                kinds = next_alias_kinds.get(alias, set())
+                if len(kinds) == 1:
+                    filtered_alias_kinds[alias] = next(iter(kinds))
+
+            if next_outputs == seed_outputs:
+                alias_records = filtered_alias_records
+                alias_kinds = filtered_alias_kinds
+                seed_outputs = next_outputs
+                break
+            seed_outputs = next_outputs
+            alias_records = filtered_alias_records
+            alias_kinds = filtered_alias_kinds
+        normalized_outputs = seed_outputs
+    else:
+        normalized_outputs = list(outputs)
+
+    merge_alias_records = dict(existing_records or {})
+    for alias, record in alias_records.items():
+        merge_alias_records.setdefault(alias, record)
+    merge_alias_kinds = dict(alias_kinds)
     outputs = normalized_outputs
     first = dict(outputs[0])
-    collections = ("evidence", "calculations", "claims", "implications", "recommendations", "artifacts", "relationships")
 
     def merge_records(key: str) -> list[object]:
         merged: list[object] = []
@@ -376,6 +528,8 @@ def _synthesize_stage_outputs(
                     merged.append(entry)
                     continue
                 if _canonical_result_hash(existing) != _canonical_result_hash(entry):
+                    if tolerate_conflicting_records:
+                        continue
                     raise _synthesis_error("MATERIAL_CONFLICT", f"conflicting canonical record for {key}:{record_id}")
         return merged
 
@@ -388,6 +542,16 @@ def _synthesize_stage_outputs(
     first["monitoring_indicators"] = [entry for output in outputs for entry in list(output.get("monitoring_indicators", []))]
     if failures:
         first["uncertainty"].extend(f"participant failure: {type(error).__name__}" for error in failures)
+    if typed_outputs:
+        return normalize_stage_result(
+            first,
+            expected_stage_id=str(getattr(stage, "stage_id", "stage")),
+            existing_records=merge_alias_records,
+            existing_record_kinds=merge_alias_kinds,
+            tolerate_invalid_relationships=tolerate_invalid_relationships,
+            prefer_current_aliases=True,
+            trusted_existing_records=existing_records or {},
+        ).to_contract_payload()
     return first
 
 
@@ -462,6 +626,7 @@ def _stage_fingerprints(
         "decision_question": input_payload.get("decision_question", ""),
         "horizon": input_payload.get("horizon", ""),
         "relevant_constraints": input_payload.get("relevant_constraints", ()),
+        "analysis_contract_fingerprints": input_payload.get("analysis_contract_fingerprints", {}),
         "dependency_result_hashes": {
             stage_id: _canonical_result_hash(output)
             for stage_id, output in dict(dependency_outputs).items()
@@ -662,6 +827,10 @@ async def run_recipe_async(
             required_capabilities.update(ParticipantConfig.from_mapping(participant).capability_ids)
     context["selected_skills_by_stage"] = selected_skills_by_stage
     context = prepare_capability_context(tuple(sorted(required_capabilities)), context, scope=scope)
+    stages_by_id = {
+        str(getattr(stage, "stage_id", "")): stage
+        for stage in recipe.stages or ()
+    }
 
     def classify(error: BaseException) -> FailureClass:
         if isinstance(error, BudgetExceededError):
@@ -705,23 +874,42 @@ async def run_recipe_async(
             for skill in selected_skills_by_participant.get(participant.id, ())
         )
         stage_skill_hashes = tuple(skill.content_sha256 for skill in selected_skills)
+        limits = dict(getattr(stage, "limits", {}) or {})
+        stage_call_limit = limits.get("max_total_agent_calls")
+        if stage_call_limit is not None:
+            stage_call_limit = _positive_limit(stage_call_limit, label="stage max_total_agent_calls")
+        stage_calls = 0
+
+        def reserve_stage_call() -> bool:
+            nonlocal stage_calls
+            if stage_call_limit is not None and stage_calls >= stage_call_limit:
+                return False
+            if not budget.call():
+                return False
+            stage_calls += 1
+            return True
+
         context.setdefault("skill_hashes_by_stage", {})[getattr(stage, "stage_id", "")] = stage_skill_hashes
         stage_context = dict(context)
         stage_context["stage_id"] = str(getattr(stage, "stage_id", "stage"))
         stage_context["selected_skills"] = selected_skills
         stage_context["selected_skills_by_participant"] = selected_skills_by_participant
-        stage_context["reserve_agent_call"] = lambda: budget.call()
+        stage_context["reserve_agent_call"] = reserve_stage_call
         stage_context["record_agent_call"] = lambda: setattr(metrics, "model_calls", metrics.model_calls + 1)
         stage_context["provider_call_middleware"] = _ReservedProviderCallMiddleware(
             stage_context["reserve_agent_call"], stage_context["record_agent_call"]
         )
         dependency_records: dict[str, object] = {}
-        for dependency in tuple(getattr(stage, "dependencies", ())):
+        for dependency in _dependency_stage_ids(stage, stages_by_id):
             dependency_receipt = context.get("stage_receipts", {}).get(str(dependency))
             for reference in tuple(getattr(dependency_receipt, "result_references", ())):
                 if reference in context.get("canonical_records", {}):
                     dependency_records[reference] = context["canonical_records"][reference]
-        stage_context["dependency_records"] = dependency_records
+        stage_context["dependency_records"] = _expand_dependency_records(
+            dependency_records,
+            context.get("canonical_records", {}),
+        )
+        cache_key = _stage_cache_key(stage, stage_input, stage_skill_ids, selected_skills_by_participant)
         semantic_fingerprint, execution_policy_fingerprint = _stage_fingerprints(
             stage,
             stage_input,
@@ -774,9 +962,8 @@ async def run_recipe_async(
                 metrics.reused_stages += 1
                 return [cached_output], cached_output
         metrics.reassessed_stages += 1
-        limits = dict(getattr(stage, "limits", {}) or {})
         max_timeout = limits.get("max_timeout_seconds", limits.get("timeout_seconds"))
-        for field_name in ("max_agent_steps", "max_total_agent_calls", "max_branches", "max_handoffs", "max_tool_calls"):
+        for field_name in ("max_agent_steps", "max_branches", "max_handoffs", "max_tool_calls"):
             value = limits.get(field_name)
             if value is not None:
                 existing_budget = getattr(budget, field_name)
@@ -792,6 +979,8 @@ async def run_recipe_async(
                 if budget.max_total_agent_calls is None
                 else budget.max_total_agent_calls - budget.total_agent_calls
             )
+            if stage_call_limit is not None:
+                remaining_calls = stage_call_limit if remaining_calls is None else min(remaining_calls, stage_call_limit)
             if remaining_calls is not None:
                 if remaining_calls < 1:
                     raise BudgetExceededError("maximum agent calls exceeded before group chat dispatch")
@@ -820,6 +1009,8 @@ async def run_recipe_async(
                     native_outputs,
                     allow_legacy_fallback=context.get("analysis_store") is None,
                     existing_records=context.get("canonical_records"),
+                    tolerate_invalid_relationships=bool(stage_context.get("tolerate_invalid_relationships")),
+                    tolerate_conflicting_records=bool(stage_context.get("tolerate_conflicting_records")),
                 )
             if pattern == ExecutionPattern.DIRECT:
                 stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(prompt_value)]
@@ -839,6 +1030,8 @@ async def run_recipe_async(
                     failures,
                     allow_legacy_fallback=context.get("analysis_store") is None,
                     existing_records=context.get("canonical_records"),
+                    tolerate_invalid_relationships=bool(stage_context.get("tolerate_invalid_relationships")),
+                    tolerate_conflicting_records=bool(stage_context.get("tolerate_conflicting_records")),
                 )
             elif pattern == ExecutionPattern.GROUP_CHAT:
                 stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(prompt_value)]
@@ -862,6 +1055,8 @@ async def run_recipe_async(
                 stage_outputs,
                 allow_legacy_fallback=context.get("analysis_store") is None,
                 existing_records=context.get("canonical_records"),
+                tolerate_invalid_relationships=bool(stage_context.get("tolerate_invalid_relationships")),
+                tolerate_conflicting_records=bool(stage_context.get("tolerate_conflicting_records")),
             )
         committer = context.get("canonical_result_committer")
         correction_prompt: str | None = None
@@ -888,10 +1083,40 @@ async def run_recipe_async(
                 if recovery_code in _NON_RETRYABLE_VALIDATION_CODES or not budget.correct():
                     raise
                 metrics.correction_rounds += 1
+                if (
+                    "invalid endpoints for relationship" in str(error)
+                    or "relationship endpoints must have known record kinds" in str(error)
+                    or "unknown reference: relationships[" in str(error)
+                    or ("unknown reference:" in str(error) and ".relationship_ids" in str(error))
+                ):
+                    stage_context["tolerate_invalid_relationships"] = True
+                if "conflicting canonical record" in str(error):
+                    stage_context["tolerate_conflicting_records"] = True
                 correction_prompt = (
-                    f"{stage_input}\n\n"
+                    f"{json.dumps(_stage_input_payload(stage_input), default=str, ensure_ascii=False, sort_keys=True)}\n\n"
                     "The previous structured result was rejected by canonical validation. "
-                    f"Correct only the validation issue and return the complete result again: {error}"
+                    "Correct only the validation issue and return the complete result again. "
+                     "For relationships, every from_id and to_id must refer to a record declared "
+                     "in this current result or copied exactly from dependency_outputs. If either "
+                     "endpoint is missing, undeclared, or has an invalid kind, remove the invalid "
+                     "relationship and its ID from every relationship_ids list; do not replace it "
+                     "with a guessed or dangling edge. "
+                     "Before returning, audit every evidence_ids, relationship_ids, input_ids, "
+                     "from_id, and to_id value against an ID declared in this payload; remove any "
+                     "reference without a matching local record, and do not reuse IDs from another "
+                     "stage or prior run. "
+                     "For unknown references to dependency outputs, copy the exact referenced "
+                     "evidence, calculation, claim, implication, recommendation, artifact, or "
+                     "relationship record into the matching current collection before using its "
+                     "ID; preserve the record ID and fields verbatim and never reference a record "
+                     "that exists only under dependency_outputs. "
+                    "For same-ID/different-content conflicts, preserve the exact canonical record "
+                    "content and do not rewrite an existing record under the same ID; when two "
+                    "participants conflict, preserve the first participant's record verbatim. "
+                     "Every text-list item such as limitations, assumptions, uncertainty, "
+                     "disconfirmation_conditions, and monitoring_indicators must be non-empty; "
+                     "omit empty strings instead of returning them. "
+                    f"Validation issue: {error}"
                 )
         if committer is None:
             return stage_outputs, current
@@ -996,6 +1221,9 @@ async def run_recipe_async(
                 ),
                 dependency_outputs=tuple((dependency, outputs_by_stage[dependency]) for dependency in dependencies),
                 research_needs=tuple(getattr(stage, "research_needs", ()) or ()),
+                analysis_contract_fingerprints=tuple(
+                    sorted((str(domain), str(fingerprint)) for domain, fingerprint in dict(context.get("analysis_contract_fingerprints", {})).items())
+                ),
             )
             stage_outputs, current = await dispatch_stage(stage, stage_input)
             outputs_by_stage[getattr(stage, "stage_id", f"stage-{len(outputs_by_stage) + 1}")] = current

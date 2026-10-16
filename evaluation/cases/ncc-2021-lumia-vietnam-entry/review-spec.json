@@ -1,0 +1,84 @@
+{
+  "case_id": "ncc-2021-lumia-vietnam-entry",
+  "policy_id": "independent-validation/v1",
+  "review_checks": [
+    {
+      "check_id": "source_fidelity",
+      "method": "bounded-workbook-read",
+      "capabilities": ["spreadsheet_read"]
+    },
+    {
+      "check_id": "scope_reconciliation",
+      "method": "workbook-scope-and-period-reconciliation",
+      "capabilities": ["spreadsheet_read"]
+    },
+    {
+      "check_id": "calculation_reconciliation",
+      "method": "independent-raw-cell-arithmetic",
+      "capabilities": ["spreadsheet_read", "calculation"]
+    },
+    {
+      "check_id": "decision_challenge",
+      "method": "authorized-reviewer-red-team-challenge",
+      "capabilities": ["decision_challenge"],
+      "status_when_not_authorized": "NOT_RUN"
+    }
+  ],
+  "source": {
+    "sheets": [
+      "Channel Dynamic",
+      "Retailer Dynamic",
+      "Ecommerce",
+      "Shopper Profile",
+      "FMCG Performance"
+    ],
+    "ranges": [
+      ["Channel Dynamic", "A1:AL36"],
+      ["Retailer Dynamic", "A1:Y69"],
+      ["Ecommerce", "A1:X75"],
+      ["Shopper Profile", "A1:AF133"],
+      ["FMCG Performance", "A1:X67"]
+    ],
+    "periods": {
+      "baseline": "2019-09-01T00:00:00",
+      "current": "2021-09-01T00:00:00"
+    },
+    "allowed_categories": ["Vietnam nationwide"]
+  },
+  "calculations": [
+    {"calculation_id":"calculation-75bd5a7e4f6b7c54","operation":"relative_change","scale":100,"source_cells":["Channel Dynamic!B4","Channel Dynamic!D4"],"tolerance":0.05},
+    {"calculation_id":"calculation-3e566622003899ae","operation":"relative_change","scale":100,"source_cells":["Channel Dynamic!B5","Channel Dynamic!D5"],"tolerance":0.05},
+    {"calculation_id":"calculation-5147d5024a0c8465","operation":"relative_change","scale":100,"source_cells":["Channel Dynamic!B6","Channel Dynamic!D6"],"tolerance":0.05},
+    {"calculation_id":"calculation-2798616dbd32bcf5","operation":"relative_change","scale":100,"source_cells":["Channel Dynamic!B7","Channel Dynamic!D7"],"tolerance":0.05},
+    {"calculation_id":"calculation-d45b6592d7ea5ec6","operation":"relative_change","scale":100,"source_cells":["Channel Dynamic!B8","Channel Dynamic!D8"],"tolerance":0.05},
+    {"calculation_id":"calculation-506b18b6a479aae3","operation":"difference","source_cells":["Channel Dynamic!B4","Channel Dynamic!D4"],"tolerance":0.1},
+    {"calculation_id":"calculation-051a1f4e4a3f797e","operation":"difference","source_cells":["Channel Dynamic!B5","Channel Dynamic!D5"],"tolerance":0.1},
+    {"calculation_id":"calculation-404b0c26c75ce3dc","operation":"difference","source_cells":["Channel Dynamic!B6","Channel Dynamic!D6"],"tolerance":0.1},
+    {"calculation_id":"calculation-d13b94e89650266f","operation":"difference","source_cells":["Channel Dynamic!B7","Channel Dynamic!D7"],"tolerance":0.1},
+    {"calculation_id":"calculation-08c0a525c016b3c7","operation":"relative_change","scale":100,"source_cells":["Channel Dynamic!B4","Channel Dynamic!D4"],"tolerance":0.05},
+    {"calculation_id":"calculation-1a48b651b3c89d6b","operation":"relative_change","scale":100,"source_cells":["Channel Dynamic!B5","Channel Dynamic!D5"],"tolerance":0.05},
+    {"calculation_id":"calculation-de122030998889e6","operation":"relative_change","scale":100,"source_cells":["Channel Dynamic!B6","Channel Dynamic!D6"],"tolerance":0.05},
+    {"calculation_id":"calculation-d441959c224075a8","operation":"relative_change","scale":100,"source_cells":["Channel Dynamic!B7","Channel Dynamic!D7"],"tolerance":0.05},
+    {"calculation_id":"calculation-f05759166f7bb2f8","operation":"relative_change","scale":100,"source_cells":["Channel Dynamic!B4","Channel Dynamic!D4"],"tolerance":0.05},
+    {"calculation_id":"calculation-b73b46431c36a599","operation":"relative_change","scale":100,"source_cells":["Channel Dynamic!B5","Channel Dynamic!D5"],"tolerance":0.05},
+    {"calculation_id":"calculation-8ef566fd666d15d0","operation":"relative_change","scale":100,"source_cells":["Channel Dynamic!B6","Channel Dynamic!D6"],"tolerance":0.05},
+    {"calculation_id":"calculation-7753ddfe2533e3ce","operation":"relative_change","scale":100,"source_cells":["Channel Dynamic!B7","Channel Dynamic!D7"],"tolerance":0.05},
+    {"calculation_id":"calculation-0ab0ab35e2e2adbd","operation":"relative_change","scale":100,"source_cells":["Channel Dynamic!B8","Channel Dynamic!D8"],"tolerance":0.05},
+    {"calculation_id":"calculation-95fe0beed471a960","operation":"relative_change","scale":100,"source_cells":["Channel Dynamic!B4","Channel Dynamic!D4"],"tolerance":0.05},
+    {"calculation_id":"calculation-b852801df05d2185","operation":"relative_change","scale":100,"source_cells":["Channel Dynamic!B5","Channel Dynamic!D5"],"tolerance":0.05},
+    {"calculation_id":"calculation-0d5dedb2a1fb0dbb","operation":"relative_change","scale":100,"source_cells":["Channel Dynamic!B6","Channel Dynamic!D6"],"tolerance":0.05},
+    {"calculation_id":"calculation-b550f485067603b7","operation":"relative_change","scale":100,"source_cells":["Channel Dynamic!B7","Channel Dynamic!D7"],"tolerance":0.05},
+    {"calculation_id":"calculation-c56f9a89c406f8ce","operation":"sum_relative_change","scale":100,"split_at":3,"source_cells":["Channel Dynamic!B5","Channel Dynamic!B6","Channel Dynamic!B7","Channel Dynamic!D5","Channel Dynamic!D6","Channel Dynamic!D7"],"tolerance":0.05},
+    {"calculation_id":"calculation-c18f8bb2084b8005","operation":"proportion_change","source_cells":["Channel Dynamic!B7","Channel Dynamic!D7"],"tolerance":0.0001},
+    {"calculation_id":"calculation-61622db0f1b5eb87","operation":"proportion_change","source_cells":["Channel Dynamic!B6","Channel Dynamic!D6"],"tolerance":0.0001},
+    {"calculation_id":"calculation-dd955e9f91e0fb82","operation":"proportion_change","source_cells":["Channel Dynamic!B5","Channel Dynamic!D5"],"tolerance":0.0001},
+    {"calculation_id":"calculation-c1b68374b3302a8f","operation":"proportion_change","source_cells":["Channel Dynamic!B4","Channel Dynamic!D4"],"tolerance":0.0001}
+  ],
+  "conditional_missing_inputs": [
+    "profitability",
+    "capacity",
+    "ownership",
+    "valuation",
+    "integration"
+  ]
+}

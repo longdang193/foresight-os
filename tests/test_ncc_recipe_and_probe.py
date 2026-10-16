@@ -133,3 +133,71 @@ def test_probe_missing_persisted_analysis_is_blocked_not_passed(tmp_path: Path):
 
     assert receipt["status"] == "BLOCKED_INPUT"
     assert receipt["verification"] == "NOT_VERIFIED"
+
+
+def test_raw_cell_check_supports_explicit_channel_layout_operations():
+    from types import SimpleNamespace
+
+    from evaluation.probes.run_ncc_independent_validation import _raw_cell_check
+
+    result = SimpleNamespace(
+        measurements=tuple(
+            SimpleNamespace(provenance=SimpleNamespace(sheet="Channel Dynamic", coordinate=coordinate), value=value)
+            for coordinate, value in {
+                "B4": 1_523_412,
+                "D4": 1_489_956,
+                "B5": 301,
+                "D5": 334,
+                "B6": 583,
+                "D6": 744,
+                "B7": 1_513,
+                "D7": 2_512,
+            }.items()
+        )
+    )
+
+    values = {(item.provenance.sheet, item.provenance.coordinate): item.value for item in result.measurements}
+    percent_change = _raw_cell_check(
+        result,
+        SimpleNamespace(id="growth", output=-2.2),
+        {
+            "operation": "relative_change",
+            "scale": 100,
+            "source_cells": ["Channel Dynamic!B4", "Channel Dynamic!D4"],
+            "tolerance": 0.05,
+        },
+        values,
+    )
+    store_difference = _raw_cell_check(
+        result,
+        SimpleNamespace(id="difference", output=161),
+        {
+            "operation": "difference",
+            "source_cells": ["Channel Dynamic!B6", "Channel Dynamic!D6"],
+            "tolerance": 0.1,
+        },
+        values,
+    )
+    combined_change = _raw_cell_check(
+        result,
+        SimpleNamespace(id="combined", output=49.8),
+        {
+            "operation": "sum_relative_change",
+            "scale": 100,
+            "split_at": 3,
+            "source_cells": [
+                "Channel Dynamic!B5",
+                "Channel Dynamic!B6",
+                "Channel Dynamic!B7",
+                "Channel Dynamic!D5",
+                "Channel Dynamic!D6",
+                "Channel Dynamic!D7",
+            ],
+            "tolerance": 0.05,
+        },
+        values,
+    )
+
+    assert percent_change.status == "PASS"
+    assert store_difference.status == "PASS"
+    assert combined_change.status == "PASS"

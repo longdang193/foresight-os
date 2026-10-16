@@ -35,6 +35,14 @@ zero score or a successful empty run.
 
 ## Independent validation and acceptance
 
+The host routing procedure for this lifecycle is
+`.agents/skills/foresight-validation/`. It is intentionally thin: the source
+reader, selected check set, review workflow, invalidation rules, and
+`AnalysisStore` remain the canonical owners. A new supported business case
+should first use an existing capability with a fixture or explicit mapping;
+production-code changes require evidence of a new format, capability,
+provider, or runtime defect.
+
 The independent-validation workflow separates five facts that must not be
 collapsed into one green flag:
 
@@ -74,6 +82,16 @@ coordinates and compares them with the persisted calculations. The real NCC
 workbook remains an external local fixture. Receipts may record its hash and
 sanitized source metadata, but workbook bytes and raw provider payloads must
 not enter Git or durable analytical state.
+
+The deterministic probe intentionally stops before the independent
+`decision_challenge` and human acceptance phases. To complete the approved
+validation lifecycle, pass the receipt and an authorized typed
+`ReviewResult(check_id="decision_challenge")` to
+`foresight_os.analysis.ncc_validation.persist_ncc_validation_reviews`. The
+adapter validates the pending revision and target IDs, persists typed
+`ReviewRecord` values for every required check, and leaves human acceptance
+pending unless an explicit acceptance decision is supplied. It rejects stale
+receipts and receipts that omit the required decision challenge.
 
 ## Evaluation levels
 
@@ -123,3 +141,15 @@ fixtures, persistence, invalidation, or boundary handling. It cannot by itself
 prove model reasoning quality, strategic usefulness, factual completeness, or
 human acceptance. Those claims require the reference rubric, source-grounded
 adjudication, and—when applicable—human review.
+
+## Changed-brief portability
+
+`evaluation/probes/run_brief_portability_probe.py` exercises the five
+production XLSX analyzers with deterministic changed-brief contracts. Its
+receipt binds each result to the original and copied fixture hashes, the
+contract fingerprint, selected inputs, and computed outcome summaries. A
+`VERIFIED` receipt proves structural portability only; provider/model quality
+and human acceptance remain `not_measured`, while missing approved external
+inputs are classified as `BLOCKED_EXTERNAL` or `BLOCKED_INPUT` rather than
+silently treated as success. Raw workbook rows, credentials, and provider
+payloads are excluded from the receipt.

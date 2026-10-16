@@ -9,6 +9,8 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
+from foresight_os.analysis.workbook_inputs import apply_column_mappings, require_row_columns, require_table, row_evidence, table_rows
+from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
 from foresight_os.persistence.analysis_store import AnalysisStore
@@ -55,6 +57,7 @@ class TechnologyAnalysis:
     signposts: tuple[dict[str, Any], ...]
     recommendation: str
     state: AnalysisState
+    contract_fingerprint: str = ""
 
 @dataclass(frozen=True)
 class TechnologyWorkflowResult:
@@ -67,23 +70,16 @@ class TechnologyWorkflowResult:
 
 
 def _table(workbook: Any, sheet: str) -> Any:
-    for table in workbook.tables:
-        if table.sheet == sheet:
-            return table
-    raise ToolbeltError(f"technology recipe requires sheet: {sheet}")
+    return require_table(workbook, sheet)
 
 def _rows(table: Any) -> list[dict[str, Any]]:
-    return [dict(zip(table.columns, row, strict=False)) for row in table.rows]
+    return table_rows(table)
 
 def _number(value: Any) -> float | None:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 def _row_evidence(table: Any, index: int, digest: str) -> Evidence:
-    values = dict(zip(table.columns, table.rows[index], strict=False))
-    provenance = table.row_provenance[index]
-    row_range = f"{provenance[0].coordinate}:{provenance[-1].coordinate}"
-    evidence_id = "technology-evidence-" + hashlib.sha256(f"{digest}:{table.sheet}:{row_range}".encode()).hexdigest()[:16]
-    return Evidence(evidence_id, SourceLocator(digest, table.sheet, row_range, "index", "technology_radar_recipe", f"{table.sheet} row"), digest, date.today().isoformat(), json.dumps(values, sort_keys=True, default=str))
+    return row_evidence(table, index, digest, f"{table.sheet} row", units="index", transformation="technology_radar_recipe", evidence_prefix="technology")
 
 def _record(record_id: str, statement: str, evidence_ids: list[str], assumptions: tuple[str, ...], uncertainty: tuple[str, ...], disconfirmation: tuple[str, ...], monitoring: tuple[str, ...]) -> AnalyticalRecord:
     return AnalyticalRecord(record_id, statement, Basis.DERIVED, Assessment.SUPPORTED, evidence_ids=list(dict.fromkeys(evidence_ids)), assumptions=assumptions, uncertainty=uncertainty, confidence_rationale="Derived from source-family adjusted signals and explicit relevance/impact scoring.", disconfirmation_conditions=disconfirmation, monitoring_indicators=monitoring)
@@ -101,12 +97,28 @@ def _action(evidence_strength: float, deployment: int, relevance: float, impact:
         return "Experiment"
     return "Monitor"
 
-def analyze_technology_radar(source: Path) -> TechnologyAnalysis:
+def analyze_technology_radar(source: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None) -> TechnologyAnalysis:
     source = Path(source)
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
     workbook = spreadsheet_read(source, SheetSelection(sheet_names=("Brief", "Signals", "Company_Relevance", "Competitor_Actions", "Scenario_Signposts", "Priority_Scoring"), include_hidden=True, include_hidden_rows=True))
     brief, signal_table, relevance_table, competitor_table, signpost_table, priority_table = [_table(workbook, item) for item in ("Brief", "Signals", "Company_Relevance", "Competitor_Actions", "Scenario_Signposts", "Priority_Scoring")]
-    signals, relevances, competitors, signposts, priorities = [_rows(table) for table in (signal_table, relevance_table, competitor_table, signpost_table, priority_table)]
+    contract = AnalysisInputContract.from_dict(input_contract) if input_contract is not None else AnalysisInputContract(
+        domain="technology_radar",
+        required_tables=("Brief", "Signals", "Company_Relevance", "Competitor_Actions", "Scenario_Signposts", "Priority_Scoring"),
+        units="index",
+        compatibility_assumption="legacy technology radar scope",
+    )
+    contract.validate()
+    selected_technologies = set(contract.entity_scope)
+    signals, relevances, competitors, signposts, priorities = [apply_column_mappings(_rows(table), contract.column_mappings) for table in (signal_table, relevance_table, competitor_table, signpost_table, priority_table)]
+    for sheet, rows, columns in (
+        (signal_table.sheet, signals, ("Signal_ID", "Technology", "Metric", "Source_Family", "Source_Quality_1_5", "Notes")),
+        (relevance_table.sheet, relevances, ("Technology", "Company_Relevance_1_5", "Potential_Impact_1_5", "Urgency_1_5")),
+        (competitor_table.sheet, competitors, ("Competitor", "Technology", "Action", "Expected_Year", "Source_Family")),
+        (signpost_table.sheet, signposts, ("Technology", "Signpost", "Threshold", "Review_Window", "Decision_Rule")),
+        (priority_table.sheet, priorities, ("Technology", "Naive_Product", "Caution")),
+    ):
+        require_row_columns(rows, sheet, columns)
     evidence: list[Evidence] = []
     by_row: dict[tuple[str, int], Evidence] = {}
     for table in (signal_table, relevance_table, competitor_table, signpost_table, priority_table):
@@ -115,10 +127,18 @@ def analyze_technology_radar(source: Path) -> TechnologyAnalysis:
             evidence.append(by_row[(table.sheet, index)])
     by_technology: dict[str, list[tuple[int, dict[str, Any]]]] = {}
     for index, row in enumerate(signals):
+        if selected_technologies and str(row.get("Technology")) not in selected_technologies:
+            continue
         by_technology.setdefault(str(row.get("Technology")), []).append((index, row))
     relevance_by_technology = {str(row.get("Technology")): row for row in relevances}
     priority_by_technology = {str(row.get("Technology")): row for row in priorities}
     issues: list[TechnologyDataQualityIssue] = []
+    scenario_names = ("Acceleration", "Base", "Delay")
+    selected_scenarios = set(contract.scenarios)
+    if selected_scenarios:
+        unknown_scenarios = sorted(selected_scenarios - set(scenario_names))
+        if unknown_scenarios:
+            issues.append(TechnologyDataQualityIssue("UNKNOWN_SCENARIO_SCOPE", f"Requested scenarios are not supported: {unknown_scenarios}.", ()))
     assessments: list[TechnologyAssessment] = []
     for technology, items in sorted(by_technology.items()):
         canonical = [_canonical_source(str(row.get("Source_Family", "")), str(row.get("Notes", ""))) for _, row in items]
@@ -150,7 +170,12 @@ def analyze_technology_radar(source: Path) -> TechnologyAnalysis:
         relationships.extend(Relationship(f"{claim.id}-supports-{evidence_id}", evidence_id, claim.id, "supports") for evidence_id in claim.evidence_ids)
     scenarios: list[TechnologyScenario] = []
     for item in assessments:
-        scenarios.extend((TechnologyScenario(item.technology, "Acceleration", "Increase exposure if independent deployment signposts are exceeded.", item.evidence_ids), TechnologyScenario(item.technology, "Base", f"Maintain the {item.action_category.lower()} posture while evidence accumulates.", item.evidence_ids), TechnologyScenario(item.technology, "Delay", "Preserve optionality and avoid irreversible commitment if signposts remain weak.", item.evidence_ids)))
+        candidates = (
+            TechnologyScenario(item.technology, "Acceleration", "Increase exposure if independent deployment signposts are exceeded.", item.evidence_ids),
+            TechnologyScenario(item.technology, "Base", f"Maintain the {item.action_category.lower()} posture while evidence accumulates.", item.evidence_ids),
+            TechnologyScenario(item.technology, "Delay", "Preserve optionality and avoid irreversible commitment if signposts remain weak.", item.evidence_ids),
+        )
+        scenarios.extend(candidate for candidate in candidates if not selected_scenarios or candidate.scenario in selected_scenarios)
     quality_ids = [evidence_id for issue in issues for evidence_id in issue.evidence_ids]
     quality = _record("technology-data-quality", f"The technology radar contains {len(issues)} source-independence or scoring caveats that must be retained in the recommendation.", quality_ids or [item.id for item in evidence], assumptions, ("Removing syndicated stories or changing source quality can change evidence rankings.",), ("Independent deployment evidence resolves the source-family and scoring caveats.",), ("Source-family count, media-to-deployment ratio, and signpost status.",))
     claims.append(quality)
@@ -166,7 +191,7 @@ def analyze_technology_radar(source: Path) -> TechnologyAnalysis:
     state = AnalysisState("technology-radar", 1, evidence=evidence, claims=claims, implications=[implication], recommendations=[recommendation], relationships=relationships, revisions=[Revision("revision-1", 1, "technology radar analysis pending acceptance", [item.id for item in [*evidence, *calculations, *claims, implication, recommendation]])], invalidation=Invalidation(), revision_status=RevisionStatus.DRAFT, calculations=calculations)
     decision_question = next((str(row[1]) for row in brief.rows if row and row[0] == "Decision question" and len(row) > 1), "Which emerging technologies should the company prioritize?")
     horizon = next((str(row[1]) for row in brief.rows if row and row[0] == "Horizon" and len(row) > 1), "24–36 months")
-    return TechnologyAnalysis(digest, decision_question, horizon, assumptions, tuple(issues), tuple(assessments), tuple(scenarios), tuple(signposts), recommendation.statement, state)
+    return TechnologyAnalysis(digest, decision_question, horizon, assumptions, tuple(issues), tuple(assessments), tuple(scenarios), tuple(signposts), recommendation.statement, state, contract.fingerprint)
 
 def _citations(state: AnalysisState, ids: tuple[str, ...] | list[str]) -> str:
     by_id = {item.id: item for item in state.evidence}
@@ -193,9 +218,11 @@ def render_technology_report(technology: TechnologyAnalysis, state: AnalysisStat
     lines.extend(f"- `{item.target_id}`: {item.review_status}/{item.review_outcome}; accepted={item.accepted}; evidence={_citations(state, item.evidence_ids)}" for item in derive_finding_views(state))
     return "\n".join(lines) + "\n"
 
-def run_technology_radar_workflow(store: AnalysisStore, source: Path, *, human_decision: str = "REJECT", output_dir: Path | None = None) -> TechnologyWorkflowResult:
+def run_technology_radar_workflow(store: AnalysisStore, source: Path, *, human_decision: str = "REJECT", output_dir: Path | None = None, input_contract: AnalysisInputContract | dict[str, Any] | None = None) -> TechnologyWorkflowResult:
     try:
-        technology = analyze_technology_radar(Path(source))
+        if input_contract is None and store.brief_path.exists():
+            input_contract = normalize_work_brief(store.load_brief()).contract_for_domain("technology_radar")
+        technology = analyze_technology_radar(Path(source), input_contract=input_contract)
         pending = store.save_pending(technology.state)
         review = review_analysis_state(pending)
         acceptance = review_and_accept_pending_analysis(store, pending, review, f"review-{pending.investigation_id}-{pending.revision}", human_decision=human_decision)

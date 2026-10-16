@@ -23,7 +23,7 @@ from foresight_os.domain.models import (
     Relationship,
     SourceLocator,
 )
-from foresight_os.domain.relationships import RELATIONSHIP_RULES, relationship_rule
+from foresight_os.domain.relationships import RELATIONSHIP_RULES, RecordKind, relationship_rule
 from foresight_os.domain.validation import ValidationError
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.persistence.ids import canonical_json_hash, deterministic_id
@@ -76,13 +76,26 @@ def decode_stage_output(output: object) -> object:
     nested_response = getattr(output, "agent_response", None)
     if nested_response is not None and nested_response is not output:
         return decode_stage_output(nested_response)
-    value = getattr(output, "value", None)
+    try:
+        value = getattr(output, "value", None)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        value = None
     if value is not None:
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                return value
         return value
-    text = getattr(output, "text", None)
+    try:
+        text = getattr(output, "text", None)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        text = None
     if text is None:
         return output
     if isinstance(text, str):
+        if not text.strip():
+            return None
         try:
             return json.loads(text)
         except json.JSONDecodeError:
@@ -323,7 +336,7 @@ def _merge_record_collection(current: list[Any], incoming: tuple[Any, ...] | lis
             result.append(item)
             continue
         if canonical_json_hash(asdict(result[existing_index])) != canonical_json_hash(asdict(item)):
-            raise ValueError(f"same-ID/different-content conflict for {label} {item.id}")
+            raise ValidationError(f"same-ID/different-content conflict for {label} {item.id}")
     return result
 
 
@@ -354,11 +367,24 @@ class CanonicalResultCommitter:
         existing_records = context.get("dependency_records")
         if existing_records is None:
             existing_records = current.canonical_records()
+        existing_record_kinds = {
+            record.id: kind
+            for collection, kind in (
+                (current.evidence, RecordKind.EVIDENCE),
+                (current.claims, RecordKind.CLAIM),
+                (current.implications, RecordKind.IMPLICATION),
+                (current.recommendations, RecordKind.RECOMMENDATION),
+                (current.artifacts, RecordKind.ARTIFACT),
+            )
+            for record in collection
+        }
         normalized = output if isinstance(output, StageAnalyticalResult) else normalize_stage_result(
             output,
             expected_stage_id=stage_id,
             expected_contract=contract,
             existing_records=existing_records,
+            existing_record_kinds=existing_record_kinds,
+            tolerate_invalid_relationships=bool(context.get("tolerate_invalid_relationships")),
         )
         if normalized.stage_id != stage_id or normalized.contract != contract:
             raise ValidationError("canonical result does not match the recipe stage contract")
@@ -504,6 +530,14 @@ def _resolve(value: object, aliases: Mapping[str, str], label: str) -> str:
     return aliases[value]
 
 
+def _canonical_record_id(record_id: object, record: object) -> str:
+    if isinstance(record, Mapping):
+        value = record.get("id")
+    else:
+        value = getattr(record, "id", None)
+    return str(value if value is not None else record_id)
+
+
 def _source_locator(value: object, label: str) -> SourceLocator:
     item = _mapping(value, label)
     _validate_fields(item, _SOURCE_LOCATOR_FIELDS, label)
@@ -523,7 +557,12 @@ def normalize_stage_result(
     expected_stage_id: str | None = None,
     expected_contract: str = ANALYSIS_STAGE_RESULT_CONTRACT,
     existing_records: Mapping[str, object] | None = None,
-) -> StageAnalyticalResult:
+    existing_record_kinds: Mapping[str, RecordKind] | None = None,
+    tolerate_invalid_relationships: bool = False,
+    prefer_current_aliases: bool = False,
+    trusted_existing_records: Mapping[str, object] | None = None,
+    return_aliases: bool = False,
+) -> StageAnalyticalResult | tuple[StageAnalyticalResult, dict[str, str], dict[str, RecordKind]]:
     """Normalize provider output and assign system-owned canonical identities."""
 
     value = _mapping(payload, "stage result")
@@ -545,28 +584,60 @@ def normalize_stage_result(
         return isinstance(record, Mapping) and field_name in record
 
     known_evidence_aliases = {
-        record_id: record_id
+        record_id: _canonical_record_id(record_id, record)
         for record_id, record in dict(existing_records or {}).items()
         if isinstance(record, Evidence) or has_field(record, "source_locator")
     }
     known_calculation_aliases = {
-        record_id: record_id
+        record_id: _canonical_record_id(record_id, record)
         for record_id, record in dict(existing_records or {}).items()
         if isinstance(record, CalculationRecord) or has_field(record, "formula")
     }
     known_record_aliases = {
-        record_id: record_id
+        record_id: _canonical_record_id(record_id, record)
         for record_id, record in dict(existing_records or {}).items()
         if isinstance(record, (AnalyticalRecord, Artifact)) or has_field(record, "statement") or has_field(record, "path")
     }
     known_relationship_aliases = {
-        record_id: record_id
+        record_id: _canonical_record_id(record_id, record)
         for record_id, record in dict(existing_records or {}).items()
+        if isinstance(record, Relationship) or has_field(record, "relation_type")
+    }
+    trusted_records = dict(existing_records or {}) if trusted_existing_records is None else dict(trusted_existing_records)
+    trusted_evidence_aliases = {
+        record_id: _canonical_record_id(record_id, record)
+        for record_id, record in trusted_records.items()
+        if isinstance(record, Evidence) or has_field(record, "source_locator")
+    }
+    trusted_calculation_aliases = {
+        record_id: _canonical_record_id(record_id, record)
+        for record_id, record in trusted_records.items()
+        if isinstance(record, CalculationRecord) or has_field(record, "formula")
+    }
+    trusted_record_aliases = {
+        record_id: _canonical_record_id(record_id, record)
+        for record_id, record in trusted_records.items()
+        if isinstance(record, (AnalyticalRecord, Artifact)) or has_field(record, "statement") or has_field(record, "path")
+    }
+    trusted_relationship_aliases = {
+        record_id: _canonical_record_id(record_id, record)
+        for record_id, record in trusted_records.items()
         if isinstance(record, Relationship) or has_field(record, "relation_type")
     }
     evidence_aliases: dict[str, str] = {}
     calculation_aliases: dict[str, str] = {}
     record_aliases: dict[str, str] = {}
+    record_kinds: dict[str, RecordKind] = dict(existing_record_kinds or {})
+    for record_id, record in dict(existing_records or {}).items():
+        canonical_id = _canonical_record_id(record_id, record)
+        if isinstance(record, Evidence) or has_field(record, "source_locator"):
+            kind = RecordKind.EVIDENCE
+        elif isinstance(record, (AnalyticalRecord, Artifact)) or has_field(record, "statement") or has_field(record, "path"):
+            kind = RecordKind.CLAIM if has_field(record, "statement") else RecordKind.ARTIFACT
+        else:
+            continue
+        record_kinds.setdefault(str(record_id), kind)
+        record_kinds.setdefault(canonical_id, kind)
     evidence: list[Evidence] = []
     for index, raw in enumerate(_list(value.get("evidence"), "evidence")):
         item = _mapping(raw, f"evidence[{index}]")
@@ -591,6 +662,7 @@ def normalize_stage_result(
             evidence_aliases[str(item["id"])] = evidence_item.id
         evidence_aliases[evidence_item.id] = evidence_item.id
         record_aliases.update(evidence_aliases)
+        record_kinds[evidence_item.id] = RecordKind.EVIDENCE
         evidence.append(evidence_item)
 
     calculations: list[CalculationRecord] = []
@@ -601,7 +673,11 @@ def normalize_stage_result(
         input_ids = [
             _resolve(
                 entry,
-                {**evidence_aliases, **calculation_aliases, **known_evidence_aliases, **known_calculation_aliases},
+                ({**evidence_aliases, **calculation_aliases, **known_evidence_aliases, **known_calculation_aliases,
+                  **trusted_evidence_aliases, **trusted_calculation_aliases}
+                 if prefer_current_aliases else
+                 {**evidence_aliases, **calculation_aliases, **known_evidence_aliases, **known_calculation_aliases,
+                  **trusted_evidence_aliases, **trusted_calculation_aliases}),
                 f"calculations[{index}].input_ids",
             )
             for entry in _reference_list(item.get("input_ids"), f"calculations[{index}].input_ids")
@@ -642,7 +718,9 @@ def normalize_stage_result(
             evidence_ids = [
                 _resolve(
                     entry,
-                    {**evidence_aliases, **known_evidence_aliases},
+                    ({**evidence_aliases, **known_evidence_aliases, **trusted_evidence_aliases}
+                     if prefer_current_aliases else
+                     {**evidence_aliases, **known_evidence_aliases, **trusted_evidence_aliases}),
                     f"{collection}[{index}].evidence_ids",
                 )
                 for entry in _reference_list(item.get("evidence_ids", ()), f"{collection}[{index}].evidence_ids")
@@ -670,6 +748,11 @@ def normalize_stage_result(
             if item.get("id") is not None:
                 record_aliases[str(item["id"])] = record.id
             record_aliases[record.id] = record.id
+            record_kinds[record.id] = {
+                "claims": RecordKind.CLAIM,
+                "implications": RecordKind.IMPLICATION,
+                "recommendations": RecordKind.RECOMMENDATION,
+            }[collection]
             record_inputs[record.id] = {"collection": collection, "relationship_ids": relationship_ids}
             parsed.append(record)
         records[collection] = parsed
@@ -693,29 +776,63 @@ def normalize_stage_result(
         if item.get("id") is not None:
             record_aliases[str(item["id"])] = artifact.id
         record_aliases[artifact.id] = artifact.id
+        record_kinds[artifact.id] = RecordKind.ARTIFACT
         record_inputs[artifact.id] = {"collection": "artifacts", "relationship_ids": relationship_ids}
         artifacts.append(artifact)
 
     relationships: list[Relationship] = []
     relationship_aliases: dict[str, str] = {}
+    rejected_relationship_aliases: set[str] = set()
     for index, raw in enumerate(_list(value.get("relationships"), "relationships")):
         item = _mapping(raw, f"relationships[{index}]")
         _validate_fields(item, _RELATIONSHIP_FIELDS, f"relationships[{index}]")
-        from_id = _resolve(
-            item.get("from_id"),
-            {**record_aliases, **known_evidence_aliases, **known_record_aliases},
-            f"relationships[{index}].from_id",
-        )
-        to_id = _resolve(
-            item.get("to_id"),
-            {**record_aliases, **known_evidence_aliases, **known_record_aliases},
-            f"relationships[{index}].to_id",
-        )
+        try:
+            from_id = _resolve(
+                item.get("from_id"),
+                ({**known_evidence_aliases, **known_record_aliases, **record_aliases}
+                 if not prefer_current_aliases else
+                 {**record_aliases, **known_evidence_aliases, **known_record_aliases})
+                | trusted_evidence_aliases
+                | trusted_record_aliases,
+                f"relationships[{index}].from_id",
+            )
+            to_id = _resolve(
+                item.get("to_id"),
+                ({**record_aliases, **known_evidence_aliases, **known_record_aliases}
+                 | trusted_evidence_aliases
+                 | trusted_record_aliases),
+                f"relationships[{index}].to_id",
+            )
+        except ValidationError:
+            if tolerate_invalid_relationships:
+                if item.get("id") is not None:
+                    rejected_relationship_aliases.add(str(item["id"]))
+                continue
+            raise
         relation_type = _required_text(item, "relation_type", f"relationships[{index}]")
         try:
-            relationship_rule(relation_type)
+            rule = relationship_rule(relation_type)
         except ValueError as exc:
             raise ValidationError(str(exc)) from exc
+        from_kind = record_kinds.get(from_id)
+        to_kind = record_kinds.get(to_id)
+        if from_kind is None or to_kind is None:
+            if tolerate_invalid_relationships:
+                if item.get("id") is not None:
+                    rejected_relationship_aliases.add(str(item["id"]))
+                continue
+            raise ValidationError(
+                f"relationship endpoints must have known record kinds: {from_id} -> {to_id}"
+            )
+        if from_kind not in rule.sources or to_kind not in rule.targets:
+            if tolerate_invalid_relationships:
+                if item.get("id") is not None:
+                    rejected_relationship_aliases.add(str(item["id"]))
+                continue
+            raise ValidationError(
+                f"invalid endpoints for relationship {relation_type}: "
+                f"{from_kind.value} -> {to_kind.value}"
+            )
         relationship_id = deterministic_id("relationship", {"stage_id": stage_id, "from_id": from_id, "to_id": to_id, "relation_type": relation_type})
         if relationship_id in relationship_aliases:
             continue
@@ -732,8 +849,16 @@ def normalize_stage_result(
     def resolve_relationships(record_id: str, label: str) -> list[str]:
         resolved: list[str] = []
         for reference in record_inputs[record_id]["relationship_ids"]:
-            relationship_id = known_relationship_aliases.get(reference) or relationship_aliases.get(reference)
+            if reference in rejected_relationship_aliases:
+                continue
+            relationship_id = (
+                trusted_relationship_aliases.get(reference)
+                or relationship_aliases.get(reference)
+                or known_relationship_aliases.get(reference)
+            )
             if relationship_id is None:
+                if tolerate_invalid_relationships:
+                    continue
                 raise ValidationError(f"unknown reference: {label} -> {reference}")
             resolved.append(relationship_id)
         return resolved
@@ -749,7 +874,7 @@ def normalize_stage_result(
         for artifact in artifacts
     )
 
-    return StageAnalyticalResult(
+    result = StageAnalyticalResult(
         stage_id=stage_id,
         contract=expected_contract,
         evidence=tuple(evidence),
@@ -763,3 +888,10 @@ def normalize_stage_result(
         uncertainty=tuple(_text_list(value.get("uncertainty", ()), "stage result.uncertainty")),
         monitoring_indicators=tuple(_text_list(value.get("monitoring_indicators", ()), "stage result.monitoring_indicators")),
     )
+    if return_aliases:
+        alias_map = dict(aliases)
+        alias_map.update(relationship_aliases)
+        for record_id in result.canonical_records():
+            alias_map.setdefault(record_id, record_id)
+        return result, alias_map, record_kinds
+    return result

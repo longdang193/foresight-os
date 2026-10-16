@@ -26,6 +26,33 @@
     "horizon": { "type": "string" },
     "consequence_level": { "type": "string" },
     "user_preferences": { "type": "object", "additionalProperties": true },
+    "analysis_inputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["domain"],
+        "properties": {
+          "domain": { "type": "string", "minLength": 1 },
+          "required_tables": { "type": "array", "items": { "type": "string" } },
+          "column_mappings": { "type": "object", "additionalProperties": { "type": "string" } },
+          "entity_scope": { "type": "array", "items": { "type": "string" } },
+          "periods": { "type": "array", "items": { "type": "string" } },
+          "baseline_period": { "type": ["string", "null"] },
+          "comparison_period": { "type": ["string", "null"] },
+          "scenarios": { "type": "array", "items": { "type": "string" } },
+          "units": { "type": "string" },
+          "reporting_currency": { "type": "string" },
+          "conversion_rates": { "type": "object", "additionalProperties": { "type": "number", "exclusiveMinimum": 0 } },
+          "duplicate_policy": { "type": "string", "enum": ["flag_and_exclude", "keep_first", "reject"] },
+          "missing_value_policy": { "type": "string", "enum": ["preserve_as_issue", "exclude", "reject"] },
+          "required_calculations": { "type": "array", "items": { "type": "string" } },
+          "required_validation_checks": { "type": "array", "items": { "type": "string" } },
+          "assumptions": { "type": "array", "items": { "type": "string" } },
+          "compatibility_assumption": { "type": "string" }
+        }
+      }
+    },
     "producer": {
       "type": "object",
       "additionalProperties": false,

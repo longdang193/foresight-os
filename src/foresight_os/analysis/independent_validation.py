@@ -35,6 +35,7 @@ def read_validation_source(
     *,
     snapshot: SourceSnapshot | None = None,
     workbook_context: WorkbookContext | None = None,
+    _cache: Any = None,
 ) -> WorkbookReadResult:
     if workbook_context is not None:
         return workbook_context.read(str(source), selection or SheetSelection(include_hidden=True, include_hidden_rows=True))
@@ -42,6 +43,7 @@ def read_validation_source(
         str(source),
         selection or SheetSelection(include_hidden=True, include_hidden_rows=True),
         _snapshot=snapshot,
+        _cache=_cache,
     )
 
 
@@ -227,16 +229,48 @@ def run_independent_validation(
     expected_periods: Mapping[str, str] | None = None,
     calculations: Sequence[ReviewCheckResult] = (),
     missing_inputs: Sequence[str] = (),
+    required_check_ids: Sequence[str] | None = None,
+    _cache: Any = None,
 ) -> IndependentValidationReport:
-    result = read_validation_source(source, selection, snapshot=snapshot, workbook_context=workbook_context)
-    checks = (
-        source_fidelity_check(result, expected_sha256=expected_sha256, expected_ranges=expected_ranges),
-        scope_reconciliation_check(
-            result,
-            expected_sheets=expected_sheets,
-            expected_ranges=expected_ranges,
-            expected_periods=expected_periods,
-        ),
-        *tuple(calculations),
+    result = read_validation_source(
+        source,
+        selection,
+        snapshot=snapshot,
+        workbook_context=workbook_context,
+        _cache=_cache,
     )
+    selected = tuple(dict.fromkeys(required_check_ids)) if required_check_ids is not None else (
+        "source_fidelity",
+        "scope_reconciliation",
+        *(check.check_id for check in calculations),
+    )
+    calculation_checks = tuple(calculations)
+    checks: list[ReviewCheckResult] = []
+    if "source_fidelity" in selected:
+        checks.append(source_fidelity_check(result, expected_sha256=expected_sha256, expected_ranges=expected_ranges))
+    if "scope_reconciliation" in selected:
+        checks.append(
+            scope_reconciliation_check(
+                result,
+                expected_sheets=expected_sheets,
+                expected_ranges=expected_ranges,
+                expected_periods=expected_periods,
+            )
+        )
+    for check_id in selected:
+        matching = tuple(check for check in calculation_checks if check.check_id == check_id)
+        if matching:
+            checks.extend(matching)
+        elif check_id not in {"source_fidelity", "scope_reconciliation"}:
+            limitations = tuple(f"missing validation input: {item}" for item in missing_inputs)
+            if not limitations:
+                limitations = ("required validation check is unavailable",)
+            checks.append(
+                ReviewCheckResult(
+                    check_id=check_id,
+                    status=ReviewSlotStatus.PENDING,
+                    interpretation="required validation check could not run",
+                    limitations=limitations,
+                )
+            )
     return IndependentValidationReport(result.workbook_sha256, checks, tuple(missing_inputs))

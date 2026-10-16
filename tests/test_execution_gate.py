@@ -8,6 +8,7 @@ from foresight_os.artifacts.approval import build_approval_package
 from foresight_os.controller.recipes import ExecutionPattern
 from foresight_os.controller.proposal import build_execution_recipe
 from foresight_os.domain.approval import AdaptationEnvelope, ApprovalRecord, ApprovalStatus
+from foresight_os.domain.analysis_inputs import AnalysisInputContract
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.persistence.ids import canonical_json_hash
 from foresight_os.runtime.execution_gate import ExecutionAdmissionError, ExecutionGate
@@ -84,6 +85,45 @@ def test_admitted_execution_passes_immutable_context(monkeypatch, tmp_path):
     assert seen["canonical_result_committer"]
 
 
+def test_admitted_execution_forwards_persisted_analysis_contract_identity(monkeypatch, tmp_path):
+    brief = create_work_brief(
+        "Question",
+        investigation_id="contract-gate",
+        analysis_inputs={
+            "portfolio_resilience": AnalysisInputContract(
+                domain="portfolio_resilience",
+                baseline_period="2025",
+                units="EUR",
+            ).to_dict(),
+        },
+    )
+    recipe = build_execution_recipe(brief).recipe
+    store = AnalysisStore(tmp_path / "contract-gate")
+    store.save_brief(brief)
+    store.save_recipe(recipe)
+    package = build_approval_package(brief, recipe, AdaptationEnvelope())
+    store.save_execution_approval(ApprovalRecord(
+        brief.investigation_id,
+        ApprovalStatus.APPROVED,
+        package.projection,
+        package.fingerprint,
+        package.fingerprint,
+        canonical_json_hash(recipe.to_dict()),
+        "local_cli",
+        datetime.now(timezone.utc).isoformat(),
+    ))
+    seen = {}
+
+    async def fake_run(recipe, prompt, client=None, run_id=None, run_context=None):
+        seen.update(run_context)
+        return type("Result", (), {"run_id": run_id})()
+
+    monkeypatch.setattr("foresight_os.runtime.execution_gate.run_recipe_async", fake_run)
+    asyncio.run(ExecutionGate(store).execute(prompt="Question", client=object(), run_id="run-contract"))
+
+    assert seen["analysis_contract_fingerprints"]["portfolio_resilience"]
+
+
 def test_admitted_execution_without_client_is_blocked(tmp_path):
     store = prepared_store(tmp_path)
 
@@ -132,3 +172,25 @@ def test_concurrent_canonical_stage_requires_synthesis_before_provider_dispatch(
     with pytest.raises(ExecutionAdmissionError, match="requires an explicit synthesis policy"):
         asyncio.run(ExecutionGate(store).execute(prompt="Question", client=Client()))
     assert provider_calls == 0
+
+
+def test_gate_admits_local_document_and_artifact_capabilities_with_workspace_scope(tmp_path):
+    store = prepared_store(tmp_path)
+    recipe = store.load_recipe()
+    store.save_recipe(replace(
+        recipe,
+        max_total_agent_calls=6,
+        stages=tuple(
+            replace(
+                stage,
+                capabilities=("document_read", "artifact_generation"),
+                limits={**stage.limits, "max_total_agent_calls": 6},
+            )
+            for stage in recipe.stages
+        ),
+    ))
+    approve_recipe(store, store.load_recipe())
+
+    admitted = ExecutionGate(store).admit(prompt="Question")
+
+    assert admitted.recipe.stages[0].capabilities == ("document_read", "artifact_generation")

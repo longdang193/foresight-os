@@ -12,6 +12,7 @@ from foresight_os.analysis.powerbi_strategic_portfolio import (
 from foresight_os.analysis.portfolio_resilience import analyze_portfolio_resilience
 from foresight_os.analysis.technology_radar import analyze_technology_radar, run_technology_radar_workflow
 from foresight_os.domain.challenge import derive_finding_views
+from foresight_os.domain.models import WorkBrief
 from foresight_os.persistence.analysis_store import AnalysisStore
 
 
@@ -99,6 +100,18 @@ def test_powerbi_workflow_persists_reviewed_report(tmp_path: Path):
         assert section in report
 
 
+def test_powerbi_reject_policy_blocks_duplicate_fact_acceptance(tmp_path: Path):
+    result = run_powerbi_strategic_portfolio_workflow(
+        AnalysisStore(tmp_path / "case"),
+        EXERCISE / "05_PowerBI_Strategic_Portfolio.xlsx",
+        human_decision="ACCEPT",
+        input_contract={"domain": "powerbi_strategic_portfolio", "duplicate_policy": "reject"},
+    )
+
+    assert result.status == "failed"
+    assert result.failure and "duplicate policy reject" in result.failure
+
+
 def test_validator_key_reconciles_all_completed_exercises():
     result = validate_exercises(EXERCISE / "06_ForesightOS_Validator_Key.xlsx", EXERCISE)
 
@@ -118,3 +131,28 @@ def test_validator_workflow_persists_reviewed_report(tmp_path: Path):
     assert result.status == "accepted"
     assert result.report_path is not None and result.report_path.exists()
     assert all(item.accepted for item in derive_finding_views(result.analysis))
+
+
+def test_validator_workflow_preserves_legacy_brief_defaults(tmp_path: Path):
+    store = AnalysisStore(tmp_path / "legacy")
+    store.save_brief(
+        WorkBrief(
+            "legacy-validator",
+            "Validate the exercise workbooks",
+            [],
+            ["validation report"],
+            [],
+            [],
+            "assess",
+            "execute",
+        )
+    )
+
+    result = run_validator_workflow(
+        store,
+        EXERCISE / "06_ForesightOS_Validator_Key.xlsx",
+        EXERCISE,
+        human_decision="PENDING",
+    )
+
+    assert result.status == "pending"

@@ -14,23 +14,67 @@ def test_controller_selects_bounded_analysis_review_recipe():
     assert recipe.max_agent_steps == 5
     assert recipe.max_correction_rounds == 1
     assert recipe.max_total_agent_calls == 3
-    assert {role["purpose"] for role in recipe.roles} == {"execute", "review"}
+    assert {role["purpose"] for role in recipe.roles} == {"execute"}
+    assert all(item["purpose"] != "review" for item in recipe.stages[0].participants)
     assert all(stage.result_contract == "analysis-stage-result/v1" for stage in recipe.stages)
 
 
 def test_controller_scales_call_budget_to_cover_ordered_stages():
     brief = create_work_brief(
         "Which category should launch first?",
-        stages=[WorkStage(f"stage-{index}", f"stage {index}") for index in range(1, 5)],
+        stages=[WorkStage(f"stage-{index}", f"stage {index}", participants=["analyst"]) for index in range(1, 5)],
     )
 
     recipe = select_recipe(brief)
 
-    assert recipe.max_total_agent_calls >= len(recipe.stages)
+    assert recipe.max_total_agent_calls >= len(recipe.stages) * 2
     assert all(
-        stage.limits["max_total_agent_calls"] >= len(recipe.stages)
+        stage.limits["max_total_agent_calls"] >= 2
         for stage in recipe.stages
     )
+
+
+def test_global_budget_scaling_does_not_inflate_each_stage_limit():
+    brief = create_work_brief(
+        "Which category should launch first?",
+        stages=[WorkStage(f"stage-{index}", f"stage {index}", participants=["analyst"]) for index in range(1, 5)],
+    )
+
+    recipe = select_recipe(brief)
+
+    assert recipe.max_total_agent_calls == 10
+    assert [stage.limits["max_total_agent_calls"] for stage in recipe.stages] == [3, 3, 3, 4]
+
+
+def test_step_budget_scales_to_cover_ordered_stages():
+    brief = create_work_brief(
+        "Which category should launch first?",
+        stages=[WorkStage(f"stage-{index}", f"stage {index}", participants=["analyst"]) for index in range(1, 7)],
+    )
+
+    recipe = select_recipe(brief)
+
+    assert recipe.max_agent_steps == 6
+    assert all(stage.limits["max_agent_steps"] == 6 for stage in recipe.stages)
+
+
+def test_tool_enabled_multi_participant_stage_reserves_correction_calls():
+    brief = create_work_brief(
+        "Which retailer should Lumia select?",
+        stages=[
+            WorkStage(
+                "challenge",
+                "Challenge the preferred retailer against the strongest alternative.",
+                participants=["analyst"],
+                research_needs=[ResearchNeed(ResearchNeedKind.STRUCTURED_DATA, "reconcile the workbook scorecard")],
+            )
+        ],
+    )
+
+    recipe = select_recipe(brief)
+
+    assert recipe.stages[-1].limits["max_total_agent_calls"] == 12
+    assert recipe.max_total_agent_calls == 12
 
 
 def test_budget_exhaustion_prevents_extra_call_or_correction():

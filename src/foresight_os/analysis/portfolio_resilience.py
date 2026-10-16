@@ -10,6 +10,8 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
+from foresight_os.analysis.workbook_inputs import apply_column_mappings, require_row_columns, require_table, row_evidence, table_rows
+from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import (
     AnalyticalRecord,
@@ -73,7 +75,7 @@ class PortfolioSensitivityThreshold:
 class PortfolioOptionAssessment:
     option_id: str
     option: str
-    investment_eur: float
+    investment_eur: float | None
     time_to_impact_months: float
     reversibility: str
     target_segment: str | None
@@ -85,7 +87,7 @@ class PortfolioOptionAssessment:
 @dataclass(frozen=True)
 class PortfolioKpiReconciliation:
     kpi: str
-    reported_value: float
+    reported_value: float | None
     raw_observed_value: float | None
     quality_adjusted_value: float | None
     adjusted_delta: float | None
@@ -108,6 +110,8 @@ class PortfolioAnalysis:
     monitoring_triggers: tuple[str, ...]
     recommendation: str
     state: AnalysisState
+    contract_fingerprint: str = ""
+    reporting_currency: str = "EUR"
 
 
 @dataclass(frozen=True)
@@ -125,14 +129,11 @@ def _number(value: Any) -> float | None:
 
 
 def _table(workbook: Any, sheet: str) -> Any:
-    for table in workbook.tables:
-        if table.sheet == sheet:
-            return table
-    raise ToolbeltError(f"portfolio recipe requires sheet: {sheet}")
+    return require_table(workbook, sheet)
 
 
 def _rows(table: Any) -> list[dict[str, Any]]:
-    return [dict(zip(table.columns, row, strict=False)) for row in table.rows]
+    return table_rows(table)
 
 
 def _row_range(table: Any, index: int) -> str:
@@ -142,14 +143,14 @@ def _row_range(table: Any, index: int) -> str:
 
 def _row_evidence(table: Any, index: int, digest: str, calculation: str) -> Evidence:
     values = dict(zip(table.columns, table.rows[index], strict=False))
-    row_range = _row_range(table, index)
-    evidence_id = "portfolio-evidence-" + hashlib.sha256(f"{digest}:{table.sheet}:{row_range}".encode()).hexdigest()[:16]
-    return Evidence(
-        evidence_id,
-        SourceLocator(digest, table.sheet, row_range, str(values.get("Currency", "unknown")), "portfolio_resilience_recipe", calculation),
+    return row_evidence(
+        table,
+        index,
         digest,
-        date.today().isoformat(),
-        json.dumps(values, sort_keys=True, default=str),
+        calculation,
+        units=str(values.get("Currency", "unknown")),
+        transformation="portfolio_resilience_recipe",
+        evidence_prefix="portfolio",
     )
 
 
@@ -183,7 +184,7 @@ def _record(
     )
 
 
-def analyze_portfolio_resilience(source: Path) -> PortfolioAnalysis:
+def analyze_portfolio_resilience(source: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None) -> PortfolioAnalysis:
     source = Path(source)
     source_sha256 = hashlib.sha256(source.read_bytes()).hexdigest()
     workbook = spreadsheet_read(
@@ -195,16 +196,40 @@ def analyze_portfolio_resilience(source: Path) -> PortfolioAnalysis:
         ),
     )
     brief_table = _table(workbook, "Brief")
+    contract = AnalysisInputContract.from_dict(input_contract) if input_contract is not None else AnalysisInputContract(
+        domain="portfolio_resilience",
+        required_tables=("Brief", "Sales_History", "Fixed_Costs", "Scenario_Assumptions", "Strategic_Options", "Reported_KPIs"),
+        periods=("2026",),
+        baseline_period="2026",
+        comparison_period="2025",
+        scenarios=("Downside", "Base", "Upside"),
+        units="EUR",
+        reporting_currency="EUR",
+        compatibility_assumption="legacy workbook metadata defaults",
+    )
+    contract.validate()
+    selected_period = contract.baseline_period or (contract.periods[-1] if contract.periods else "2026")
+    comparison_period = contract.comparison_period or (contract.periods[-2] if len(contract.periods) > 1 else "2025")
+    selected_entities = set(contract.entity_scope)
     sales_table = _table(workbook, "Sales_History")
     fixed_table = _table(workbook, "Fixed_Costs")
     scenario_table = _table(workbook, "Scenario_Assumptions")
     options_table = _table(workbook, "Strategic_Options")
     kpi_table = _table(workbook, "Reported_KPIs")
-    sales_rows = _rows(sales_table)
-    fixed_rows = _rows(fixed_table)
-    scenario_rows = _rows(scenario_table)
-    option_rows = _rows(options_table)
-    kpi_rows = _rows(kpi_table)
+    sales_rows = apply_column_mappings(_rows(sales_table), contract.column_mappings)
+    fixed_rows = apply_column_mappings(_rows(fixed_table), contract.column_mappings)
+    scenario_rows = apply_column_mappings(_rows(scenario_table), contract.column_mappings)
+    option_rows = apply_column_mappings(_rows(options_table), contract.column_mappings)
+    kpi_rows = apply_column_mappings(_rows(kpi_table), contract.column_mappings)
+    for sheet, rows, columns in (
+        (sales_table.sheet, sales_rows, ("Quarter", "Region", "Segment", "Units", "List_Price", "Discount_pct", "Variable_Cost_per_Unit", "Revenue", "Gross_Profit")),
+        (fixed_table.sheet, fixed_rows, ("Segment", "Annual_Fixed_Cost_EUR")),
+        (scenario_table.sheet, scenario_rows, ("Scenario", "Demand_Growth", "Cost_Inflation", "Discount_Shift", "Fixed_Cost_Change")),
+        (options_table.sheet, option_rows, ("Option_ID", "Option", "Investment_EUR", "Time_to_Impact_Months", "Reversibility")),
+        (kpi_table.sheet, kpi_rows, ("KPI", "Reported_Value", "Unit")),
+    ):
+        require_row_columns(rows, sheet, columns)
+    reporting_unit = contract.reporting_currency or contract.units or "EUR"
     evidence: list[Evidence] = []
     evidence_by_table_row: dict[tuple[str, int], Evidence] = {}
     for table in (sales_table, fixed_table, scenario_table, options_table, kpi_table):
@@ -214,8 +239,28 @@ def analyze_portfolio_resilience(source: Path) -> PortfolioAnalysis:
             evidence_by_table_row[(table.sheet, index)] = item
     sales_evidence = {index: evidence_by_table_row[("Sales_History", index)] for index in range(len(sales_rows))}
     issues: list[PortfolioDataQualityIssue] = []
+    unsupported_conversion_rows: set[tuple[str, int]] = set()
+    for sheet, rows, monetary_fields in (
+        (sales_table.sheet, sales_rows, ("Revenue", "Gross_Profit", "Variable_Cost_per_Unit", "List_Price")),
+        (fixed_table.sheet, fixed_rows, ("Annual_Fixed_Cost_EUR",)),
+        (options_table.sheet, option_rows, ("Investment_EUR",)),
+        (kpi_table.sheet, kpi_rows, ("Reported_Value",)),
+    ):
+        for index, row in enumerate(rows):
+            if sheet == kpi_table.sheet and str(row.get("Unit", "")).strip().lower() in {"%", "percent", "percentage", "ratio", "count", "index"}:
+                continue
+            source_currency = str(row.get("Currency") or row.get("Unit") or "EUR")
+            factor = 1.0 if source_currency == reporting_unit else contract.conversion_rates.get(source_currency)
+            if factor is None:
+                unsupported_conversion_rows.add((sheet, index))
+                issues.append(PortfolioDataQualityIssue("UNSUPPORTED_CONVERSION", f"No declared conversion rate from {source_currency} to {reporting_unit}.", (evidence_by_table_row[(sheet, index)].id,)))
+                continue
+            for field in monetary_fields:
+                if isinstance(row.get(field), (int, float)) and not isinstance(row.get(field), bool):
+                    row[field] = float(row[field]) * factor
     seen: dict[tuple[Any, ...], int] = {}
     duplicate_indexes: set[int] = set()
+    missing_cost_indexes: set[int] = set()
     for index, row in enumerate(sales_rows):
         key = (row.get("Quarter"), row.get("Region"), row.get("Segment"))
         if key in seen:
@@ -227,15 +272,22 @@ def analyze_portfolio_resilience(source: Path) -> PortfolioAnalysis:
         if discount is None or not 0 <= discount <= 1:
             issues.append(PortfolioDataQualityIssue("MALFORMED_DISCOUNT", f"Discount is outside the 0–1 range for {row.get('Source_ID')}.", (sales_evidence[index].id,)))
         if row.get("Variable_Cost_per_Unit") is None or row.get("Gross_Profit") is None:
+            missing_cost_indexes.add(index)
             issues.append(PortfolioDataQualityIssue("MISSING_COST", f"Variable cost or derived gross profit is missing for {row.get('Source_ID')}.", (sales_evidence[index].id,)))
         revenue = _number(row.get("Revenue"))
         if revenue is not None and revenue < 0:
             issues.append(PortfolioDataQualityIssue("NEGATIVE_REVENUE", f"Revenue is negative for {row.get('Source_ID')}.", (sales_evidence[index].id,)))
+    if contract.duplicate_policy == "reject" and any(issue.kind == "DUPLICATE_ROW" for issue in issues):
+        raise ValueError("duplicate policy reject: portfolio duplicate rows are present")
+    if contract.missing_value_policy == "reject" and any(issue.kind == "MISSING_COST" for issue in issues):
+        raise ValueError("missing-value policy reject: portfolio cost values are missing")
     quality_rows: list[tuple[int, dict[str, Any]]] = []
     for index, row in enumerate(sales_rows):
         discount = _number(row.get("Discount_pct"))
         if (
             index not in duplicate_indexes
+            and (contract.missing_value_policy == "preserve_as_issue" or index not in missing_cost_indexes)
+            and ("Sales_History", index) not in unsupported_conversion_rows
             and discount is not None
             and 0 <= discount <= 1
             and _number(row.get("Revenue")) is not None
@@ -245,13 +297,23 @@ def analyze_portfolio_resilience(source: Path) -> PortfolioAnalysis:
     quality_adjusted_rows = [
         (index, row)
         for index, row in quality_rows
-        if str(row.get("Quarter", "")).startswith("2026")
+        if str(row.get("Quarter", "")).startswith(selected_period)
+        and (not selected_entities or str(row.get("Region")) in selected_entities)
     ]
-    fixed_costs = {str(row.get("Segment")): _number(row.get("Annual_Fixed_Cost_EUR")) or 0.0 for row in fixed_rows}
+    unsupported_fixed_segments = {
+        str(row.get("Segment"))
+        for index, row in enumerate(fixed_rows)
+        if ("Fixed_Costs", index) in unsupported_conversion_rows
+    }
+    fixed_costs = {
+        str(row.get("Segment")): _number(row.get("Annual_Fixed_Cost_EUR")) or 0.0
+        for index, row in enumerate(fixed_rows)
+        if ("Fixed_Costs", index) not in unsupported_conversion_rows
+    }
     by_segment: dict[str, list[tuple[int, dict[str, Any]]]] = {}
     for index, row in quality_adjusted_rows:
         by_segment.setdefault(str(row.get("Segment")), []).append((index, row))
-    segments = sorted(set(by_segment) | set(fixed_costs))
+    segments = sorted((set(by_segment) | set(fixed_costs)) - unsupported_fixed_segments)
     baselines: list[PortfolioSegmentBaseline] = []
     for segment in segments:
         items = by_segment.get(segment, [])
@@ -281,6 +343,8 @@ def analyze_portfolio_resilience(source: Path) -> PortfolioAnalysis:
     scenario_evidence: dict[str, tuple[str, ...]] = {}
     for index, row in enumerate(scenario_rows):
         scenario = str(row.get("Scenario"))
+        if contract.scenarios and scenario not in contract.scenarios:
+            continue
         scenario_evidence[scenario] = (evidence_by_table_row[("Scenario_Assumptions", index)].id,)
         demand_growth = _number(row.get("Demand_Growth")) or 0.0
         cost_inflation = _number(row.get("Cost_Inflation")) or 0.0
@@ -317,7 +381,7 @@ def analyze_portfolio_resilience(source: Path) -> PortfolioAnalysis:
             PortfolioOptionAssessment(
                 str(row.get("Option_ID")),
                 option,
-                _number(row.get("Investment_EUR")) or 0.0,
+                _number(row.get("Investment_EUR")) if ("Strategic_Options", index) not in unsupported_conversion_rows else None,
                 _number(row.get("Time_to_Impact_Months")) or 0.0,
                 str(row.get("Reversibility")),
                 target_segment,
@@ -326,8 +390,8 @@ def analyze_portfolio_resilience(source: Path) -> PortfolioAnalysis:
                 (evidence_by_table_row[("Strategic_Options", index)].id,),
             )
         )
-    raw_2026 = [row for row in sales_rows if str(row.get("Quarter", "")).startswith("2026")]
-    adjusted_2026 = [row for _, row in quality_adjusted_rows if str(row.get("Quarter", "")).startswith("2026")]
+    raw_2026 = [row for row in sales_rows if str(row.get("Quarter", "")).startswith(selected_period) and (not selected_entities or str(row.get("Region")) in selected_entities)]
+    adjusted_2026 = [row for _, row in quality_adjusted_rows if str(row.get("Quarter", "")).startswith(selected_period)]
     raw_totals = {
         "Revenue": sum(_number(row.get("Revenue")) or 0.0 for row in raw_2026),
         "Gross_Profit": sum(_number(row.get("Gross_Profit")) or 0.0 for row in raw_2026),
@@ -343,28 +407,28 @@ def analyze_portfolio_resilience(source: Path) -> PortfolioAnalysis:
             if str(row.get("Quarter", "")).startswith(year)
             and row.get("Segment") == "Analytics Software"
         )
-        for year in ("2025", "2026")
+        for year in (comparison_period, selected_period)
     }
     analytics_cagr = (
-        analytics_revenue_by_year["2026"] / analytics_revenue_by_year["2025"] - 1
-        if analytics_revenue_by_year["2025"]
+        analytics_revenue_by_year[selected_period] / analytics_revenue_by_year[comparison_period] - 1
+        if analytics_revenue_by_year[comparison_period]
         else None
     )
     reconciliations: list[PortfolioKpiReconciliation] = []
     for index, row in enumerate(kpi_rows):
         kpi = str(row.get("KPI"))
-        reported = _number(row.get("Reported_Value")) or 0.0
-        metric = "Revenue" if kpi == "2026 Revenue" else "Gross_Profit" if kpi == "2026 Gross Profit" else None
+        reported = _number(row.get("Reported_Value"))
+        metric = "Revenue" if kpi in {f"{selected_period} Revenue", "2026 Revenue"} else "Gross_Profit" if kpi in {f"{selected_period} Gross Profit", "2026 Gross Profit"} else None
         if metric is not None:
             raw_value = raw_totals[metric]
             adjusted = adjusted_totals[metric]
-            delta = adjusted - reported
-            status = "MISMATCH" if not math.isclose(adjusted, reported, rel_tol=1e-9, abs_tol=0.01) else "RECONCILED"
+            delta = adjusted - reported if reported is not None else None
+            status = "UNSUPPORTED_CONVERSION" if ("Reported_KPIs", index) in unsupported_conversion_rows else "MISMATCH" if reported is None or not math.isclose(adjusted, reported, rel_tol=1e-9, abs_tol=0.01) else "RECONCILED"
         elif kpi == "Analytics Software CAGR":
             raw_value = analytics_cagr
             adjusted = analytics_cagr
-            delta = adjusted - reported if adjusted is not None else None
-            status = "MISMATCH" if adjusted is None or not math.isclose(adjusted, reported, rel_tol=1e-9, abs_tol=0.0001) else "RECONCILED"
+            delta = adjusted - reported if adjusted is not None and reported is not None else None
+            status = "UNSUPPORTED_CONVERSION" if ("Reported_KPIs", index) in unsupported_conversion_rows else "MISMATCH" if adjusted is None or reported is None or not math.isclose(adjusted, reported, rel_tol=1e-9, abs_tol=0.0001) else "RECONCILED"
         elif kpi == "Service Contract renewal proxy":
             raw_value = None
             adjusted = None
@@ -387,7 +451,7 @@ def analyze_portfolio_resilience(source: Path) -> PortfolioAnalysis:
             )
         )
     assumptions = (
-        "Observed 2026 rows are the baseline; scenario assumptions are not treated as observed facts.",
+        f"Observed {selected_period} rows are the baseline; scenario assumptions are not treated as observed facts.",
         "Duplicate rows, missing cost/gross profit, malformed discounts, and negative revenue are excluded from quality-adjusted calculations and remain visible as issues.",
         "Scenario projections apply demand growth to units, cost inflation to weighted variable cost, discount shift to weighted discount, and fixed-cost change to annual fixed cost.",
         "Option assessments are prioritization proxies, not causal ROI forecasts; investment uplift is not supplied by the workbook.",
@@ -401,17 +465,17 @@ def analyze_portfolio_resilience(source: Path) -> PortfolioAnalysis:
     relationships: list[Relationship] = []
     for baseline in baselines:
         projections = scenario_by_segment[baseline.segment]
-        downside = projections["Downside"]
-        base = projections["Base"]
-        upside = projections["Upside"]
+        modeled = tuple(projections.values())
+        scenario_text = ", ".join(f"{item.scenario} {_money(item.projected_contribution, reporting_unit)}" for item in modeled) or "no selected scenario projection"
+        scenario_evidence_ids = [evidence_id for item in modeled for evidence_id in item.evidence_ids]
         claim = _record(
             f"portfolio-claim-{baseline.segment.lower().replace(' ', '-')}",
-            f"{baseline.segment}: quality-adjusted 2026 revenue was €{baseline.revenue:,.0f} with {baseline.gross_margin:.1%} gross margin; modeled contribution is €{downside.projected_contribution:,.0f} downside, €{base.projected_contribution:,.0f} base, and €{upside.projected_contribution:,.0f} upside.",
-            list(dict.fromkeys(baseline.evidence_ids + downside.evidence_ids + base.evidence_ids + upside.evidence_ids)),
+            f"{baseline.segment}: quality-adjusted {selected_period} revenue was {_money(baseline.revenue, reporting_unit)} with {baseline.gross_margin:.1%} gross margin; modeled contribution is {scenario_text}.",
+            list(dict.fromkeys((*baseline.evidence_ids, *scenario_evidence_ids))),
             assumptions=assumptions,
             uncertainty=("Quality-adjusted results exclude planted exceptions; the excluded rows require source-owner confirmation.",),
-            confidence_rationale="The claim is derived from deterministic row-level calculations and explicit scenario inputs.",
-            disconfirmation_conditions=(f"{baseline.segment} contribution falls below €0 under observed 2027 inputs.",),
+            confidence_rationale="The claim is derived from deterministic row-level calculations and the explicitly selected scenario inputs.",
+            disconfirmation_conditions=(f"{baseline.segment} contribution falls below {reporting_unit} 0 under observed 2027 inputs.",),
             monitoring_indicators=(f"Quarterly {baseline.segment} units, realized discount, and gross margin.",),
         )
         for evidence_id in claim.evidence_ids:
@@ -421,7 +485,7 @@ def analyze_portfolio_resilience(source: Path) -> PortfolioAnalysis:
     quality_ids = tuple(dict.fromkeys(evidence_id for issue in issues for evidence_id in issue.evidence_ids))
     quality_claim_draft = _record(
         "portfolio-data-quality-claim",
-        f"The 2026 portfolio baseline contains {len(issues)} explicit data-quality exceptions; reported KPIs require reconciliation before management treats them as authoritative.",
+        f"The {selected_period} portfolio baseline contains {len(issues)} explicit data-quality exceptions; reported KPIs require reconciliation before management treats them as authoritative.",
         list(quality_ids),
         assumptions=assumptions,
         uncertainty=("Raw and quality-adjusted totals diverge because the workbook contains planted exceptions.",),
@@ -435,22 +499,35 @@ def analyze_portfolio_resilience(source: Path) -> PortfolioAnalysis:
     claims = [*segment_claims, quality_claim]
     ranked_segments = sorted(baselines, key=lambda item: item.contribution_after_fixed_cost, reverse=True)
     top_segments = ranked_segments[:2]
+    if len(top_segments) >= 2:
+        ranking_statement = f"{top_segments[0].segment} and {top_segments[1].segment} lead the quality-adjusted contribution ranking"
+    elif top_segments:
+        ranking_statement = f"{top_segments[0].segment} is the only segment with a quality-adjusted contribution result"
+    else:
+        ranking_statement = "No segment has a quality-adjusted contribution result"
+    modeled_scenarios = tuple(dict.fromkeys(item.scenario for item in scenario_projections))
+    modeled_scenario_text = ", ".join(modeled_scenarios) or "none"
     implication_draft = _record(
         "portfolio-priority-implication",
-        f"{top_segments[0].segment} and {top_segments[1].segment} lead the quality-adjusted contribution ranking across the modeled scenarios; Core Hardware should not receive an irreversible commitment until its pricing and revenue exceptions are remediated.",
+        f"{ranking_statement} across the selected modeled scenarios ({modeled_scenario_text}); Core Hardware should not receive an irreversible commitment until its pricing and revenue exceptions are remediated.",
         list(dict.fromkeys(item.id for item in evidence if item.source_locator.sheet in {"Sales_History", "Scenario_Assumptions", "Strategic_Options", "Fixed_Costs"})),
         assumptions=assumptions,
         uncertainty=("The prioritization ranking is a contribution proxy and does not estimate causal investment uplift.",),
-        confidence_rationale="The top-two ordering is stable across downside, base, and upside projections.",
+        confidence_rationale=f"The ranking is derived from deterministic contribution calculations across the selected modeled scenarios ({modeled_scenario_text}).",
         disconfirmation_conditions=("A validated refresh reverses the top-two ranking or Core Hardware clears its data-quality exceptions.",),
         monitoring_indicators=("Scenario rank, realized gross margin, discount pressure, and exception remediation status.",),
     )
     for claim in claims:
         relationships.append(Relationship(f"{claim.id}-informs-{implication_draft.id}", claim.id, implication_draft.id, "informs"))
     implication = AnalyticalRecord(implication_draft.id, implication_draft.statement, implication_draft.basis, implication_draft.assessment, evidence_ids=implication_draft.evidence_ids, relationship_ids=[item.id for item in relationships if item.to_id == implication_draft.id], assumptions=implication_draft.assumptions, uncertainty=implication_draft.uncertainty, confidence_rationale=implication_draft.confidence_rationale, disconfirmation_conditions=implication_draft.disconfirmation_conditions, monitoring_indicators=implication_draft.monitoring_indicators)
+    recommendation_statement = (
+        "Prioritize staged investment in Analytics Software, then reversible Service Contracts expansion; defer irreversible Core Hardware and Spare Parts commitments until KPI reconciliation and planted data exceptions are resolved."
+        if baselines
+        else f"Do not make portfolio investment decisions until required conversion rates are supplied for the affected fixed-cost inputs: {', '.join(sorted(unsupported_fixed_segments)) or 'unavailable segments'}."
+    )
     recommendation_draft = _record(
         "portfolio-recommendation",
-        "Prioritize staged investment in Analytics Software, then reversible Service Contracts expansion; defer irreversible Core Hardware and Spare Parts commitments until KPI reconciliation and planted data exceptions are resolved.",
+        recommendation_statement,
         list(dict.fromkeys(implication.evidence_ids + [item.id for option in options for item in evidence if item.id in option.evidence_ids])),
         assumptions=assumptions,
         uncertainty=("No causal uplift or external market evidence is present in this workbook; this is an internal portfolio prioritization recommendation.",),
@@ -477,11 +554,11 @@ def analyze_portfolio_resilience(source: Path) -> PortfolioAnalysis:
         calculations.append(
             CalculationRecord(
                 f"portfolio-baseline-{baseline.segment.lower().replace(' ', '-')}",
-                MeasurementKey(baseline.segment, "contribution_after_fixed_cost", "2026", "EUR"),
+                MeasurementKey(baseline.segment, "contribution_after_fixed_cost", selected_period, reporting_unit),
                 "gross_profit - annual_fixed_cost",
                 list(baseline.evidence_ids),
                 baseline.contribution_after_fixed_cost,
-                "EUR",
+                reporting_unit,
                 [f"Sales_History:{item}" for item in baseline.evidence_ids],
             )
         )
@@ -489,11 +566,11 @@ def analyze_portfolio_resilience(source: Path) -> PortfolioAnalysis:
         calculations.append(
             CalculationRecord(
                 f"portfolio-{projection.scenario.lower()}-{projection.segment.lower().replace(' ', '-')}",
-                MeasurementKey(projection.segment, "scenario_contribution", projection.scenario, "EUR", projection.scenario),
+                MeasurementKey(projection.segment, "scenario_contribution", projection.scenario, reporting_unit, projection.scenario),
                 "projected_gross_profit - projected_fixed_cost",
                 list(projection.evidence_ids),
                 projection.projected_contribution,
-                "EUR",
+                reporting_unit,
                 [f"Sales_History:{item}" for item in projection.evidence_ids],
             )
         )
@@ -532,11 +609,13 @@ def analyze_portfolio_resilience(source: Path) -> PortfolioAnalysis:
         ),
         recommendation.statement,
         state,
+        contract.fingerprint,
+        reporting_unit,
     )
 
 
-def _money(value: float | None) -> str:
-    return "n/a" if value is None else f"€{value:,.0f}"
+def _money(value: float | None, currency: str = "EUR") -> str:
+    return "n/a" if value is None else f"{currency} {value:,.0f}"
 
 
 def _percent(value: float | None) -> str:
@@ -581,6 +660,7 @@ def render_portfolio_report(portfolio: PortfolioAnalysis, state: AnalysisState |
         "",
         f"Decision question: {portfolio.decision_question}",
         f"Horizon: {portfolio.horizon}",
+        f"Reporting currency: {portfolio.reporting_currency}",
         f"Source workbook SHA-256: `{portfolio.source_sha256}`",
         "",
         "## What is changing?",
@@ -593,7 +673,7 @@ def render_portfolio_report(portfolio: PortfolioAnalysis, state: AnalysisState |
     ]
     for baseline in sorted(portfolio.segment_baselines, key=lambda item: item.contribution_after_fixed_cost, reverse=True):
         lines.append(
-            f"| {baseline.segment} | {baseline.valid_rows} | {_money(baseline.revenue)} | {_percent(baseline.gross_margin)} | {_money(baseline.contribution_after_fixed_cost)} | {_source_citations(state, baseline.evidence_ids)} |"
+            f"| {baseline.segment} | {baseline.valid_rows} | {_money(baseline.revenue, portfolio.reporting_currency)} | {_percent(baseline.gross_margin)} | {_money(baseline.contribution_after_fixed_cost, portfolio.reporting_currency)} | {_source_citations(state, baseline.evidence_ids)} |"
         )
 
     lines.extend([
@@ -605,7 +685,7 @@ def render_portfolio_report(portfolio: PortfolioAnalysis, state: AnalysisState |
     ])
     for projection in portfolio.scenarios:
         lines.append(
-            f"| {projection.scenario} | {projection.segment} | {_money(projection.projected_revenue)} | {_money(projection.projected_gross_profit)} | {_money(projection.projected_contribution)} | {_source_citations(state, projection.evidence_ids)} |"
+            f"| {projection.scenario} | {projection.segment} | {_money(projection.projected_revenue, portfolio.reporting_currency)} | {_money(projection.projected_gross_profit, portfolio.reporting_currency)} | {_money(projection.projected_contribution, portfolio.reporting_currency)} | {_source_citations(state, projection.evidence_ids)} |"
         )
 
     lines.extend([
@@ -627,7 +707,7 @@ def render_portfolio_report(portfolio: PortfolioAnalysis, state: AnalysisState |
     ])
     for option in portfolio.options:
         lines.append(
-            f"| {option.option_id} | {option.option} | {_money(option.investment_eur)} | {option.time_to_impact_months:g} months | {option.reversibility} | {option.target_segment or 'unmapped'} | {_money(option.base_contribution)} | {_money(option.downside_contribution)} | {_source_citations(state, option.evidence_ids)} |"
+            f"| {option.option_id} | {option.option} | {_money(option.investment_eur, portfolio.reporting_currency)} | {option.time_to_impact_months:g} months | {option.reversibility} | {option.target_segment or 'unmapped'} | {_money(option.base_contribution, portfolio.reporting_currency)} | {_money(option.downside_contribution, portfolio.reporting_currency)} | {_source_citations(state, option.evidence_ids)} |"
         )
 
     lines.extend([
@@ -639,7 +719,7 @@ def render_portfolio_report(portfolio: PortfolioAnalysis, state: AnalysisState |
     ])
     for kpi in portfolio.kpi_reconciliations:
         lines.append(
-            f"| {kpi.kpi} | {_money(kpi.reported_value) if kpi.kpi not in {'Analytics Software CAGR', 'Service Contract renewal proxy'} else _percent(kpi.reported_value)} | {_money(kpi.raw_observed_value) if kpi.kpi not in {'Analytics Software CAGR', 'Service Contract renewal proxy'} else _percent(kpi.raw_observed_value)} | {_money(kpi.quality_adjusted_value) if kpi.kpi not in {'Analytics Software CAGR', 'Service Contract renewal proxy'} else _percent(kpi.quality_adjusted_value)} | {_money(kpi.adjusted_delta) if kpi.kpi not in {'Analytics Software CAGR', 'Service Contract renewal proxy'} else _percent(kpi.adjusted_delta)} | {kpi.status} | {_source_citations(state, kpi.evidence_ids)} |"
+            f"| {kpi.kpi} | {_money(kpi.reported_value, portfolio.reporting_currency) if kpi.kpi not in {'Analytics Software CAGR', 'Service Contract renewal proxy'} else _percent(kpi.reported_value)} | {_money(kpi.raw_observed_value, portfolio.reporting_currency) if kpi.kpi not in {'Analytics Software CAGR', 'Service Contract renewal proxy'} else _percent(kpi.raw_observed_value)} | {_money(kpi.quality_adjusted_value, portfolio.reporting_currency) if kpi.kpi not in {'Analytics Software CAGR', 'Service Contract renewal proxy'} else _percent(kpi.quality_adjusted_value)} | {_money(kpi.adjusted_delta, portfolio.reporting_currency) if kpi.kpi not in {'Analytics Software CAGR', 'Service Contract renewal proxy'} else _percent(kpi.adjusted_delta)} | {kpi.status} | {_source_citations(state, kpi.evidence_ids)} |"
         )
 
     lines.extend([
@@ -687,9 +767,12 @@ def run_portfolio_resilience_workflow(
     *,
     human_decision: str = "REJECT",
     output_dir: Path | None = None,
+    input_contract: AnalysisInputContract | dict[str, Any] | None = None,
 ) -> PortfolioWorkflowResult:
     try:
-        portfolio = analyze_portfolio_resilience(Path(source))
+        if input_contract is None and store.brief_path.exists():
+            input_contract = normalize_work_brief(store.load_brief()).contract_for_domain("portfolio_resilience")
+        portfolio = analyze_portfolio_resilience(Path(source), input_contract=input_contract)
         pending = store.save_pending(portfolio.state)
         review = review_analysis_state(pending)
         acceptance = review_and_accept_pending_analysis(store, pending, review, f"review-{pending.investigation_id}-{pending.revision}", human_decision=human_decision)

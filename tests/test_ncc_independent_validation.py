@@ -128,3 +128,20 @@ def test_planning_threshold_and_missing_feasibility_inputs_remain_honest():
     missing = conditional_check("decision_challenge", ("margin", "capacity"), interpretation="conditional recommendation")
     assert missing.status == ReviewSlotStatus.PENDING
     assert missing.limitations == ("missing feasibility input: margin", "missing feasibility input: capacity")
+
+
+def test_selected_checks_omit_irrelevant_categories_and_keep_unavailable_checks_pending(tmp_path):
+    workbook = tmp_path / "ncc-fixture.xlsx"
+    make_workbook(workbook)
+
+    report = run_independent_validation(
+        workbook,
+        required_check_ids=("source_fidelity", "decision_challenge"),
+        missing_inputs=("margin",),
+    )
+
+    assert [check.check_id for check in report.checks] == ["source_fidelity", "decision_challenge"]
+    assert report.checks[0].status == ReviewSlotStatus.PASS
+    assert report.checks[1].status == ReviewSlotStatus.PENDING
+    assert report.checks[1].limitations == ("missing validation input: margin",)
+    assert not report.accepted
