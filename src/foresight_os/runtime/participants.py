@@ -68,7 +68,16 @@ class AgentFactory:
             instructions += (
                 " For spreadsheet_read, pass source as a string and use the selected sheet or range "
                 "to bound the read. Omit limits unless a concrete measured safety bound is required; "
-                "do not invent low max_rows or max_cells values that could truncate the selected sheet."
+                "do not invent low max_rows or max_cells values that could truncate the selected sheet. "
+                "Keep source set to the approved workbook path; never use workbook_sha256, a hash, or "
+                "a provenance digest as the source path."
+            )
+        if "data_analysis" in required_capabilities:
+            instructions += (
+                " For data_analysis, operation kind must be one of aggregate, sum, mean, scenario, "
+                "sensitivity, compare, join, nulls, missing, or duplicates; summary is unsupported. "
+                "Use value_column for aggregate, sum, mean, scenario, and sensitivity; use columns "
+                "for compare; use key_columns for duplicates."
             )
         if "document_read" in required_capabilities:
             instructions += (
@@ -86,8 +95,9 @@ class AgentFactory:
                 " For domain_validation, pass either a complete analysis payload or an evidence candidate "
                 "with only candidate_id, capability_id, source, request, excerpt, provenance, limitations, "
                 "acquisition_kind, retrieved_at, query, context, raw_result, and retrieval_proof; do not "
-                "pass scorecard weights, claims, recommendations, stage results, or other analytical "
-                "payloads as candidate fields."
+                "pass scorecard weights, claims, recommendations, stage results, stage_id, objective, "
+                "decision_question, horizon, research_needs, relevant_constraints, dependency_outputs, "
+                "or other stage metadata as candidate fields."
             )
         if "calculation" in required_capabilities:
             instructions += (
@@ -119,9 +129,15 @@ class AgentFactory:
             instructions += (
                 " The stage result must be self-contained: include every evidence record used by "
                 "this stage in the current payload, and re-declare dependency evidence before "
-                "referencing it. Every relationship_ids entry must refer to a relationship "
+                "referencing it. Before any claim, implication, or recommendation references an "
+                "evidence ID from dependency_outputs, copy that evidence record verbatim into the "
+                "current evidence collection; never reference dependency-only evidence. Every "
+                "relationship_ids entry must refer to a relationship "
                 "declared in the current relationships collection or an existing canonical "
-                "relationship; never reference an ID that appears only in dependency_outputs."
+                "relationship; never reference an ID that appears only in dependency_outputs. "
+                "Before returning, audit every evidence_ids, relationship_ids, input_ids, from_id, "
+                "and to_id value against an ID declared in the current payload; remove any "
+                "reference without a matching local record."
             )
             instructions += (
                 " When re-declaring an existing dependency record, copy every field verbatim; do not "

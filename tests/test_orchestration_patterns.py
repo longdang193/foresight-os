@@ -13,6 +13,7 @@ from foresight_os.domain.validation import ValidationError
 from foresight_os.analysis.result_committer import decode_stage_output
 from foresight_os.runtime.workflow import CanonicalStageResult, _canonical_result_hash, _close_agents, _dependency_stage_ids, _expand_dependency_records, _run_native_stage, _synthesize_stage_outputs, _workflow_output_value, run_recipe_async
 from foresight_os.runtime.metrics import BudgetExceededError, RunMetrics
+import foresight_os.runtime.workflow as workflow_module
 
 
 class FakeChatClient:
@@ -71,6 +72,49 @@ def test_native_sequential_concurrent_and_group_chat_execute_with_installed_buil
     for pattern in (ExecutionPattern.SEQUENTIAL, ExecutionPattern.CONCURRENT, ExecutionPattern.GROUP_CHAT):
         outputs = asyncio.run(_run_native_stage(pattern, "hello", client, [{"purpose": "one"}, {"purpose": "two"}]))
         assert outputs
+
+
+def test_native_sequential_reviewer_retains_original_stage_context(monkeypatch):
+    prompts = []
+
+    class ToolAgent:
+        def __init__(self, agent_id):
+            self.id = agent_id
+            self.client = SimpleNamespace()
+            self.default_options = {"tools": [object()]}
+
+    async def fake_run_agent(agent, prompt, options, **kwargs):
+        prompts.append(prompt)
+        return {"stage_id": "stage-1", "status": "ready"}
+
+    class ToolClient(FakeChatClient):
+        def as_agent(self, **kwargs):
+            return ToolAgent(kwargs["id"])
+
+    class Builder:
+        def __init__(self, **kwargs):
+            pass
+
+        def build(self):
+            return None
+
+    monkeypatch.setattr("agent_framework.orchestrations.SequentialBuilder", Builder)
+    monkeypatch.setattr(workflow_module, "run_agent_with_tool_fallback", fake_run_agent)
+
+    asyncio.run(
+        _run_native_stage(
+            ExecutionPattern.SEQUENTIAL,
+            "exact workbook path: data/exercise1-nielsenIQ/NCC 2022 - Semi Final Case - Data set.xlsx",
+            ToolClient(),
+            [{"purpose": "one"}, {"purpose": "two"}],
+            run_context={"require_structured_output": True, "structured_output_schema": {}},
+        )
+    )
+
+    assert len(prompts) == 2
+    assert "exact workbook path" in prompts[0]
+    assert "exact workbook path" in prompts[1]
+    assert "Review this proposal" in prompts[1]
 
 
 def test_dependency_records_include_referenced_canonical_ancestors():
@@ -347,6 +391,59 @@ def test_multi_participant_stage_deduplicates_equivalent_records_with_different_
     result = _synthesize_stage_outputs(stage, [first, second])
 
     assert len(result["evidence"]) == 1
+
+
+def test_multi_participant_typed_synthesis_allows_cross_participant_relationships():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "one"}, {"id": "two"}),
+        "typed-result",
+        "typed-result",
+        {},
+        synthesis_policy="aggregate-typed-results",
+    )
+    first = {
+        "contract": "analysis-stage-result/v1",
+        "stage_id": "stage-1",
+        "evidence": [{
+            "id": "evidence-one",
+            "source_locator": {"file_version": "v1", "sheet": "Summary", "range": "A1", "units": "count", "transformation": "none", "calculation": "observed"},
+            "version": "v1",
+            "date": "2026-10-16",
+            "excerpt": "First participant evidence.",
+            "limitations": [],
+        }],
+        "calculations": [], "claims": [], "implications": [], "recommendations": [], "artifacts": [],
+        "relationships": [], "assumptions": [], "uncertainty": [], "monitoring_indicators": [],
+    }
+    second = {
+        "contract": "analysis-stage-result/v1",
+        "stage_id": "stage-1",
+        "evidence": [],
+        "calculations": [],
+        "claims": [{
+            "id": "claim-two",
+            "statement": "The first participant evidence supports this claim.",
+            "basis": "DERIVED",
+            "assessment": "UNASSESSED",
+            "evidence_ids": ["evidence-one"],
+            "relationship_ids": ["relationship-two"],
+        }],
+        "implications": [], "recommendations": [], "artifacts": [],
+        "relationships": [{
+            "id": "relationship-two",
+            "from_id": "evidence-one",
+            "to_id": "claim-two",
+            "relation_type": "supports",
+        }],
+        "assumptions": [], "uncertainty": [], "monitoring_indicators": [],
+    }
+
+    result = _synthesize_stage_outputs(stage, [first, second])
+
+    assert len(result["relationships"]) == 1
+    assert result["claims"][0]["relationship_ids"] == [result["relationships"][0]["id"]]
 
 
 def test_admitted_native_execution_validates_the_approved_recipe_snapshot():

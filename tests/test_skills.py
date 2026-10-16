@@ -84,8 +84,10 @@ def test_factory_binds_exact_stage_id_for_structured_results():
     assert "produces only from claim/implication/recommendation to artifact" in captured["instructions"]
     assert "omit the edge rather than inventing a relationship" in captured["instructions"]
     assert "stage result must be self-contained" in captured["instructions"]
+    assert "never reference dependency-only evidence" in captured["instructions"]
     assert "Every relationship_ids entry must refer to a relationship" in captured["instructions"]
     assert "never reference an ID that appears only in dependency_outputs" in captured["instructions"]
+    assert "audit every evidence_ids" in captured["instructions"]
     assert "copy every field verbatim" in captured["instructions"]
     assert "use a new record ID for a revised interpretation" in captured["instructions"]
     assert "never use a spreadsheet coordinate" in captured["instructions"]
@@ -114,6 +116,24 @@ def test_factory_documents_spreadsheet_selection_shape():
     assert "also provide sheet_names for every selected sheet" in captured["instructions"]
     assert "do not request a blanket workbook read" in captured["instructions"]
     assert "Read one sheet per call" in captured["instructions"]
+    assert "never use workbook_sha256" in captured["instructions"]
+
+
+def test_factory_documents_supported_data_analysis_operations():
+    captured = {}
+
+    class Client:
+        def as_agent(self, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+    AgentFactory(Client()).create(
+        ParticipantConfig("analyst", "analyst", "analyze workbook", capability_ids=("data_analysis",)),
+        {"tools_by_participant": {"analyst": []}},
+    )
+
+    assert "operation kind must be one of aggregate, sum, mean" in captured["instructions"]
+    assert "summary is unsupported" in captured["instructions"]
 
 
 def test_factory_documents_domain_validation_candidate_contract():
@@ -132,6 +152,7 @@ def test_factory_documents_domain_validation_candidate_contract():
     assert "with only candidate_id, capability_id, source, request, excerpt" in captured["instructions"]
     assert "do not pass scorecard weights" in captured["instructions"]
     assert "stage results" in captured["instructions"]
+    assert "dependency_outputs" in captured["instructions"]
 
 
 def test_factory_documents_calculation_input_contract():
