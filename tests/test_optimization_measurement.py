@@ -58,6 +58,10 @@ def _receipt() -> dict:
             "p95_ms": 10,
             "peak_allocation_bytes": 100,
             "deterministic_key": "same",
+            "timing_paths": {
+                name: {"wall_time_ms": 10}
+                for name in ("cold_workbook", "same_view_repeat", "repeated_investigation", "analyst_validator_reuse")
+            },
             "workloads": {
                 name: {"executed": True, "status": "VERIFIED", "correctness": "VERIFIED", "limitation": None}
                 for name in MANDATORY_XLSX_WORKLOADS
@@ -158,6 +162,19 @@ def test_comparator_rejects_workload_pattern_and_resource_regressions():
     result = compare(baseline, release)
     assert not result["accepted"]
     assert "soak.monotonic_growth=false" in result["missing_required_evidence"]["release"]
+
+
+def test_comparator_rejects_large_warm_and_repeated_timing_path_regressions():
+    baseline = _receipt()
+    release = deepcopy(baseline)
+    release["xlsx"]["timing_paths"]["same_view_repeat"]["wall_time_ms"] = 25
+    release["xlsx"]["timing_paths"]["repeated_investigation"]["wall_time_ms"] = 25
+
+    result = compare(baseline, release)
+
+    assert not result["accepted"]
+    assert result["regression"]["timing_paths_pct"]["same_view_repeat"] == 150.0
+    assert result["regression"]["timing_paths_pct"]["repeated_investigation"] == 150.0
 
 
 def test_comparator_rejects_new_calls_for_reused_stage():

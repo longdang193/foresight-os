@@ -336,6 +336,36 @@ def test_typed_synthesis_rejects_computational_dependency_cycles():
     assert caught.value.code == "DEPENDENCY_CYCLE"
 
 
+def test_typed_synthesis_enforces_dependency_depth_through_memoized_nodes():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "one"}, {"id": "two"}),
+        "typed-result",
+        "typed-result",
+        {"max_synthesis_dependency_depth": 1},
+        synthesis_policy="aggregate-typed-results",
+    )
+    first = _analytical_record("a", "first")
+    second = _analytical_record("b", "second")
+    third = _analytical_record("c", "third")
+    fourth = _analytical_record("d", "fourth")
+    second["input_ids"] = ["a"]
+    third["input_ids"] = ["b"]
+    fourth["input_ids"] = ["c"]
+
+    with pytest.raises(ValidationError) as caught:
+        _synthesize_stage_outputs(
+            stage,
+            [
+                {"stage_id": "stage-1", "contract": "analysis-stage-result/v1", "claims": [first, second]},
+                {"stage_id": "stage-1", "contract": "analysis-stage-result/v1", "claims": [third, fourth]},
+            ],
+        )
+
+    assert caught.value.code == "BUDGET_EXHAUSTED"
+
+
 def test_relationship_edges_do_not_count_as_computational_dependency_cycles():
     stage = RecipeStage(
         "stage-1",

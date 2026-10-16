@@ -503,8 +503,9 @@ def _synthesize_stage_outputs(
     if preflight_calculations > max_records:
         raise _synthesis_error("BUDGET_EXHAUSTED", f"typed stage synthesis exceeded {max_records} calculations")
     dependency_state: dict[str, str] = {}
+    dependency_depths: dict[str, int] = {}
 
-    def visit_dependency(record_id: str, depth: int, path: tuple[str, ...]) -> None:
+    def visit_dependency(record_id: str, depth: int, path: tuple[str, ...]) -> int:
         checkpoint()
         if depth > max_dependency_depth:
             raise _synthesis_error("BUDGET_EXHAUSTED", f"typed stage synthesis exceeded {max_dependency_depth} dependency levels")
@@ -514,13 +515,20 @@ def _synthesize_stage_outputs(
             cycle = " -> ".join((*path[cycle_start:], record_id))
             raise _synthesis_error("DEPENDENCY_CYCLE", f"typed stage synthesis contains a dependency cycle: {cycle}")
         if state == "DONE":
-            return
+            longest_depth = depth + dependency_depths[record_id]
+            if longest_depth > max_dependency_depth:
+                raise _synthesis_error("BUDGET_EXHAUSTED", f"typed stage synthesis exceeded {max_dependency_depth} dependency levels")
+            return dependency_depths[record_id]
         dependency_state[record_id] = "VISITING"
+        longest_depth = 0
         for dependency in sorted(raw_dependencies.get(record_id, ())):
             checkpoint()
             if dependency in raw_record_ids:
-                visit_dependency(dependency, depth + 1, (*path, record_id))
+                child_depth = visit_dependency(dependency, depth + 1, (*path, record_id))
+                longest_depth = max(longest_depth, child_depth + 1)
+        dependency_depths[record_id] = longest_depth
         dependency_state[record_id] = "DONE"
+        return longest_depth
 
     for root in sorted(raw_record_ids):
         visit_dependency(root, 0, ())
