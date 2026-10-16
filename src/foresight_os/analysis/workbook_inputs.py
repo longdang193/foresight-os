@@ -84,10 +84,11 @@ def apply_table_column_mappings(
     consumed_canonical_columns: Iterable[str],
 ) -> list[dict[str, Any]]:
     consumed = {str(column) for column in consumed_canonical_columns}
+    headers = {str(header) for header in getattr(table, "columns", ())}
     table_mappings = {
         str(canonical): str(source)
         for canonical, source in (mappings or {}).items()
-        if str(canonical) in consumed
+        if str(canonical) in consumed and (str(source) in headers or str(canonical) not in headers)
     }
     return apply_column_mappings(
         rows,

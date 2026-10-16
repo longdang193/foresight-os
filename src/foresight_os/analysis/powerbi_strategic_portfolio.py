@@ -122,8 +122,11 @@ def _period_label(spec: _PeriodSpec, window: tuple[int, int]) -> str:
 def _select_period_spec(contract: AnalysisInputContract, raw: str | None, default_year: int) -> _PeriodSpec:
     configured_specs = tuple(_parse_period(period) for period in contract.periods)
     requested_year = int(raw) if raw and raw.isdigit() and len(raw) == 4 else default_year
+    specs = contract.period_specs
     if raw:
         exact = next((spec for spec in configured_specs if spec.raw == raw), None)
+        if exact is None and not (raw.isdigit() and len(raw) == 4):
+            exact = next((spec for spec in specs if spec.raw == raw), None)
         if exact is not None:
             return exact
     candidates = [spec for spec in configured_specs if spec.start_year == requested_year]
@@ -131,11 +134,6 @@ def _select_period_spec(contract: AnalysisInputContract, raw: str | None, defaul
         return candidates[0]
     if len(candidates) > 1:
         raise ValueError(f"ambiguous period selection for {requested_year}; use an explicit baseline or comparison period")
-    specs = contract.period_specs
-    if raw:
-        exact = next((spec for spec in specs if spec.raw == raw), None)
-        if exact is not None:
-            return exact
     return _PeriodSpec(str(requested_year), requested_year, None, requested_year, None, "year")
 
 
@@ -184,8 +182,12 @@ def analyze_powerbi_strategic_portfolio(source: Path, input_contract: AnalysisIn
         "Strategic_Options": ("Option_ID", "Option", "Investment_EUR", "Reversibility", "Strategic_Hypothesis"),
         "Change_One_Input": ("Change_ID", "Expected_Reassessment", "Replacement"),
     }
+    consumed_columns = {
+        **required_columns,
+        "Fact_Performance": (*required_columns["Fact_Performance"], "Refresh_Timestamp"),
+    }
     rows = {
-        name: apply_table_column_mappings(table, _rows(table), contract.column_mappings, required_columns[name])
+        name: apply_table_column_mappings(table, _rows(table), contract.column_mappings, consumed_columns[name])
         for name, table in tables.items()
         if name != "Brief"
     }

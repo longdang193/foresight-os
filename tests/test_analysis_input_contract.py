@@ -336,6 +336,28 @@ def test_powerbi_column_mapping_reaches_revenue_calculation(tmp_path):
     assert analysis.revenue_2026_jan_sep > 0
 
 
+def test_powerbi_column_mapping_reaches_optional_refresh_timestamp_consumption(tmp_path):
+    from openpyxl import load_workbook
+
+    source = tmp_path / "powerbi.xlsx"
+    source.write_bytes(Path("tests/fixtures/exercise/05_PowerBI_Strategic_Portfolio.xlsx").read_bytes())
+    workbook = load_workbook(source)
+    fact_sheet = workbook["Fact_Performance"]
+    header_row = next(row for row in fact_sheet.iter_rows() if any(cell.value == "Refresh_Timestamp" for cell in row))
+    refresh_column = next(index for index, cell in enumerate(header_row, start=1) if cell.value == "Refresh_Timestamp")
+    header_row[refresh_column - 1].value = "UpdatedAt"
+    first_data_row = header_row[0].row + 1
+    fact_sheet.cell(first_data_row, refresh_column).value = "2026-11-01"
+    workbook.save(source)
+
+    analysis = analyze_powerbi_strategic_portfolio(
+        source,
+        AnalysisInputContract(domain="powerbi_strategic_portfolio", column_mappings={"Refresh_Timestamp": "UpdatedAt"}),
+    )
+
+    assert any(issue.kind == "STALE_REFRESH" for issue in analysis.data_quality_issues)
+
+
 def test_portfolio_selected_scenarios_are_not_invented():
     analysis = analyze_portfolio_resilience(
         Path("tests/fixtures/exercise/01_Portfolio_Resilience.xlsx"),
@@ -377,3 +399,18 @@ def test_powerbi_same_year_period_specs_remain_distinct():
     assert analysis.baseline_period_label == "2025-01:2025-03"
     assert analysis.comparison_period_label == "2025-04:2025-06"
     assert analysis.revenue_2025_jan_sep != analysis.revenue_2026_jan_sep
+
+
+def test_powerbi_explicit_periods_override_year_matching_configured_windows():
+    analysis = analyze_powerbi_strategic_portfolio(
+        Path("tests/fixtures/exercise/05_PowerBI_Strategic_Portfolio.xlsx"),
+        AnalysisInputContract(
+            domain="powerbi_strategic_portfolio",
+            baseline_period="2025-01:2025-03",
+            comparison_period="2026-04:2026-06",
+            periods=("2025-01:2025-09", "2026-01:2026-09"),
+        ),
+    )
+
+    assert analysis.baseline_period_label == "2025-01:2025-03"
+    assert analysis.comparison_period_label == "2026-04:2026-06"
