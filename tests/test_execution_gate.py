@@ -179,8 +179,13 @@ def test_gate_admits_local_document_and_artifact_capabilities_with_workspace_sco
     recipe = store.load_recipe()
     store.save_recipe(replace(
         recipe,
+        max_total_agent_calls=6,
         stages=tuple(
-            replace(stage, capabilities=("document_read", "artifact_generation"))
+            replace(
+                stage,
+                capabilities=("document_read", "artifact_generation"),
+                limits={**stage.limits, "max_total_agent_calls": 6},
+            )
             for stage in recipe.stages
         ),
     ))

@@ -7,7 +7,13 @@ from jsonschema import Draft202012Validator
 
 from .analysis_inputs import AnalysisInputContract
 from .models import AnalysisState, EvidenceCandidate, ExecutionIntent, MethodProvenance, ResearchNeed, ResearchNeedKind, WorkBrief
-from foresight_os.controller.recipes import INDEPENDENT_VALIDATION_POLICY, ExecutionRecipe, TYPED_REVIEW_CHECK_IDS
+from foresight_os.controller.recipes import (
+    INDEPENDENT_VALIDATION_POLICY,
+    ExecutionRecipe,
+    TYPED_REVIEW_CHECK_IDS,
+    minimum_agent_call_budget,
+    minimum_stage_agent_calls,
+)
 from foresight_os.domain.approval import ApprovalProjection, ApprovalRecord, AdaptationEnvelope
 from .relationships import RecordKind, relationship_rule
 
@@ -102,6 +108,36 @@ def validate_execution_recipe(recipe: ExecutionRecipe | dict[str, Any]) -> dict[
         raise ValidationError("recipe stage IDs must be unique")
     if value.get("stages") and value.get("max_total_agent_calls", 0) < len(value["stages"]):
         raise ValidationError("global agent-call budget must cover the recipe stage count")
+    recipe_object = recipe if isinstance(recipe, ExecutionRecipe) else ExecutionRecipe.from_dict(value)
+    stage_count = len(value.get("stages", ()))
+    if stage_count and int(value.get("max_agent_steps", 0)) < stage_count:
+        raise ValidationError("global agent-step budget must cover the recipe stage count")
+    for stage_value, stage_object in zip(value.get("stages", ()), recipe_object.stages, strict=True):
+        configured_step_limit = int(stage_value.get("limits", {}).get("max_agent_steps", 0))
+        if configured_step_limit < 0:
+            raise ValidationError(f"stage {stage_object.stage_id} has a negative limit")
+        if stage_count and configured_step_limit < stage_count:
+            raise ValidationError(
+                f"stage {stage_object.stage_id} effective agent-step budget {configured_step_limit} "
+                f"is below required minimum {stage_count}"
+            )
+        configured_limit = int(stage_value.get("limits", {}).get("max_total_agent_calls", 0))
+        required_limit = minimum_stage_agent_calls(
+            stage_object,
+            recipe_object.max_correction_rounds,
+            tuple(recipe_object.roles),
+        )
+        if configured_limit < required_limit:
+            raise ValidationError(
+                f"stage {stage_object.stage_id} effective agent-call budget {configured_limit} "
+                f"is below required minimum {required_limit}"
+            )
+    required_global = minimum_agent_call_budget(recipe_object)
+    if int(value.get("max_total_agent_calls", 0)) < required_global:
+        raise ValidationError(
+            f"global effective agent-call budget {value.get('max_total_agent_calls', 0)} "
+            f"is below required minimum {required_global}"
+        )
     seen: set[str] = set()
     for stage in value.get("stages", []):
         if any(dependency not in seen for dependency in stage.get("dependencies", [])):
@@ -184,10 +220,13 @@ def _normalize_work_brief(value: dict[str, Any]) -> dict[str, Any]:
                 {**dict(contract), "domain": str(domain)} if isinstance(contract, dict) else {"domain": str(domain)}
                 for domain, contract in contracts.items()
             ]
-        normalized["analysis_inputs"] = [
-            AnalysisInputContract.from_dict(contract).to_dict()
-            for contract in contracts
-        ]
+        normalized_contracts = []
+        for contract in contracts:
+            try:
+                normalized_contracts.append(AnalysisInputContract.from_dict(contract).to_dict())
+            except ValueError as exc:
+                raise ValidationError(str(exc)) from exc
+        normalized["analysis_inputs"] = normalized_contracts
     normalized.setdefault("horizon", "unspecified")
     normalized.setdefault("consequence_level", "standard")
     return normalized

@@ -133,6 +133,12 @@ def analyze_technology_radar(source: Path, input_contract: AnalysisInputContract
     relevance_by_technology = {str(row.get("Technology")): row for row in relevances}
     priority_by_technology = {str(row.get("Technology")): row for row in priorities}
     issues: list[TechnologyDataQualityIssue] = []
+    scenario_names = ("Acceleration", "Base", "Delay")
+    selected_scenarios = set(contract.scenarios)
+    if selected_scenarios:
+        unknown_scenarios = sorted(selected_scenarios - set(scenario_names))
+        if unknown_scenarios:
+            issues.append(TechnologyDataQualityIssue("UNKNOWN_SCENARIO_SCOPE", f"Requested scenarios are not supported: {unknown_scenarios}.", ()))
     assessments: list[TechnologyAssessment] = []
     for technology, items in sorted(by_technology.items()):
         canonical = [_canonical_source(str(row.get("Source_Family", "")), str(row.get("Notes", ""))) for _, row in items]
@@ -164,7 +170,12 @@ def analyze_technology_radar(source: Path, input_contract: AnalysisInputContract
         relationships.extend(Relationship(f"{claim.id}-supports-{evidence_id}", evidence_id, claim.id, "supports") for evidence_id in claim.evidence_ids)
     scenarios: list[TechnologyScenario] = []
     for item in assessments:
-        scenarios.extend((TechnologyScenario(item.technology, "Acceleration", "Increase exposure if independent deployment signposts are exceeded.", item.evidence_ids), TechnologyScenario(item.technology, "Base", f"Maintain the {item.action_category.lower()} posture while evidence accumulates.", item.evidence_ids), TechnologyScenario(item.technology, "Delay", "Preserve optionality and avoid irreversible commitment if signposts remain weak.", item.evidence_ids)))
+        candidates = (
+            TechnologyScenario(item.technology, "Acceleration", "Increase exposure if independent deployment signposts are exceeded.", item.evidence_ids),
+            TechnologyScenario(item.technology, "Base", f"Maintain the {item.action_category.lower()} posture while evidence accumulates.", item.evidence_ids),
+            TechnologyScenario(item.technology, "Delay", "Preserve optionality and avoid irreversible commitment if signposts remain weak.", item.evidence_ids),
+        )
+        scenarios.extend(candidate for candidate in candidates if not selected_scenarios or candidate.scenario in selected_scenarios)
     quality_ids = [evidence_id for issue in issues for evidence_id in issue.evidence_ids]
     quality = _record("technology-data-quality", f"The technology radar contains {len(issues)} source-independence or scoring caveats that must be retained in the recommendation.", quality_ids or [item.id for item in evidence], assumptions, ("Removing syndicated stories or changing source quality can change evidence rankings.",), ("Independent deployment evidence resolves the source-family and scoring caveats.",), ("Source-family count, media-to-deployment ratio, and signpost status.",))
     claims.append(quality)

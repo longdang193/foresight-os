@@ -530,6 +530,14 @@ def _resolve(value: object, aliases: Mapping[str, str], label: str) -> str:
     return aliases[value]
 
 
+def _canonical_record_id(record_id: object, record: object) -> str:
+    if isinstance(record, Mapping):
+        value = record.get("id")
+    else:
+        value = getattr(record, "id", None)
+    return str(value if value is not None else record_id)
+
+
 def _source_locator(value: object, label: str) -> SourceLocator:
     item = _mapping(value, label)
     _validate_fields(item, _SOURCE_LOCATOR_FIELDS, label)
@@ -551,7 +559,10 @@ def normalize_stage_result(
     existing_records: Mapping[str, object] | None = None,
     existing_record_kinds: Mapping[str, RecordKind] | None = None,
     tolerate_invalid_relationships: bool = False,
-) -> StageAnalyticalResult:
+    prefer_current_aliases: bool = False,
+    trusted_existing_records: Mapping[str, object] | None = None,
+    return_aliases: bool = False,
+) -> StageAnalyticalResult | tuple[StageAnalyticalResult, dict[str, str], dict[str, RecordKind]]:
     """Normalize provider output and assign system-owned canonical identities."""
 
     value = _mapping(payload, "stage result")
@@ -573,29 +584,60 @@ def normalize_stage_result(
         return isinstance(record, Mapping) and field_name in record
 
     known_evidence_aliases = {
-        record_id: record_id
+        record_id: _canonical_record_id(record_id, record)
         for record_id, record in dict(existing_records or {}).items()
         if isinstance(record, Evidence) or has_field(record, "source_locator")
     }
     known_calculation_aliases = {
-        record_id: record_id
+        record_id: _canonical_record_id(record_id, record)
         for record_id, record in dict(existing_records or {}).items()
         if isinstance(record, CalculationRecord) or has_field(record, "formula")
     }
     known_record_aliases = {
-        record_id: record_id
+        record_id: _canonical_record_id(record_id, record)
         for record_id, record in dict(existing_records or {}).items()
         if isinstance(record, (AnalyticalRecord, Artifact)) or has_field(record, "statement") or has_field(record, "path")
     }
     known_relationship_aliases = {
-        record_id: record_id
+        record_id: _canonical_record_id(record_id, record)
         for record_id, record in dict(existing_records or {}).items()
+        if isinstance(record, Relationship) or has_field(record, "relation_type")
+    }
+    trusted_records = dict(existing_records or {}) if trusted_existing_records is None else dict(trusted_existing_records)
+    trusted_evidence_aliases = {
+        record_id: _canonical_record_id(record_id, record)
+        for record_id, record in trusted_records.items()
+        if isinstance(record, Evidence) or has_field(record, "source_locator")
+    }
+    trusted_calculation_aliases = {
+        record_id: _canonical_record_id(record_id, record)
+        for record_id, record in trusted_records.items()
+        if isinstance(record, CalculationRecord) or has_field(record, "formula")
+    }
+    trusted_record_aliases = {
+        record_id: _canonical_record_id(record_id, record)
+        for record_id, record in trusted_records.items()
+        if isinstance(record, (AnalyticalRecord, Artifact)) or has_field(record, "statement") or has_field(record, "path")
+    }
+    trusted_relationship_aliases = {
+        record_id: _canonical_record_id(record_id, record)
+        for record_id, record in trusted_records.items()
         if isinstance(record, Relationship) or has_field(record, "relation_type")
     }
     evidence_aliases: dict[str, str] = {}
     calculation_aliases: dict[str, str] = {}
     record_aliases: dict[str, str] = {}
     record_kinds: dict[str, RecordKind] = dict(existing_record_kinds or {})
+    for record_id, record in dict(existing_records or {}).items():
+        canonical_id = _canonical_record_id(record_id, record)
+        if isinstance(record, Evidence) or has_field(record, "source_locator"):
+            kind = RecordKind.EVIDENCE
+        elif isinstance(record, (AnalyticalRecord, Artifact)) or has_field(record, "statement") or has_field(record, "path"):
+            kind = RecordKind.CLAIM if has_field(record, "statement") else RecordKind.ARTIFACT
+        else:
+            continue
+        record_kinds.setdefault(str(record_id), kind)
+        record_kinds.setdefault(canonical_id, kind)
     evidence: list[Evidence] = []
     for index, raw in enumerate(_list(value.get("evidence"), "evidence")):
         item = _mapping(raw, f"evidence[{index}]")
@@ -631,7 +673,11 @@ def normalize_stage_result(
         input_ids = [
             _resolve(
                 entry,
-                {**evidence_aliases, **calculation_aliases, **known_evidence_aliases, **known_calculation_aliases},
+                ({**evidence_aliases, **calculation_aliases, **known_evidence_aliases, **known_calculation_aliases,
+                  **trusted_evidence_aliases, **trusted_calculation_aliases}
+                 if prefer_current_aliases else
+                 {**evidence_aliases, **calculation_aliases, **known_evidence_aliases, **known_calculation_aliases,
+                  **trusted_evidence_aliases, **trusted_calculation_aliases}),
                 f"calculations[{index}].input_ids",
             )
             for entry in _reference_list(item.get("input_ids"), f"calculations[{index}].input_ids")
@@ -672,7 +718,9 @@ def normalize_stage_result(
             evidence_ids = [
                 _resolve(
                     entry,
-                    {**evidence_aliases, **known_evidence_aliases},
+                    ({**evidence_aliases, **known_evidence_aliases, **trusted_evidence_aliases}
+                     if prefer_current_aliases else
+                     {**evidence_aliases, **known_evidence_aliases, **trusted_evidence_aliases}),
                     f"{collection}[{index}].evidence_ids",
                 )
                 for entry in _reference_list(item.get("evidence_ids", ()), f"{collection}[{index}].evidence_ids")
@@ -741,12 +789,18 @@ def normalize_stage_result(
         try:
             from_id = _resolve(
                 item.get("from_id"),
-                {**record_aliases, **known_evidence_aliases, **known_record_aliases},
+                ({**known_evidence_aliases, **known_record_aliases, **record_aliases}
+                 if not prefer_current_aliases else
+                 {**record_aliases, **known_evidence_aliases, **known_record_aliases})
+                | trusted_evidence_aliases
+                | trusted_record_aliases,
                 f"relationships[{index}].from_id",
             )
             to_id = _resolve(
                 item.get("to_id"),
-                {**record_aliases, **known_evidence_aliases, **known_record_aliases},
+                ({**record_aliases, **known_evidence_aliases, **known_record_aliases}
+                 | trusted_evidence_aliases
+                 | trusted_record_aliases),
                 f"relationships[{index}].to_id",
             )
         except ValidationError:
@@ -797,7 +851,11 @@ def normalize_stage_result(
         for reference in record_inputs[record_id]["relationship_ids"]:
             if reference in rejected_relationship_aliases:
                 continue
-            relationship_id = known_relationship_aliases.get(reference) or relationship_aliases.get(reference)
+            relationship_id = (
+                trusted_relationship_aliases.get(reference)
+                or relationship_aliases.get(reference)
+                or known_relationship_aliases.get(reference)
+            )
             if relationship_id is None:
                 if tolerate_invalid_relationships:
                     continue
@@ -816,7 +874,7 @@ def normalize_stage_result(
         for artifact in artifacts
     )
 
-    return StageAnalyticalResult(
+    result = StageAnalyticalResult(
         stage_id=stage_id,
         contract=expected_contract,
         evidence=tuple(evidence),
@@ -830,3 +888,10 @@ def normalize_stage_result(
         uncertainty=tuple(_text_list(value.get("uncertainty", ()), "stage result.uncertainty")),
         monitoring_indicators=tuple(_text_list(value.get("monitoring_indicators", ()), "stage result.monitoring_indicators")),
     )
+    if return_aliases:
+        alias_map = dict(aliases)
+        alias_map.update(relationship_aliases)
+        for record_id in result.canonical_records():
+            alias_map.setdefault(record_id, record_id)
+        return result, alias_map, record_kinds
+    return result

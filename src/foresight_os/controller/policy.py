@@ -8,6 +8,7 @@ from foresight_os.controller.recipes import (
     RecipeStage,
     ReviewCheckKind,
     make_recipe,
+    minimum_stage_agent_calls,
 )
 from foresight_os.controller.task_shape import TaskShape
 from foresight_os.domain.models import ResearchNeed, ResearchNeedKind, WorkBrief
@@ -310,6 +311,7 @@ def _recipe_for_patterns(
     )
 
     stage_count = len(work_stages) or len(patterns)
+    max_agent_steps = max(base.max_agent_steps, stage_count)
     max_total_agent_calls = max(base.max_total_agent_calls, stage_count)
     if work_stages and source == "explicit_override" and len(patterns) not in (1, len(work_stages)):
         raise ValueError("pattern list must contain one pattern or exactly one pattern per WorkStage")
@@ -329,18 +331,12 @@ def _recipe_for_patterns(
         declared = set(review_policy.reviewer_capability_ids)
         return tuple(item for item in ("web_search", "page_retrieval", "document_read", "spreadsheet_read", "data_analysis", "calculation", "graph_context", "internal_knowledge", "domain_validation", "artifact_generation") if item in declared)
 
-    def participant_uses_tools(stage: object, role: dict[str, object]) -> bool:
-        if role.get("capability_ids"):
-            return True
-        if role.get("purpose") == "review" and review_required:
-            return bool(review_runtime_capabilities(stage))
-        return bool(stage_capabilities(stage)[0])
-
     def stage_call_budget(stage: object, pattern: ExecutionPattern, is_last: bool) -> int:
-        return sum(
-            (3 if participant_uses_tools(stage, role) else 1)
-            * (1 + base.max_correction_rounds)
-            for role in stage_roles(stage, pattern, is_last)
+        return minimum_stage_agent_calls(
+            stage,
+            base.max_correction_rounds,
+            tuple(stage_roles(stage, pattern, is_last)),
+            capabilities=stage_capabilities(stage)[0],
         )
 
     def stage_roles(stage: object, pattern: ExecutionPattern, is_last: bool) -> list[dict[str, object]]:
@@ -418,7 +414,7 @@ def _recipe_for_patterns(
                     if index <= len(work_stages)
                     else {}
                 ),
-                "max_agent_steps": base.max_agent_steps,
+                "max_agent_steps": max_agent_steps,
                 "max_total_agent_calls": max(
                     int(
                         (
@@ -475,7 +471,7 @@ def _recipe_for_patterns(
         base.name,
         patterns[0].value,
         recipe_roles,
-        base.max_agent_steps,
+        max_agent_steps,
         base.max_correction_rounds,
         max_total_agent_calls,
         base.completion,

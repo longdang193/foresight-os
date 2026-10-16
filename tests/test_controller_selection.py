@@ -46,6 +46,18 @@ def test_global_budget_scaling_does_not_inflate_each_stage_limit():
     assert [stage.limits["max_total_agent_calls"] for stage in recipe.stages] == [3, 3, 3, 4]
 
 
+def test_step_budget_scales_to_cover_ordered_stages():
+    brief = create_work_brief(
+        "Which category should launch first?",
+        stages=[WorkStage(f"stage-{index}", f"stage {index}", participants=["analyst"]) for index in range(1, 7)],
+    )
+
+    recipe = select_recipe(brief)
+
+    assert recipe.max_agent_steps == 6
+    assert all(stage.limits["max_agent_steps"] == 6 for stage in recipe.stages)
+
+
 def test_tool_enabled_multi_participant_stage_reserves_correction_calls():
     brief = create_work_brief(
         "Which retailer should Lumia select?",

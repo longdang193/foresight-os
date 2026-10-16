@@ -7,6 +7,34 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 
+ANALYSIS_INPUT_CONTRACT_FIELDS = frozenset(
+    {
+        "domain",
+        "name",
+        "required_tables",
+        "tables",
+        "column_mappings",
+        "entity_scope",
+        "entities",
+        "periods",
+        "baseline_period",
+        "comparison_period",
+        "scenarios",
+        "units",
+        "reporting_currency",
+        "currency",
+        "conversion_rates",
+        "duplicate_policy",
+        "missing_value_policy",
+        "required_calculations",
+        "required_validation_checks",
+        "validation_checks",
+        "assumptions",
+        "compatibility_assumption",
+    }
+)
+
+
 def _tuple(value: Any) -> tuple[str, ...]:
     if value is None:
         return ()
@@ -52,6 +80,9 @@ class AnalysisInputContract:
         if isinstance(value, cls):
             return value
         data = dict(value)
+        unknown = sorted(set(data) - ANALYSIS_INPUT_CONTRACT_FIELDS)
+        if unknown:
+            raise ValueError(f"analysis input contract contains unsupported fields: {', '.join(unknown)}")
         rates = {str(key): float(rate) for key, rate in dict(data.get("conversion_rates", {})).items()}
         return cls(
             domain=str(data.get("domain", data.get("name", ""))),

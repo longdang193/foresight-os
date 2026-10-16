@@ -44,6 +44,34 @@ def test_recipe_rejects_global_call_budget_below_stage_count():
         validate_execution_recipe(recipe)
 
 
+def test_recipe_rejects_global_step_budget_below_stage_count():
+    recipe = make_recipe(RecipeName.DIRECT).to_dict()
+    second_stage = deepcopy(recipe["stages"][0])
+    second_stage["stage_id"] = "stage-2"
+    recipe["stages"].extend([second_stage, deepcopy(second_stage)])
+    recipe["stages"][2]["stage_id"] = "stage-3"
+    recipe["max_agent_steps"] = 2
+    recipe["max_total_agent_calls"] = 9
+
+    with pytest.raises(ValidationError, match="global agent-step budget"):
+        validate_execution_recipe(recipe)
+
+
+def test_recipe_rejects_budget_below_tool_and_participant_requirements():
+    recipe = make_recipe(RecipeName.DIRECT).to_dict()
+    recipe["max_correction_rounds"] = 1
+    recipe["max_total_agent_calls"] = 1
+    recipe["stages"][0]["capabilities"] = ["spreadsheet_read"]
+    recipe["stages"][0]["participants"] = [
+        {"id": "analyst", "purpose": "analyst"},
+        {"id": "reviewer", "purpose": "review"},
+    ]
+    recipe["stages"][0]["limits"]["max_total_agent_calls"] = 1
+
+    with pytest.raises(ValidationError, match="effective agent-call budget"):
+        validate_execution_recipe(recipe)
+
+
 def test_approval_projection_excludes_secret_fields():
     projection = ApprovalProjection.from_values({**brief().to_dict(), "api_token": "secret"}, make_recipe(RecipeName.DIRECT), AdaptationEnvelope())
     assert projection.to_dict()["brief"]["api_token"] == "[excluded]"

@@ -23,6 +23,7 @@ from foresight_os.controller.budgets import BudgetState
 from foresight_os.domain.validation import ValidationError
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import RevisionStatus
+from foresight_os.domain.relationships import RecordKind
 from foresight_os.runtime.metrics import (
     BudgetExceededError,
     CleanupError,
@@ -251,7 +252,11 @@ async def _run_native_stage(
                     on_call=on_call,
                 )
                 results.append(result)
-                current_prompt = f"Challenge this proposal and return the required structured result:\n{result}"
+                current_prompt = (
+                    f"Retain the original stage input and source context:\n{prompt}\n\n"
+                    "Challenge this proposal and return the required structured result:\n"
+                    f"{result}"
+                )
                 if metrics is not None:
                     metrics.chat_rounds += 1
             return results
@@ -267,7 +272,11 @@ async def _run_native_stage(
             )
             results.append(result)
             if index + 1 < len(agents):
-                current_prompt = f"Review this proposal and return the required structured result:\n{result}"
+                current_prompt = (
+                    f"Retain the original stage input and source context:\n{prompt}\n\n"
+                    "Review this proposal and return the required structured result:\n"
+                    f"{result}"
+                )
         return results
     if tools_enabled:
         result = await workflow.run(prompt)
@@ -361,22 +370,127 @@ def _synthesize_stage_outputs(
         if allow_legacy_fallback:
             return outputs[-1] if outputs else None
         raise ValidationError("typed stage synthesis requires mapping outputs")
+    typed_outputs = all("contract" in output and "stage_id" in output for output in outputs)
     normalized_outputs: list[Mapping[str, Any]] = []
-    for output in outputs:
-        if "contract" in output and "stage_id" in output:
-            normalized_outputs.append(
-                normalize_stage_result(
+    alias_records: dict[str, object] = {}
+    alias_kinds: dict[str, RecordKind] = {}
+    collections = ("evidence", "calculations", "claims", "implications", "recommendations", "artifacts", "relationships")
+    collection_kinds = {
+        "evidence": RecordKind.EVIDENCE,
+        "claims": RecordKind.CLAIM,
+        "implications": RecordKind.IMPLICATION,
+        "recommendations": RecordKind.RECOMMENDATION,
+        "artifacts": RecordKind.ARTIFACT,
+    }
+
+    if typed_outputs:
+        seed_outputs: list[Mapping[str, Any]] = list(outputs)
+        total_entries = sum(len(output.get(key, [])) for output in seed_outputs for key in collections)
+        for _ in range(max(3, total_entries + 2)):
+            peer_candidates: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
+            for output in seed_outputs:
+                for key in collections:
+                    for entry in output.get(key, []):
+                        if isinstance(entry, Mapping) and entry.get("id"):
+                            peer_candidates.setdefault((key, str(entry["id"])), []).append(entry)
+
+            def peer_records_for(index: int) -> dict[str, object]:
+                records: dict[str, object] = {}
+                for peer_index, output in enumerate(seed_outputs):
+                    if peer_index == index:
+                        continue
+                    for key in collections:
+                        for entry in output.get(key, []):
+                            if not isinstance(entry, Mapping) or not entry.get("id"):
+                                continue
+                            record_id = str(entry["id"])
+                            candidates = peer_candidates.get((key, record_id), [])
+                            if candidates and all(_canonical_result_hash(candidate) == _canonical_result_hash(candidates[0]) for candidate in candidates):
+                                records.setdefault(record_id, entry)
+                return records
+
+            def peer_record_kinds_for(index: int) -> dict[str, RecordKind]:
+                kinds: dict[str, RecordKind] = {}
+                for peer_index, output in enumerate(seed_outputs):
+                    if peer_index == index:
+                        continue
+                    for key, kind in collection_kinds.items():
+                        for entry in output.get(key, []):
+                            if not isinstance(entry, Mapping) or not entry.get("id"):
+                                continue
+                            record_id = str(entry["id"])
+                            candidates = peer_candidates.get((key, record_id), [])
+                            if not candidates or not all(_canonical_result_hash(candidate) == _canonical_result_hash(candidates[0]) for candidate in candidates):
+                                continue
+                            previous = kinds.get(record_id)
+                            if previous is None or previous == kind:
+                                kinds[record_id] = kind
+                            else:
+                                kinds.pop(record_id, None)
+                return kinds
+
+            next_outputs: list[Mapping[str, Any]] = []
+            next_alias_targets: dict[str, set[str]] = {}
+            next_alias_records: dict[str, object] = {}
+            next_alias_kinds: dict[str, set[RecordKind]] = {}
+            for index, output in enumerate(seed_outputs):
+                dependency_records = dict(alias_records)
+                for record_id, record in (existing_records or {}).items():
+                    dependency_records.setdefault(record_id, record)
+                for record_id, record in peer_records_for(index).items():
+                    dependency_records.setdefault(record_id, record)
+                dependency_record_kinds = dict(alias_kinds)
+                dependency_record_kinds.update(peer_record_kinds_for(index))
+                normalized, output_aliases, output_kinds = normalize_stage_result(
                     output,
                     expected_stage_id=str(getattr(stage, "stage_id", "stage")),
-                    existing_records=existing_records,
+                    existing_records=dependency_records,
+                    existing_record_kinds=dependency_record_kinds,
                     tolerate_invalid_relationships=tolerate_invalid_relationships,
-                ).to_contract_payload()
-            )
-        else:
-            normalized_outputs.append(output)
+                    prefer_current_aliases=True,
+                    trusted_existing_records=existing_records or {},
+                    return_aliases=True,
+                )
+                next_outputs.append(normalized.to_contract_payload())
+                canonical_records = normalized.canonical_records()
+                for alias, canonical_id in output_aliases.items():
+                    record = canonical_records.get(canonical_id)
+                    if record is None:
+                        continue
+                    next_alias_targets.setdefault(alias, set()).add(canonical_id)
+                    next_alias_records.setdefault(alias, record)
+                    kind = output_kinds.get(alias) or output_kinds.get(canonical_id)
+                    if kind is not None:
+                        next_alias_kinds.setdefault(alias, set()).add(kind)
+                        next_alias_kinds.setdefault(canonical_id, set()).add(kind)
+
+            filtered_alias_records: dict[str, object] = {}
+            filtered_alias_kinds: dict[str, RecordKind] = {}
+            for alias, record in next_alias_records.items():
+                if len(next_alias_targets.get(alias, ())) == 1:
+                    filtered_alias_records[alias] = record
+                kinds = next_alias_kinds.get(alias, set())
+                if len(kinds) == 1:
+                    filtered_alias_kinds[alias] = next(iter(kinds))
+
+            if next_outputs == seed_outputs:
+                alias_records = filtered_alias_records
+                alias_kinds = filtered_alias_kinds
+                seed_outputs = next_outputs
+                break
+            seed_outputs = next_outputs
+            alias_records = filtered_alias_records
+            alias_kinds = filtered_alias_kinds
+        normalized_outputs = seed_outputs
+    else:
+        normalized_outputs = list(outputs)
+
+    merge_alias_records = dict(existing_records or {})
+    for alias, record in alias_records.items():
+        merge_alias_records.setdefault(alias, record)
+    merge_alias_kinds = dict(alias_kinds)
     outputs = normalized_outputs
     first = dict(outputs[0])
-    collections = ("evidence", "calculations", "claims", "implications", "recommendations", "artifacts", "relationships")
 
     def merge_records(key: str) -> list[object]:
         merged: list[object] = []
@@ -410,6 +524,16 @@ def _synthesize_stage_outputs(
     first["monitoring_indicators"] = [entry for output in outputs for entry in list(output.get("monitoring_indicators", []))]
     if failures:
         first["uncertainty"].extend(f"participant failure: {type(error).__name__}" for error in failures)
+    if typed_outputs:
+        return normalize_stage_result(
+            first,
+            expected_stage_id=str(getattr(stage, "stage_id", "stage")),
+            existing_records=merge_alias_records,
+            existing_record_kinds=merge_alias_kinds,
+            tolerate_invalid_relationships=tolerate_invalid_relationships,
+            prefer_current_aliases=True,
+            trusted_existing_records=existing_records or {},
+        ).to_contract_payload()
     return first
 
 
@@ -920,19 +1044,35 @@ async def run_recipe_async(
                     "invalid endpoints for relationship" in str(error)
                     or "relationship endpoints must have known record kinds" in str(error)
                     or "unknown reference: relationships[" in str(error)
+                    or ("unknown reference:" in str(error) and ".relationship_ids" in str(error))
                 ):
                     stage_context["tolerate_invalid_relationships"] = True
                 if "conflicting canonical record" in str(error):
                     stage_context["tolerate_conflicting_records"] = True
                 correction_prompt = (
-                    f"{stage_input}\n\n"
+                    f"{json.dumps(_stage_input_payload(stage_input), default=str, ensure_ascii=False, sort_keys=True)}\n\n"
                     "The previous structured result was rejected by canonical validation. "
                     "Correct only the validation issue and return the complete result again. "
-                    "For invalid relationship endpoints, remove the invalid relationship and its "
-                    "ID from every relationship_ids list; do not replace it with a guessed edge. "
+                     "For relationships, every from_id and to_id must refer to a record declared "
+                     "in this current result or copied exactly from dependency_outputs. If either "
+                     "endpoint is missing, undeclared, or has an invalid kind, remove the invalid "
+                     "relationship and its ID from every relationship_ids list; do not replace it "
+                     "with a guessed or dangling edge. "
+                     "Before returning, audit every evidence_ids, relationship_ids, input_ids, "
+                     "from_id, and to_id value against an ID declared in this payload; remove any "
+                     "reference without a matching local record, and do not reuse IDs from another "
+                     "stage or prior run. "
+                     "For unknown references to dependency outputs, copy the exact referenced "
+                     "evidence, calculation, claim, implication, recommendation, artifact, or "
+                     "relationship record into the matching current collection before using its "
+                     "ID; preserve the record ID and fields verbatim and never reference a record "
+                     "that exists only under dependency_outputs. "
                     "For same-ID/different-content conflicts, preserve the exact canonical record "
                     "content and do not rewrite an existing record under the same ID; when two "
                     "participants conflict, preserve the first participant's record verbatim. "
+                     "Every text-list item such as limitations, assumptions, uncertainty, "
+                     "disconfirmation_conditions, and monitoring_indicators must be non-empty; "
+                     "omit empty strings instead of returning them. "
                     f"Validation issue: {error}"
                 )
         if committer is None:

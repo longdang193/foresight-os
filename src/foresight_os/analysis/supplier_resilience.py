@@ -151,6 +151,12 @@ def analyze_supplier_resilience(source: Path, input_contract: AnalysisInputContr
             by_row[(table.sheet, index)] = _row_evidence(table, index, digest)
             evidence.append(by_row[(table.sheet, index)])
     issues: list[SupplierDataQualityIssue] = []
+    available_scenarios = {str(row.get("Scenario")) for row in scenario_rows}
+    selected_scenarios = set(contract.scenarios)
+    if selected_scenarios:
+        unknown_scenarios = sorted(selected_scenarios - available_scenarios)
+        if unknown_scenarios:
+            issues.append(SupplierDataQualityIssue("UNKNOWN_SCENARIO_SCOPE", f"Requested scenarios are not present in the workbook: {unknown_scenarios}.", tuple(by_row[(scenario_table.sheet, index)].id for index in range(len(scenario_rows)))))
     if selected_entities and not supplier_rows:
         issues.append(SupplierDataQualityIssue("EMPTY_ENTITY_SCOPE", f"No supplier rows match the declared entity scope: {sorted(selected_entities)}.", ()))
     duplicate_indexes: set[int] = set()
@@ -199,6 +205,8 @@ def analyze_supplier_resilience(source: Path, input_contract: AnalysisInputContr
     scenarios: list[SupplierScenarioProjection] = []
     for scenario_index, row in enumerate(scenario_rows):
         name = str(row.get("Scenario"))
+        if selected_scenarios and name not in selected_scenarios:
+            continue
         risk = _number(row.get("Demand_at_Risk_pct")) or 0.0
         premium = _number(row.get("Expedite_Premium")) or 0.0
         for metric in metrics:
