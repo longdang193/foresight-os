@@ -372,6 +372,8 @@ def _synthesize_stage_outputs(
         raise ValidationError("typed stage synthesis requires mapping outputs")
     typed_outputs = all("contract" in output and "stage_id" in output for output in outputs)
     normalized_outputs: list[Mapping[str, Any]] = []
+    alias_records: dict[str, object] = {}
+    alias_kinds: dict[str, RecordKind] = {}
     collections = ("evidence", "calculations", "claims", "implications", "recommendations", "artifacts", "relationships")
     collection_kinds = {
         "evidence": RecordKind.EVIDENCE,
@@ -381,160 +383,112 @@ def _synthesize_stage_outputs(
         "artifacts": RecordKind.ARTIFACT,
     }
 
-    peer_candidates: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
     if typed_outputs:
-        for output in outputs:
-            for key in collections:
-                entries = output.get(key, [])
-                if not isinstance(entries, (list, tuple)):
-                    raise ValidationError(f"typed stage synthesis requires a list for {key}")
-                for entry in entries:
-                    if isinstance(entry, Mapping) and entry.get("id"):
-                        peer_candidates.setdefault((key, str(entry["id"])), []).append(entry)
+        seed_outputs: list[Mapping[str, Any]] = list(outputs)
+        total_entries = sum(len(output.get(key, [])) for output in seed_outputs for key in collections)
+        for _ in range(max(3, total_entries + 2)):
+            peer_candidates: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
+            for output in seed_outputs:
+                for key in collections:
+                    for entry in output.get(key, []):
+                        if isinstance(entry, Mapping) and entry.get("id"):
+                            peer_candidates.setdefault((key, str(entry["id"])), []).append(entry)
 
-    def peer_records_for(index: int) -> dict[str, object]:
-        records: dict[str, object] = {}
-        for peer_index, output in enumerate(outputs):
-            if peer_index == index:
-                continue
-            for key in collections:
-                for entry in output.get(key, []):
-                    if not isinstance(entry, Mapping) or not entry.get("id"):
+            def peer_records_for(index: int) -> dict[str, object]:
+                records: dict[str, object] = {}
+                for peer_index, output in enumerate(seed_outputs):
+                    if peer_index == index:
                         continue
-                    record_id = str(entry["id"])
-                    candidates = peer_candidates.get((key, record_id), [])
-                    if candidates and all(_canonical_result_hash(candidate) == _canonical_result_hash(candidates[0]) for candidate in candidates):
-                        records.setdefault(record_id, entry)
-        return records
+                    for key in collections:
+                        for entry in output.get(key, []):
+                            if not isinstance(entry, Mapping) or not entry.get("id"):
+                                continue
+                            record_id = str(entry["id"])
+                            candidates = peer_candidates.get((key, record_id), [])
+                            if candidates and all(_canonical_result_hash(candidate) == _canonical_result_hash(candidates[0]) for candidate in candidates):
+                                records.setdefault(record_id, entry)
+                return records
 
-    def peer_record_kinds_for(index: int) -> dict[str, RecordKind]:
-        kinds: dict[str, RecordKind] = {}
-        for peer_index, output in enumerate(outputs):
-            if peer_index == index:
-                continue
-            for key, kind in collection_kinds.items():
-                for entry in output.get(key, []):
-                    if not isinstance(entry, Mapping) or not entry.get("id"):
+            def peer_record_kinds_for(index: int) -> dict[str, RecordKind]:
+                kinds: dict[str, RecordKind] = {}
+                for peer_index, output in enumerate(seed_outputs):
+                    if peer_index == index:
                         continue
-                    record_id = str(entry["id"])
-                    candidates = peer_candidates.get((key, record_id), [])
-                    if not candidates or not all(_canonical_result_hash(candidate) == _canonical_result_hash(candidates[0]) for candidate in candidates):
-                        continue
-                    previous = kinds.get(record_id)
-                    if previous is None or previous == kind:
-                        kinds[record_id] = kind
-                    else:
-                        kinds.pop(record_id, None)
-        return kinds
+                    for key, kind in collection_kinds.items():
+                        for entry in output.get(key, []):
+                            if not isinstance(entry, Mapping) or not entry.get("id"):
+                                continue
+                            record_id = str(entry["id"])
+                            candidates = peer_candidates.get((key, record_id), [])
+                            if not candidates or not all(_canonical_result_hash(candidate) == _canonical_result_hash(candidates[0]) for candidate in candidates):
+                                continue
+                            previous = kinds.get(record_id)
+                            if previous is None or previous == kind:
+                                kinds[record_id] = kind
+                            else:
+                                kinds.pop(record_id, None)
+                return kinds
 
-    preliminary_outputs: list[Mapping[str, Any]] = []
-    for index, output in enumerate(outputs):
-        if "contract" in output and "stage_id" in output:
-            dependency_records = dict(existing_records or {})
-            for record_id, record in peer_records_for(index).items():
-                dependency_records.setdefault(record_id, record)
-            dependency_record_kinds = peer_record_kinds_for(index)
-            preliminary_outputs.append(
-                normalize_stage_result(
+            next_outputs: list[Mapping[str, Any]] = []
+            next_alias_targets: dict[str, set[str]] = {}
+            next_alias_records: dict[str, object] = {}
+            next_alias_kinds: dict[str, set[RecordKind]] = {}
+            for index, output in enumerate(seed_outputs):
+                dependency_records = dict(alias_records)
+                for record_id, record in (existing_records or {}).items():
+                    dependency_records.setdefault(record_id, record)
+                for record_id, record in peer_records_for(index).items():
+                    dependency_records.setdefault(record_id, record)
+                dependency_record_kinds = dict(alias_kinds)
+                dependency_record_kinds.update(peer_record_kinds_for(index))
+                normalized, output_aliases, output_kinds = normalize_stage_result(
                     output,
                     expected_stage_id=str(getattr(stage, "stage_id", "stage")),
                     existing_records=dependency_records,
                     existing_record_kinds=dependency_record_kinds,
                     tolerate_invalid_relationships=tolerate_invalid_relationships,
                     prefer_current_aliases=True,
-                ).to_contract_payload()
-            )
-        else:
-            preliminary_outputs.append(output)
-
-    normalized_alias_targets: dict[str, set[str]] = {}
-    normalized_alias_records: dict[str, object] = {}
-    normalized_alias_kinds: dict[str, set[RecordKind]] = {}
-    for raw_output, normalized in zip(outputs, preliminary_outputs):
-        if "contract" in raw_output and "stage_id" in raw_output:
-            for key in collections:
-                raw_entries = raw_output.get(key, [])
-                normalized_entries = normalized.get(key, [])
-                for raw_entry, normalized_entry in zip(raw_entries, normalized_entries):
-                    if not isinstance(raw_entry, Mapping) or not isinstance(normalized_entry, Mapping):
+                    trusted_existing_records=existing_records or {},
+                    return_aliases=True,
+                )
+                next_outputs.append(normalized.to_contract_payload())
+                canonical_records = normalized.canonical_records()
+                for alias, canonical_id in output_aliases.items():
+                    record = canonical_records.get(canonical_id)
+                    if record is None:
                         continue
-                    raw_id = raw_entry.get("id")
-                    canonical_id = normalized_entry.get("id")
-                    if raw_id and canonical_id:
-                        normalized_alias_targets.setdefault(str(raw_id), set()).add(str(canonical_id))
-                        normalized_alias_records.setdefault(str(raw_id), normalized_entry)
-                        kind = collection_kinds.get(key)
-                        if kind is not None:
-                            normalized_alias_kinds.setdefault(str(raw_id), set()).add(kind)
-                            normalized_alias_kinds.setdefault(str(canonical_id), set()).add(kind)
-    canonical_alias_records = dict(existing_records or {})
-    canonical_alias_kinds: dict[str, RecordKind] = {}
-    for record_id, record in normalized_alias_records.items():
-        if len(normalized_alias_targets.get(record_id, ())) == 1:
-            canonical_alias_records.setdefault(record_id, record)
-        kinds = normalized_alias_kinds.get(record_id, set())
-        if len(kinds) == 1:
-            canonical_alias_kinds[record_id] = next(iter(kinds))
-    for record_id, kinds in normalized_alias_kinds.items():
-        if len(kinds) == 1:
-            canonical_alias_kinds[record_id] = next(iter(kinds))
-
-    for output in preliminary_outputs:
-        if "contract" in output and "stage_id" in output:
-            normalized_outputs.append(
-                normalize_stage_result(
-                    output,
-                    expected_stage_id=str(getattr(stage, "stage_id", "stage")),
-                    existing_records=canonical_alias_records,
-                    existing_record_kinds=canonical_alias_kinds,
-                    tolerate_invalid_relationships=tolerate_invalid_relationships,
-                    prefer_current_aliases=True,
-                ).to_contract_payload()
-            )
-        else:
-            normalized_outputs.append(output)
-
-    final_alias_targets: dict[str, set[str]] = {}
-    final_alias_records: dict[str, object] = {}
-    final_alias_kinds: dict[str, set[RecordKind]] = {}
-    for raw_output, preliminary, normalized in zip(outputs, preliminary_outputs, normalized_outputs):
-        if "contract" not in raw_output or "stage_id" not in raw_output:
-            continue
-        for key in collections:
-            raw_entries = raw_output.get(key, [])
-            preliminary_entries = preliminary.get(key, [])
-            normalized_entries = normalized.get(key, [])
-            kind = collection_kinds.get(key)
-            for raw_entry, preliminary_entry, normalized_entry in zip(raw_entries, preliminary_entries, normalized_entries):
-                if not isinstance(normalized_entry, Mapping):
-                    continue
-                final_id = normalized_entry.get("id")
-                if not final_id:
-                    continue
-                aliases = {
-                    str(alias)
-                    for alias in (
-                        raw_entry.get("id") if isinstance(raw_entry, Mapping) else None,
-                        preliminary_entry.get("id") if isinstance(preliminary_entry, Mapping) else None,
-                    )
-                    if alias
-                }
-                for alias in aliases:
-                    final_alias_targets.setdefault(alias, set()).add(str(final_id))
-                    final_alias_records.setdefault(alias, normalized_entry)
+                    next_alias_targets.setdefault(alias, set()).add(canonical_id)
+                    next_alias_records.setdefault(alias, record)
+                    kind = output_kinds.get(alias) or output_kinds.get(canonical_id)
                     if kind is not None:
-                        final_alias_kinds.setdefault(alias, set()).add(kind)
-                if kind is not None:
-                    final_alias_kinds.setdefault(str(final_id), set()).add(kind)
+                        next_alias_kinds.setdefault(alias, set()).add(kind)
+                        next_alias_kinds.setdefault(canonical_id, set()).add(kind)
+
+            filtered_alias_records: dict[str, object] = {}
+            filtered_alias_kinds: dict[str, RecordKind] = {}
+            for alias, record in next_alias_records.items():
+                if len(next_alias_targets.get(alias, ())) == 1:
+                    filtered_alias_records[alias] = record
+                kinds = next_alias_kinds.get(alias, set())
+                if len(kinds) == 1:
+                    filtered_alias_kinds[alias] = next(iter(kinds))
+
+            if next_outputs == seed_outputs:
+                alias_records = filtered_alias_records
+                alias_kinds = filtered_alias_kinds
+                seed_outputs = next_outputs
+                break
+            seed_outputs = next_outputs
+            alias_records = filtered_alias_records
+            alias_kinds = filtered_alias_kinds
+        normalized_outputs = seed_outputs
+    else:
+        normalized_outputs = list(outputs)
 
     merge_alias_records = dict(existing_records or {})
-    merge_alias_kinds = dict(canonical_alias_kinds)
-    for alias, record in final_alias_records.items():
-        if len(final_alias_targets.get(alias, ())) == 1:
-            merge_alias_records.setdefault(alias, record)
-        kinds = final_alias_kinds.get(alias, set())
-        if len(kinds) == 1:
-            merge_alias_kinds[alias] = next(iter(kinds))
+    for alias, record in alias_records.items():
+        merge_alias_records.setdefault(alias, record)
+    merge_alias_kinds = dict(alias_kinds)
     outputs = normalized_outputs
     first = dict(outputs[0])
 
@@ -578,6 +532,7 @@ def _synthesize_stage_outputs(
             existing_record_kinds=merge_alias_kinds,
             tolerate_invalid_relationships=tolerate_invalid_relationships,
             prefer_current_aliases=True,
+            trusted_existing_records=existing_records or {},
         ).to_contract_payload()
     return first
 

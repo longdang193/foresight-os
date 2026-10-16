@@ -686,6 +686,141 @@ def test_synthesis_can_preserve_first_conflicting_record_after_explicit_retry():
     assert synthesized["evidence"] == [{"id": "e1", "statement": "first"}]
 
 
+def test_synthesis_preserves_trusted_existing_evidence_when_peer_reuses_its_alias():
+    prior = normalize_stage_result(_payload())
+    prior_evidence = prior.evidence[0]
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "one"}, {"id": "two"}),
+        "prompt",
+        "typed-result",
+        {},
+    )
+    conflicting = _payload(
+        evidence=[{**_payload()["evidence"][0], "id": prior_evidence.id, "excerpt": "different evidence"}],
+        claims=[{**_payload()["claims"][0], "evidence_ids": [prior_evidence.id], "relationship_ids": []}],
+        relationships=[],
+    )
+
+    synthesized = _synthesize_stage_outputs(
+        stage,
+        [conflicting, conflicting],
+        existing_records={prior_evidence.id: prior_evidence},
+    )
+
+    assert synthesized["claims"][0]["evidence_ids"] == [prior_evidence.id]
+
+
+def test_synthesis_resolves_calculation_aliases_across_three_participant_hops():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "one"}, {"id": "two"}, {"id": "three"}),
+        "prompt",
+        "typed-result",
+        {},
+    )
+    evidence = _payload()["evidence"][0]
+    outputs = [
+        _payload(
+            calculations=[{
+                "id": "calculation-one",
+                "key": {"region": "Vietnam", "measure": "share", "period": "2026", "units": "percent"},
+                "formula": "42",
+                "input_ids": ["provider-evidence"],
+                "output": 42,
+                "units": "percent",
+                "source_locators": ["Summary!B2"],
+            }],
+        ),
+        _payload(
+            evidence=[],
+            claims=[],
+            relationships=[],
+            calculations=[{
+                "id": "calculation-two",
+                "key": {"region": "Vietnam", "measure": "share-adjusted", "period": "2026", "units": "percent"},
+                "formula": "calculation-one + 1",
+                "input_ids": ["calculation-one"],
+                "output": 43,
+                "units": "percent",
+                "source_locators": ["derived"],
+            }],
+        ),
+        _payload(
+            evidence=[],
+            claims=[],
+            relationships=[],
+            calculations=[{
+                "id": "calculation-three",
+                "key": {"region": "Vietnam", "measure": "share-final", "period": "2026", "units": "percent"},
+                "formula": "calculation-two + 1",
+                "input_ids": ["calculation-two"],
+                "output": 44,
+                "units": "percent",
+                "source_locators": ["derived"],
+            }],
+        ),
+    ]
+    outputs[0]["evidence"] = [evidence]
+
+    synthesized = _synthesize_stage_outputs(stage, outputs)
+
+    calculations = {item["formula"]: item for item in synthesized["calculations"]}
+    assert calculations["calculation-one + 1"]["input_ids"] == [calculations["42"]["id"]]
+    assert calculations["calculation-two + 1"]["input_ids"] == [calculations["calculation-one + 1"]["id"]]
+
+
+def test_synthesis_keeps_valid_relationship_alias_after_an_invalid_relationship_is_filtered():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "one"}, {"id": "two"}),
+        "prompt",
+        "typed-result",
+        {},
+    )
+    output = _payload(
+        claims=[{**_payload()["claims"][0], "relationship_ids": ["valid-support"]}],
+        relationships=[
+            {
+                "id": "invalid-support",
+                "from_id": "missing-evidence",
+                "to_id": "provider-claim",
+                "relation_type": "supports",
+            },
+            {
+                "id": "valid-support",
+                "from_id": "provider-evidence",
+                "to_id": "provider-claim",
+                "relation_type": "supports",
+            },
+        ],
+    )
+    peer_output = _payload(
+        evidence=[],
+        claims=[{
+            "id": "peer-claim",
+            "statement": "The valid edge remains usable.",
+            "basis": "DERIVED",
+            "assessment": "UNASSESSED",
+            "evidence_ids": [],
+            "relationship_ids": ["valid-support"],
+        }],
+        relationships=[],
+    )
+
+    synthesized = _synthesize_stage_outputs(
+        stage,
+        [output, peer_output],
+        tolerate_invalid_relationships=True,
+    )
+
+    assert synthesized["claims"][0]["relationship_ids"]
+    assert synthesized["claims"][0]["relationship_ids"][0] == synthesized["relationships"][0]["id"]
+
+
 def test_workflow_hydrates_canonical_records_from_persisted_state_for_cache_reuse(tmp_path):
     store = AnalysisStore(tmp_path / "case")
     evidence = Evidence(
