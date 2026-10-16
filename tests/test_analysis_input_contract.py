@@ -54,6 +54,21 @@ def test_unknown_analysis_input_contract_fields_are_rejected_before_normalizatio
         validate_work_brief(_brief(supplier_resilience={"domain": "supplier_resilience", "entity_scoep": ["Power Electronics"]}))
 
 
+def test_analysis_input_contract_freezes_mappings_and_validates_periods():
+    contract = AnalysisInputContract(
+        domain="supplier_resilience",
+        periods=("2026-01:2026-09",),
+        column_mappings={"Supplier": "Supplier_ID"},
+        conversion_rates={"EUR": 1.0},
+    )
+
+    with pytest.raises(TypeError):
+        contract.column_mappings["Supplier"] = "Other"
+
+    with pytest.raises(ValueError, match="invalid period"):
+        AnalysisInputContract(domain="supplier_resilience", periods=("2026-13",))
+
+
 def test_explicit_incomplete_supplier_conversion_does_not_use_legacy_fx():
     source = Path("tests/fixtures/exercise/02_Supplier_Resilience.xlsx")
     analysis = analyze_supplier_resilience(
@@ -162,7 +177,7 @@ def test_portfolio_missing_canonical_column_fails_before_numeric_defaults(tmp_pa
     workbook["Sales_History"].cell(3, 8).value = "Revenue_USD"
     workbook.save(source)
 
-    with pytest.raises(ToolbeltError, match="canonical column"):
+    with pytest.raises(ToolbeltError, match="MISSING_MAPPED_COLUMN.*canonical column"):
         analyze_portfolio_resilience(source)
 
 

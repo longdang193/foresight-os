@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import dataclass, replace
 from datetime import date
@@ -14,7 +13,7 @@ from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
 from foresight_os.persistence.analysis_store import AnalysisStore
-from foresight_os.runtime.local_toolbelt import SheetSelection, ToolbeltError, spreadsheet_read
+from foresight_os.runtime.local_toolbelt import SheetSelection, SourceSnapshot, ToolbeltError, spreadsheet_read
 
 
 @dataclass(frozen=True)
@@ -114,8 +113,9 @@ def _record(record_id: str, statement: str, evidence_ids: list[str], assumptions
 
 def analyze_supplier_resilience(source: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None) -> SupplierAnalysis:
     source = Path(source)
-    digest = hashlib.sha256(source.read_bytes()).hexdigest()
-    workbook = spreadsheet_read(source, SheetSelection(sheet_names=("Brief", "Supplier_Master", "Incidents", "Scenario_Assumptions", "Mitigation_Options"), include_hidden=True, include_hidden_rows=True))
+    snapshot = SourceSnapshot.capture(source)
+    digest = snapshot.sha256
+    workbook = spreadsheet_read(source, SheetSelection(sheet_names=("Brief", "Supplier_Master", "Incidents", "Scenario_Assumptions", "Mitigation_Options"), include_hidden=True, include_hidden_rows=True), _snapshot=snapshot)
     brief, supplier_table, incident_table, scenario_table, option_table = [_table(workbook, name) for name in ("Brief", "Supplier_Master", "Incidents", "Scenario_Assumptions", "Mitigation_Options")]
     contract = AnalysisInputContract.from_dict(input_contract) if input_contract is not None else AnalysisInputContract(
         domain="supplier_resilience",

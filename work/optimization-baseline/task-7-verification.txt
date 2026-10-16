@@ -1,0 +1,5 @@
+python scripts/check_markdown_links.py README.md AGENTS.md docs/architecture.md docs/evidence-and-evaluation.md evaluation/README.md --tracked-docs
+checked 36 Markdown path(s)
+python -m pytest -q tests/test_local_toolbelt.py tests/test_capabilities.py tests/test_markdown_links.py
+passed
+CI inspection: .github/workflows/ci.yml has concurrency.cancel-in-progress=true; trigger and unique evidence job unchanged.

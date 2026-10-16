@@ -16,6 +16,7 @@ from foresight_os.runtime.local_toolbelt import (
     SourceSnapshot,
     ToolbeltLimits,
     ToolbeltError,
+    TypedTable,
     TypedMeasurement,
     WorkbookContext,
     _implicit_xlsx_bounds,
@@ -86,6 +87,14 @@ def test_source_snapshot_is_byte_exact_and_detects_currentness(tmp_path: Path):
     assert not snapshot.is_current()
 
 
+def test_source_snapshot_rejects_oversized_input_before_retaining_content(tmp_path: Path):
+    source = tmp_path / "oversized.csv"
+    source.write_bytes(b"Region,Value\nNorth,10\n")
+
+    with pytest.raises(ToolbeltError, match="byte limit"):
+        SourceSnapshot.capture(source, max_bytes=4)
+
+
 def test_spreadsheet_read_uses_one_capture_for_cache_identity(workbook_path: Path, monkeypatch):
     cache = WorkbookReadCache()
     captures = 0
@@ -141,6 +150,46 @@ def test_workbook_context_currentness_and_cleanup_are_explicit(tmp_path: Path):
     assert context.stats.snapshot_bytes == 0
     with pytest.raises(ToolbeltError, match="context is closed"):
         context.capture(source)
+
+
+def test_workbook_context_rolls_back_retained_state_when_budget_rejects_read(tmp_path: Path):
+    source = tmp_path / "over-budget.csv"
+    source.write_text("Region,Value\nNorth,10\n", encoding="utf-8")
+    context = WorkbookContext(max_total_bytes=1)
+
+    with pytest.raises(ToolbeltError, match="retained-state budget"):
+        context.read(source)
+
+    assert context.snapshots == {}
+    assert context.cache.size == 0
+    assert context.authority_index.size == 0
+    assert context.stats.snapshot_bytes == 0
+
+
+def test_analysis_cache_uses_material_identity_not_reused_table_ids():
+    cache = WorkbookReadCache()
+    first_table = TypedTable("reused-id", "Values", "Sheet1", (("Value",),), ((10,),), ())
+    second_table = TypedTable("reused-id", "Values", "Sheet1", (("Value",),), ((30,),), ())
+    operation = AnalysisOperation("sum", value_column="Value")
+
+    first = data_analysis(first_table, operation, _cache=cache)
+    second = data_analysis(second_table, operation, _cache=cache)
+    repeat = data_analysis(first_table, operation, _cache=cache)
+
+    assert first.rows[0]["sum"] == 10.0
+    assert second.rows[0]["sum"] == 30.0
+    assert repeat.rows[0]["sum"] == 10.0
+    assert cache.size == 2
+
+
+def test_xlsx_read_uses_pinned_snapshot_bytes_when_live_path_changes(workbook_path: Path):
+    snapshot = SourceSnapshot.capture(workbook_path)
+    workbook_path.write_bytes(b"not an xlsx archive")
+
+    result = spreadsheet_read(str(workbook_path), SheetSelection(sheet_names=("Demand",)), _snapshot=snapshot)
+
+    assert result.workbook_sha256 == snapshot.sha256
+    assert result.tables
 
 
 def test_provider_spreadsheet_arguments_are_json_coerced(workbook_path: Path):

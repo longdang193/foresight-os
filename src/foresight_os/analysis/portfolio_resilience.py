@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 from dataclasses import dataclass, replace
@@ -28,7 +27,7 @@ from foresight_os.domain.models import (
     SourceLocator,
 )
 from foresight_os.persistence.analysis_store import AnalysisStore
-from foresight_os.runtime.local_toolbelt import SheetSelection, ToolbeltError, spreadsheet_read
+from foresight_os.runtime.local_toolbelt import SheetSelection, SourceSnapshot, ToolbeltError, spreadsheet_read
 
 
 @dataclass(frozen=True)
@@ -186,7 +185,8 @@ def _record(
 
 def analyze_portfolio_resilience(source: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None) -> PortfolioAnalysis:
     source = Path(source)
-    source_sha256 = hashlib.sha256(source.read_bytes()).hexdigest()
+    snapshot = SourceSnapshot.capture(source)
+    source_sha256 = snapshot.sha256
     workbook = spreadsheet_read(
         source,
         SheetSelection(
@@ -194,6 +194,7 @@ def analyze_portfolio_resilience(source: Path, input_contract: AnalysisInputCont
             include_hidden=True,
             include_hidden_rows=True,
         ),
+        _snapshot=snapshot,
     )
     brief_table = _table(workbook, "Brief")
     contract = AnalysisInputContract.from_dict(input_contract) if input_contract is not None else AnalysisInputContract(

@@ -32,7 +32,7 @@ from foresight_os.domain.models import (
     SourceLocator,
 )
 from foresight_os.persistence.analysis_store import AnalysisStore
-from foresight_os.runtime.local_toolbelt import SheetSelection, ToolbeltError, spreadsheet_read
+from foresight_os.runtime.local_toolbelt import SheetSelection, SourceSnapshot, ToolbeltError, spreadsheet_read
 
 
 @dataclass(frozen=True)
@@ -264,10 +264,12 @@ def _expected_rows(tables: dict[str, Any]) -> tuple[list[dict[str, Any]], list[d
 def validate_exercises(validator_source: Path, exercise_dir: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None) -> ValidatorResult:
     validator_source = Path(validator_source)
     exercise_dir = Path(exercise_dir)
-    source_sha256 = hashlib.sha256(validator_source.read_bytes()).hexdigest()
+    snapshot = SourceSnapshot.capture(validator_source)
+    source_sha256 = snapshot.sha256
     workbook = spreadsheet_read(
         validator_source,
         SheetSelection(sheet_names=("Overview", "Planted_Issues", "Expected_Reasoning", "Expected_Numerical_Checks"), include_hidden=True, include_hidden_rows=True),
+        _snapshot=snapshot,
     )
     tables = {table.sheet: table for table in workbook.tables}
     key_evidence = [

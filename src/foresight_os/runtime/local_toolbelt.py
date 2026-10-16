@@ -4,6 +4,7 @@ import ast
 import csv
 import hashlib
 import io
+import json
 from itertools import zip_longest
 import operator
 import posixpath
@@ -40,17 +41,24 @@ class SourceSnapshot:
         *,
         cancel_check: Callable[[], bool] | None = None,
         chunk_size: int = 1024 * 1024,
+        max_bytes: int | None = None,
     ) -> "SourceSnapshot":
         path = Path(source)
+        if max_bytes is not None and max_bytes < 1:
+            raise ToolbeltError("source byte limit must be positive")
         digest = hashlib.sha256()
         chunks: list[bytes] = []
+        byte_count = 0
         with path.open("rb") as handle:
             for chunk in iter(lambda: handle.read(chunk_size), b""):
                 _check_cancel(cancel_check)
+                if max_bytes is not None and byte_count + len(chunk) > max_bytes:
+                    raise ToolbeltError("workbook exceeds byte limit")
                 digest.update(chunk)
                 chunks.append(chunk)
+                byte_count += len(chunk)
         content = b"".join(chunks)
-        return cls(str(path), digest.hexdigest(), len(content), content)
+        return cls(str(path), digest.hexdigest(), byte_count, content)
 
     def current_sha256(self, *, cancel_check: Callable[[], bool] | None = None) -> str:
         return _sha256_file(Path(self.source), cancel_check=cancel_check)
@@ -130,10 +138,10 @@ class WorkbookReadCache:
         source_hash: str | None = None,
     ) -> tuple[Any, ...]:
         canonical = str(source.resolve())
-        selection_key = repr(selection)
         limit_key = repr(limits)
         digest = snapshot.sha256 if snapshot is not None else source_hash or self.source_hash(source)
-        return canonical, digest, selection_key, limit_key
+        view_identity = _workbook_view_identity(digest, selection or SheetSelection())
+        return canonical, view_identity.material_fingerprint, limit_key
 
     def get(self, key: tuple[Any, ...]) -> WorkbookReadResult | None:
         entry = self._entries.get(key)
@@ -143,7 +151,7 @@ class WorkbookReadCache:
         self._put(self._entries, key, result)
 
     def analysis_key(self, table: TypedTable, operation: AnalysisOperation, limits: ToolbeltLimits) -> tuple[Any, ...]:
-        return ("analysis", table.id, repr(operation), repr(limits))
+        return ("analysis", table.material_fingerprint, _analysis_operation_identity(operation), repr(limits))
 
     def get_analysis(self, key: tuple[Any, ...]) -> AnalysisResult | None:
         entry = self._analysis_entries.get(key)
@@ -261,6 +269,41 @@ class SheetSelection:
     include_hidden_rows: bool = False
 
 
+@dataclass(frozen=True)
+class WorkbookViewIdentity:
+    source_sha256: str
+    canonical_selection: tuple[Any, ...]
+    hidden_sheet_policy: str
+    hidden_row_policy: str
+    selected_ranges: tuple[tuple[str, str], ...]
+    selected_tables: tuple[tuple[str, str], ...]
+    parser_schema: str = "xlsx-openpyxl-formula-cache-v1"
+
+    @property
+    def material_fingerprint(self) -> str:
+        payload = {
+            "source_sha256": self.source_sha256,
+            "canonical_selection": self.canonical_selection,
+            "hidden_sheet_policy": self.hidden_sheet_policy,
+            "hidden_row_policy": self.hidden_row_policy,
+            "selected_ranges": self.selected_ranges,
+            "selected_tables": self.selected_tables,
+            "parser_schema": self.parser_schema,
+        }
+        return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")).hexdigest()
+
+
+def _workbook_view_identity(source_sha256: str, selection: SheetSelection) -> WorkbookViewIdentity:
+    return WorkbookViewIdentity(
+        source_sha256=source_sha256,
+        canonical_selection=(selection.sheet_names, selection.ranges, selection.tables),
+        hidden_sheet_policy="include" if selection.include_hidden else "visible-only",
+        hidden_row_policy="include" if selection.include_hidden_rows else "visible-only",
+        selected_ranges=selection.ranges,
+        selected_tables=selection.tables,
+    )
+
+
 def _coerce_sheet_selection(value: SheetSelection | Mapping[str, Any] | None) -> SheetSelection | None:
     if value is None or isinstance(value, SheetSelection):
         return value
@@ -339,6 +382,20 @@ class TypedMeasurement:
         }
 
 
+def _stable_material_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _stable_material_value(item) for key, item in sorted(value.items(), key=lambda item: str(item[0]))}
+    if isinstance(value, (list, tuple)):
+        return [_stable_material_value(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if hasattr(value, "to_dict"):
+        return _stable_material_value(value.to_dict())
+    return repr(value)
+
+
 @dataclass(frozen=True)
 class TypedTable:
     id: str
@@ -351,6 +408,24 @@ class TypedTable:
     source_range: str = ""
     related_provenance: tuple[CellProvenance, ...] = ()
     row_measurements: tuple[tuple[TypedMeasurement, ...], ...] = ()
+    material_fingerprint: str = ""
+
+    def __post_init__(self) -> None:
+        if self.material_fingerprint:
+            return
+        payload = {
+            "name": self.name,
+            "sheet": self.sheet,
+            "headers": self.headers,
+            "rows": self.rows,
+            "row_provenance": self.row_provenance,
+            "hidden": self.hidden,
+            "source_range": self.source_range,
+            "related_provenance": self.related_provenance,
+            "row_measurements": self.row_measurements,
+        }
+        encoded = json.dumps(_stable_material_value(payload), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        object.__setattr__(self, "material_fingerprint", hashlib.sha256(encoded.encode("utf-8")).hexdigest())
 
     @property
     def columns(self) -> tuple[str, ...]:
@@ -404,6 +479,7 @@ class TypedTable:
                 }
                 for item in self.related_provenance
             ],
+            "material_fingerprint": self.material_fingerprint,
         }
 
 
@@ -503,13 +579,19 @@ class WorkbookContext:
         if self._closed:
             raise ToolbeltError("workbook context is closed")
 
-    def capture(self, source: str | Path, *, cancel_check: Callable[[], bool] | None = None) -> SourceSnapshot:
+    def capture(
+        self,
+        source: str | Path,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
+        max_bytes: int | None = None,
+    ) -> SourceSnapshot:
         self.ensure_open()
         key = str(Path(source).resolve())
         snapshot = self.snapshots.get(key)
         if snapshot is not None:
             return snapshot
-        snapshot = SourceSnapshot.capture(source, cancel_check=cancel_check)
+        snapshot = SourceSnapshot.capture(source, cancel_check=cancel_check, max_bytes=max_bytes)
         self.snapshots[key] = snapshot
         self.stats.capture_count += 1
         self.stats.capture_hash_count += 1
@@ -531,20 +613,51 @@ class WorkbookContext:
         cancel_check: Callable[[], bool] | None = None,
     ) -> WorkbookReadResult:
         self.ensure_open()
-        snapshot = self.capture(source, cancel_check=cancel_check)
-        result = spreadsheet_read(
-            str(source),
-            selection,
-            limits,
-            cancel_check=cancel_check,
-            _cache=self.cache,
-            _snapshot=snapshot,
-            _authority_index=self.authority_index,
-            _stats=self.stats,
+        checkpoint = (
+            dict(self.snapshots),
+            dict(self.cache._entries),
+            dict(self.cache._analysis_entries),
+            self.cache._bytes,
+            dict(self.authority_index.measurements),
+            dict(self.authority_index.calculations),
+            dict(vars(self.stats)),
         )
-        self._refresh_retained_stats()
-        self._enforce_budget()
-        return result
+        read_limits = _coerce_toolbelt_limits(limits)
+        try:
+            snapshot = self.capture(source, cancel_check=cancel_check, max_bytes=read_limits.max_bytes)
+            result = spreadsheet_read(
+                str(source),
+                selection,
+                limits,
+                cancel_check=cancel_check,
+                _cache=self.cache,
+                _snapshot=snapshot,
+                _authority_index=self.authority_index,
+                _stats=self.stats,
+            )
+            self._refresh_retained_stats()
+            self._enforce_budget()
+            return result
+        except BaseException:
+            (
+                snapshots,
+                cache_entries,
+                analysis_entries,
+                cache_bytes,
+                measurements,
+                calculations,
+                stats,
+            ) = checkpoint
+            self.snapshots.clear()
+            self.snapshots.update(snapshots)
+            self.cache._entries = cache_entries
+            self.cache._analysis_entries = analysis_entries
+            self.cache._bytes = cache_bytes
+            self.authority_index.measurements = measurements
+            self.authority_index.calculations = calculations
+            vars(self.stats).clear()
+            vars(self.stats).update(stats)
+            raise
 
     def _refresh_retained_stats(self) -> None:
         self.stats.retained_read_result_bytes = self.cache.read_bytes
@@ -587,6 +700,21 @@ class AnalysisOperation:
     filters: tuple[tuple[str, str, Any], ...] = ()
     join_table: TypedTable | None = None
     join_keys: tuple[str, str] = ()
+
+
+def _analysis_operation_identity(operation: AnalysisOperation) -> tuple[Any, ...]:
+    return (
+        operation.kind,
+        operation.columns,
+        operation.key_columns,
+        operation.value_column,
+        operation.scenarios,
+        operation.sensitivity,
+        operation.many_to_many,
+        operation.filters,
+        operation.join_table.material_fingerprint if operation.join_table is not None else None,
+        operation.join_keys,
+    )
 
 
 @dataclass(frozen=True)
@@ -862,7 +990,7 @@ def spreadsheet_read(
     source = Path(source)
     _check_cancel(cancel_check)
     if _snapshot is None:
-        snapshot = SourceSnapshot.capture(source, cancel_check=cancel_check)
+        snapshot = SourceSnapshot.capture(source, cancel_check=cancel_check, max_bytes=limits.max_bytes)
         if _stats is not None:
             _stats.capture_count += 1
             _stats.capture_hash_count += 1
@@ -883,7 +1011,7 @@ def spreadsheet_read(
             cached_result = replace(cached_result, source=str(source))
             _remember_authoritative_measurements(cached_result.measurements, _authority_index)
             return cached_result
-    if source.stat().st_size > limits.max_bytes:
+    if snapshot.byte_count > limits.max_bytes:
         raise ToolbeltError("workbook exceeds byte limit")
     if source.suffix.lower() in {".csv", ".tsv"}:
         result = _read_delimited(snapshot, selection, limits, cancel_check)
@@ -894,7 +1022,7 @@ def spreadsheet_read(
     if source.suffix.lower() not in {".xlsx", ".xlsm", ".xltx", ".xltm"}:
         raise ToolbeltError("unsupported spreadsheet format")
     try:
-        with zipfile.ZipFile(source) as archive:
+        with zipfile.ZipFile(io.BytesIO(snapshot.content)) as archive:
             expanded_bytes = sum(item.file_size for item in archive.infolist())
     except zipfile.BadZipFile as error:
         raise ToolbeltError("invalid workbook archive") from error
@@ -1234,6 +1362,7 @@ def _coerce_typed_table(value: TypedTable | Mapping[str, Any]) -> TypedTable:
         source_range=str(value.get("source_range", "")),
         related_provenance=related_provenance,
         row_measurements=row_measurements,
+        material_fingerprint=str(value.get("material_fingerprint", "")),
     )
 
 
