@@ -8,6 +8,7 @@ from foresight_os.analysis.powerbi_strategic_portfolio import analyze_powerbi_st
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.models import WorkBrief
 from foresight_os.domain.validation import ValidationError, validate_work_brief
+from foresight_os.runtime.local_toolbelt import ToolbeltError
 
 
 def _brief(**analysis_inputs):
@@ -117,6 +118,19 @@ def test_portfolio_missing_conversion_does_not_relabel_eur_as_usd(conversion_rat
 
     assert any(issue.kind == "UNSUPPORTED_CONVERSION" for issue in analysis.data_quality_issues)
     assert sum(item.revenue for item in analysis.segment_baselines) == 0
+
+
+def test_portfolio_missing_canonical_column_fails_before_numeric_defaults(tmp_path):
+    from openpyxl import load_workbook
+
+    source = tmp_path / "portfolio.xlsx"
+    source.write_bytes(Path("tests/fixtures/exercise/01_Portfolio_Resilience.xlsx").read_bytes())
+    workbook = load_workbook(source)
+    workbook["Sales_History"].cell(3, 8).value = "Revenue_USD"
+    workbook.save(source)
+
+    with pytest.raises(ToolbeltError, match="canonical column"):
+        analyze_portfolio_resilience(source)
 
 
 def test_powerbi_column_mapping_reaches_revenue_calculation(tmp_path):

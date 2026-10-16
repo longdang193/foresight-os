@@ -156,7 +156,18 @@ def analyze_powerbi_strategic_portfolio(source: Path, input_contract: AnalysisIn
     comparison_label = _period_label(comparison_year, comparison_window)
     selected_segments = set(contract.entity_scope)
     rows = {name: apply_column_mappings(_rows(table), contract.column_mappings) for name, table in tables.items() if name != "Brief"}
-    require_row_columns(rows["Fact_Performance"], "Fact_Performance", ("Year", "Month", "Region", "Segment", "Revenue_EUR", "Gross_Profit_EUR"))
+    for sheet, columns in {
+        "Dim_Region": ("Region_ID", "Region"),
+        "Dim_Segment": ("Segment_ID", "Segment"),
+        "Fact_Performance": ("Year", "Month", "Region", "Segment", "Revenue_EUR", "Gross_Profit_EUR"),
+        "Targets": ("Year", "Region", "Segment"),
+        "Forward_Signals": ("Segment", "Type", "Change_Index", "Source_Quality"),
+        "Measure_Definitions": ("Measure", "Validation_Note"),
+        "Dashboard_Snapshot": ("Page", "KPI", "Displayed_Value", "Refresh_Timestamp"),
+        "Strategic_Options": ("Option_ID", "Option", "Investment_EUR", "Reversibility", "Strategic_Hypothesis"),
+        "Change_One_Input": ("Change_ID", "Expected_Reassessment", "Replacement"),
+    }.items():
+        require_row_columns(rows[sheet], sheet, columns)
     evidence: list[Evidence] = []
     by_row: dict[tuple[str, int], Evidence] = {}
     for name, table in tables.items():
@@ -175,6 +186,8 @@ def analyze_powerbi_strategic_portfolio(source: Path, input_contract: AnalysisIn
             issues.append(PowerBIDataQualityIssue("DUPLICATE_FACT", f"Duplicate fact row for {key}; the later row is excluded from reconciled KPIs.", (by_row[("Fact_Performance", seen[key])].id, by_row[("Fact_Performance", index)].id)))
         else:
             seen[key] = index
+    if contract.duplicate_policy == "reject" and duplicate_indexes:
+        raise ValueError("duplicate policy reject: Power BI duplicate facts are present")
     valid_facts = [(index, row) for index, row in enumerate(rows["Fact_Performance"]) if index not in duplicate_indexes and (not selected_segments or str(row.get("Segment")) in selected_segments)]
     def period_total(year: int, field: str, window: tuple[int, int]) -> float:
         return sum(_number(row.get(field)) or 0.0 for _, row in valid_facts if int(row.get("Year")) == year and window[0] <= int(row.get("Month")) <= window[1])

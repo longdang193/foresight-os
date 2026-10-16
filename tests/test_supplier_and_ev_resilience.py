@@ -180,6 +180,29 @@ def test_supplier_workflow_persists_reviewed_finding_and_report(tmp_path: Path):
     assert "Supplier_Master" in report
 
 
+def test_supplier_report_uses_requested_reporting_currency(tmp_path: Path):
+    source = tmp_path / "supplier.xlsx"
+    _write_supplier_fixture(source)
+    result = run_supplier_resilience_workflow(
+        AnalysisStore(tmp_path / "case"),
+        source,
+        human_decision="ACCEPT",
+        input_contract={
+            "domain": "supplier_resilience",
+            "reporting_currency": "USD",
+            "conversion_rates": {"EUR": 2.0, "USD": 1.0, "CNY": 0.2},
+        },
+    )
+
+    assert result.status == "accepted"
+    assert result.supplier is not None and result.supplier.reporting_currency == "USD"
+    assert result.analysis is not None and any(item.units == "USD" for item in result.analysis.calculations)
+    report = result.report_path.read_text(encoding="utf-8") if result.report_path else ""
+    assert "Reporting currency: USD" in report
+    assert "USD " in report
+    assert "€" not in report
+
+
 def test_ev_recipe_separates_observed_forecast_and_flags_conflicts(tmp_path: Path):
     source = tmp_path / "ev.xlsx"
     _write_ev_fixture(source)

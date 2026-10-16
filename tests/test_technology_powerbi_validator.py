@@ -100,6 +100,18 @@ def test_powerbi_workflow_persists_reviewed_report(tmp_path: Path):
         assert section in report
 
 
+def test_powerbi_reject_policy_blocks_duplicate_fact_acceptance(tmp_path: Path):
+    result = run_powerbi_strategic_portfolio_workflow(
+        AnalysisStore(tmp_path / "case"),
+        EXERCISE / "05_PowerBI_Strategic_Portfolio.xlsx",
+        human_decision="ACCEPT",
+        input_contract={"domain": "powerbi_strategic_portfolio", "duplicate_policy": "reject"},
+    )
+
+    assert result.status == "failed"
+    assert result.failure and "duplicate policy reject" in result.failure
+
+
 def test_validator_key_reconciles_all_completed_exercises():
     result = validate_exercises(EXERCISE / "06_ForesightOS_Validator_Key.xlsx", EXERCISE)
 

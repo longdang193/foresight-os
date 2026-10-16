@@ -9,7 +9,7 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
-from foresight_os.analysis.workbook_inputs import apply_column_mappings, require_table, row_evidence, table_rows
+from foresight_os.analysis.workbook_inputs import apply_column_mappings, require_row_columns, require_table, row_evidence, table_rows
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
@@ -111,6 +111,14 @@ def analyze_technology_radar(source: Path, input_contract: AnalysisInputContract
     contract.validate()
     selected_technologies = set(contract.entity_scope)
     signals, relevances, competitors, signposts, priorities = [apply_column_mappings(_rows(table), contract.column_mappings) for table in (signal_table, relevance_table, competitor_table, signpost_table, priority_table)]
+    for sheet, rows, columns in (
+        (signal_table.sheet, signals, ("Signal_ID", "Technology", "Metric", "Source_Family", "Source_Quality_1_5", "Notes")),
+        (relevance_table.sheet, relevances, ("Technology", "Company_Relevance_1_5", "Potential_Impact_1_5", "Urgency_1_5")),
+        (competitor_table.sheet, competitors, ("Competitor", "Technology", "Action", "Expected_Year", "Source_Family")),
+        (signpost_table.sheet, signposts, ("Technology", "Signpost", "Threshold", "Review_Window", "Decision_Rule")),
+        (priority_table.sheet, priorities, ("Technology", "Naive_Product", "Caution")),
+    ):
+        require_row_columns(rows, sheet, columns)
     evidence: list[Evidence] = []
     by_row: dict[tuple[str, int], Evidence] = {}
     for table in (signal_table, relevance_table, competitor_table, signpost_table, priority_table):

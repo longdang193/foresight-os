@@ -10,7 +10,7 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
-from foresight_os.analysis.workbook_inputs import apply_column_mappings, require_table, row_evidence, table_rows
+from foresight_os.analysis.workbook_inputs import apply_column_mappings, require_row_columns, require_table, row_evidence, table_rows
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import (
@@ -221,6 +221,14 @@ def analyze_portfolio_resilience(source: Path, input_contract: AnalysisInputCont
     scenario_rows = apply_column_mappings(_rows(scenario_table), contract.column_mappings)
     option_rows = apply_column_mappings(_rows(options_table), contract.column_mappings)
     kpi_rows = apply_column_mappings(_rows(kpi_table), contract.column_mappings)
+    for sheet, rows, columns in (
+        (sales_table.sheet, sales_rows, ("Quarter", "Region", "Segment", "Units", "List_Price", "Discount_pct", "Variable_Cost_per_Unit", "Revenue", "Gross_Profit")),
+        (fixed_table.sheet, fixed_rows, ("Segment", "Annual_Fixed_Cost_EUR")),
+        (scenario_table.sheet, scenario_rows, ("Scenario", "Demand_Growth", "Cost_Inflation", "Discount_Shift", "Fixed_Cost_Change")),
+        (options_table.sheet, option_rows, ("Option_ID", "Option", "Investment_EUR", "Time_to_Impact_Months", "Reversibility")),
+        (kpi_table.sheet, kpi_rows, ("KPI", "Reported_Value", "Unit")),
+    ):
+        require_row_columns(rows, sheet, columns)
     reporting_unit = contract.reporting_currency or contract.units or "EUR"
     evidence: list[Evidence] = []
     evidence_by_table_row: dict[tuple[str, int], Evidence] = {}
@@ -239,7 +247,9 @@ def analyze_portfolio_resilience(source: Path, input_contract: AnalysisInputCont
         (kpi_table.sheet, kpi_rows, ("Reported_Value",)),
     ):
         for index, row in enumerate(rows):
-            source_currency = str(row.get("Currency", "EUR"))
+            if sheet == kpi_table.sheet and str(row.get("Unit", "")).strip().lower() in {"%", "percent", "percentage", "ratio", "count", "index"}:
+                continue
+            source_currency = str(row.get("Currency") or row.get("Unit") or "EUR")
             factor = 1.0 if source_currency == reporting_unit else contract.conversion_rates.get(source_currency)
             if factor is None:
                 unsupported_conversion_rows.add((sheet, index))
@@ -290,6 +300,11 @@ def analyze_portfolio_resilience(source: Path, input_contract: AnalysisInputCont
         if str(row.get("Quarter", "")).startswith(selected_period)
         and (not selected_entities or str(row.get("Region")) in selected_entities)
     ]
+    unsupported_fixed_segments = {
+        str(row.get("Segment"))
+        for index, row in enumerate(fixed_rows)
+        if ("Fixed_Costs", index) in unsupported_conversion_rows
+    }
     fixed_costs = {
         str(row.get("Segment")): _number(row.get("Annual_Fixed_Cost_EUR")) or 0.0
         for index, row in enumerate(fixed_rows)
@@ -298,7 +313,7 @@ def analyze_portfolio_resilience(source: Path, input_contract: AnalysisInputCont
     by_segment: dict[str, list[tuple[int, dict[str, Any]]]] = {}
     for index, row in quality_adjusted_rows:
         by_segment.setdefault(str(row.get("Segment")), []).append((index, row))
-    segments = sorted(set(by_segment) | set(fixed_costs))
+    segments = sorted((set(by_segment) | set(fixed_costs)) - unsupported_fixed_segments)
     baselines: list[PortfolioSegmentBaseline] = []
     for segment in segments:
         items = by_segment.get(segment, [])
@@ -505,9 +520,14 @@ def analyze_portfolio_resilience(source: Path, input_contract: AnalysisInputCont
     for claim in claims:
         relationships.append(Relationship(f"{claim.id}-informs-{implication_draft.id}", claim.id, implication_draft.id, "informs"))
     implication = AnalyticalRecord(implication_draft.id, implication_draft.statement, implication_draft.basis, implication_draft.assessment, evidence_ids=implication_draft.evidence_ids, relationship_ids=[item.id for item in relationships if item.to_id == implication_draft.id], assumptions=implication_draft.assumptions, uncertainty=implication_draft.uncertainty, confidence_rationale=implication_draft.confidence_rationale, disconfirmation_conditions=implication_draft.disconfirmation_conditions, monitoring_indicators=implication_draft.monitoring_indicators)
+    recommendation_statement = (
+        "Prioritize staged investment in Analytics Software, then reversible Service Contracts expansion; defer irreversible Core Hardware and Spare Parts commitments until KPI reconciliation and planted data exceptions are resolved."
+        if baselines
+        else f"Do not make portfolio investment decisions until required conversion rates are supplied for the affected fixed-cost inputs: {', '.join(sorted(unsupported_fixed_segments)) or 'unavailable segments'}."
+    )
     recommendation_draft = _record(
         "portfolio-recommendation",
-        "Prioritize staged investment in Analytics Software, then reversible Service Contracts expansion; defer irreversible Core Hardware and Spare Parts commitments until KPI reconciliation and planted data exceptions are resolved.",
+        recommendation_statement,
         list(dict.fromkeys(implication.evidence_ids + [item.id for option in options for item in evidence if item.id in option.evidence_ids])),
         assumptions=assumptions,
         uncertainty=("No causal uplift or external market evidence is present in this workbook; this is an internal portfolio prioritization recommendation.",),
