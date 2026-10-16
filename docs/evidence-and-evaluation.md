@@ -141,3 +141,15 @@ fixtures, persistence, invalidation, or boundary handling. It cannot by itself
 prove model reasoning quality, strategic usefulness, factual completeness, or
 human acceptance. Those claims require the reference rubric, source-grounded
 adjudication, and—when applicable—human review.
+
+## Changed-brief portability
+
+`evaluation/probes/run_brief_portability_probe.py` exercises the five
+production XLSX analyzers with deterministic changed-brief contracts. Its
+receipt binds each result to the original and copied fixture hashes, the
+contract fingerprint, selected inputs, and computed outcome summaries. A
+`VERIFIED` receipt proves structural portability only; provider/model quality
+and human acceptance remain `not_measured`, while missing approved external
+inputs are classified as `BLOCKED_EXTERNAL` or `BLOCKED_INPUT` rather than
+silently treated as success. Raw workbook rows, credentials, and provider
+payloads are excluded from the receipt.

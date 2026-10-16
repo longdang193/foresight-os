@@ -10,6 +10,8 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
+from foresight_os.analysis.workbook_inputs import apply_column_mappings, require_row_columns, require_table, row_evidence, table_rows
+from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
 from foresight_os.persistence.analysis_store import AnalysisStore
@@ -65,6 +67,7 @@ class EVAnalysis:
     monitoring_triggers: tuple[str, ...]
     recommendation: str
     state: AnalysisState
+    contract_fingerprint: str = ""
 
 @dataclass(frozen=True)
 class EVWorkflowResult:
@@ -80,20 +83,13 @@ def _number(value: Any) -> float | None:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 def _table(workbook: Any, sheet: str) -> Any:
-    for table in workbook.tables:
-        if table.sheet == sheet:
-            return table
-    raise ToolbeltError(f"EV recipe requires sheet: {sheet}")
+    return require_table(workbook, sheet)
 
 def _rows(table: Any) -> list[dict[str, Any]]:
-    return [dict(zip(table.columns, row, strict=False)) for row in table.rows]
+    return table_rows(table)
 
 def _row_evidence(table: Any, index: int, digest: str) -> Evidence:
-    values = dict(zip(table.columns, table.rows[index], strict=False))
-    provenance = table.row_provenance[index]
-    row_range = f"{provenance[0].coordinate}:{provenance[-1].coordinate}"
-    evidence_id = "ev-evidence-" + hashlib.sha256(f"{digest}:{table.sheet}:{row_range}".encode()).hexdigest()[:16]
-    return Evidence(evidence_id, SourceLocator(digest, table.sheet, row_range, "units", "ev_capacity_investment_recipe", f"{table.sheet} row"), digest, date.today().isoformat(), json.dumps(values, sort_keys=True, default=str))
+    return row_evidence(table, index, digest, f"{table.sheet} row", units="units", transformation="ev_capacity_investment_recipe", evidence_prefix="ev")
 
 def _record(record_id: str, statement: str, evidence_ids: list[str], assumptions: tuple[str, ...], uncertainty: tuple[str, ...], disconfirmation: tuple[str, ...], monitoring: tuple[str, ...]) -> AnalyticalRecord:
     return AnalyticalRecord(record_id, statement, Basis.DERIVED, Assessment.SUPPORTED, evidence_ids=list(dict.fromkeys(evidence_ids)), assumptions=assumptions, uncertainty=uncertainty, confidence_rationale="Derived from deterministic workbook rows while preserving observed/projected basis and unresolved inputs.", disconfirmation_conditions=disconfirmation, monitoring_indicators=monitoring)
@@ -102,13 +98,34 @@ def _record(record_id: str, statement: str, evidence_ids: list[str], assumptions
 def _capacity_dependency_ids(capacity_rows: list[tuple[int, dict[str, Any]]], by_row: dict[tuple[str, int], Evidence], year: int) -> tuple[str, ...]:
     return tuple(by_row[("Capacity", index)].id for index, row in capacity_rows if int(row.get("Year")) == year)
 
-def analyze_ev_capacity_investment(source: Path) -> EVAnalysis:
+def analyze_ev_capacity_investment(source: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None) -> EVAnalysis:
     source = Path(source)
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
     sheets = ("Brief", "Demand_History", "Demand_Scenarios", "Capacity", "Infrastructure", "Policy_Signals", "Strategic_Options", "Reported_KPIs")
     workbook = spreadsheet_read(source, SheetSelection(sheet_names=sheets, include_hidden=True, include_hidden_rows=True))
     tables = {name: _table(workbook, name) for name in sheets}
-    rows = {name: _rows(table) for name, table in tables.items() if name != "Brief"}
+    contract = AnalysisInputContract.from_dict(input_contract) if input_contract is not None else AnalysisInputContract(
+        domain="ev_capacity_investment",
+        required_tables=sheets,
+        periods=("2030",),
+        scenarios=("Low", "Base", "High"),
+        units="units",
+        compatibility_assumption="legacy workbook scenario defaults",
+    )
+    contract.validate()
+    selected_year = int(contract.periods[-1] if contract.periods else "2030")
+    selected_regions = set(contract.entity_scope)
+    rows = {name: apply_column_mappings(_rows(table), contract.column_mappings) for name, table in tables.items() if name != "Brief"}
+    for sheet, columns in {
+        "Demand_History": ("Year", "Region", "Service_Demand_Units", "Basis"),
+        "Demand_Scenarios": ("Scenario", "Year", "Region", "Demand_Units", "Annual_Growth", "Basis"),
+        "Capacity": ("Region", "Year", "Nominal_Capacity", "Practical_Availability"),
+        "Infrastructure": ("Region", "Charging_Readiness_1_5", "Grid_Readiness_1_5", "Service_Network_Readiness_1_5"),
+        "Policy_Signals": ("Region", "Policy", "Current_End_Year", "Direction", "Demand_Relevance"),
+        "Strategic_Options": ("Option", "Investment_EUR", "Lead_Time_Months", "Added_Capacity", "Operating_Cost_Premium", "Reversibility"),
+        "Reported_KPIs": ("KPI", "Reported_Value", "Unit", "Scenario_Year"),
+    }.items():
+        require_row_columns(rows[sheet], sheet, columns)
     evidence: list[Evidence] = []
     by_row: dict[tuple[str, int], Evidence] = {}
     for name, table in tables.items():
@@ -117,13 +134,21 @@ def analyze_ev_capacity_investment(source: Path) -> EVAnalysis:
         for index in range(len(table.rows)):
             by_row[(name, index)] = _row_evidence(table, index, digest)
             evidence.append(by_row[(name, index)])
-    history = tuple(EVDemandHistory(int(row.get("Year")), str(row.get("Region")), _number(row.get("Service_Demand_Units")) or 0.0, str(row.get("Basis", "Observed")), (by_row[("Demand_History", index)].id,)) for index, row in enumerate(rows["Demand_History"]))
+    history = tuple(EVDemandHistory(int(row.get("Year")), str(row.get("Region")), _number(row.get("Service_Demand_Units")) or 0.0, str(row.get("Basis", "Observed")), (by_row[("Demand_History", index)].id,)) for index, row in enumerate(rows["Demand_History"]) if not selected_regions or str(row.get("Region")) in selected_regions)
     capacity_by_year: dict[int, float] = {}
     for index, row in enumerate(rows["Capacity"]):
         year = int(row.get("Year"))
+        if selected_regions and str(row.get("Region")) not in selected_regions:
+            continue
         capacity_by_year[year] = capacity_by_year.get(year, 0.0) + (_number(row.get("Nominal_Capacity")) or 0.0) * (_number(row.get("Practical_Availability")) or 0.0)
     scenario_groups: dict[tuple[str, int], list[tuple[int, dict[str, Any]]]] = {}
     for index, row in enumerate(rows["Demand_Scenarios"]):
+        if contract.scenarios and str(row.get("Scenario")) not in contract.scenarios:
+            continue
+        if int(row.get("Year")) != selected_year:
+            continue
+        if selected_regions and str(row.get("Region")) not in selected_regions:
+            continue
         scenario_groups.setdefault((str(row.get("Scenario")), int(row.get("Year"))), []).append((index, row))
     capacity_evidence_by_year = {
         year: _capacity_dependency_ids(list(enumerate(rows["Capacity"])), by_row, year)
@@ -191,7 +216,7 @@ def analyze_ev_capacity_investment(source: Path) -> EVAnalysis:
     state = AnalysisState("ev-capacity-investment", 1, evidence=evidence, claims=claims, implications=[implication], recommendations=[recommendation], relationships=relationships, revisions=[Revision("revision-1", 1, "EV capacity analysis pending acceptance", [item.id for item in [*evidence, *calculations, *claims, implication, recommendation]])], invalidation=Invalidation(), revision_status=RevisionStatus.DRAFT, calculations=calculations)
     decision_question = next((str(row[1]) for row in tables["Brief"].rows if row and row[0] == "Decision question" and len(row) > 1), "Should the company expand, pilot, outsource, or defer EV service capacity?")
     horizon = next((str(row[1]) for row in tables["Brief"].rows if row and row[0] == "Horizon" and len(row) > 1), "2026–2030")
-    return EVAnalysis(digest, decision_question, horizon, assumptions, tuple(issues), history, tuple(scenarios), options, ("Annual demand realization by scenario", "Capacity utilization and practical availability", "Policy renewal and step-down dates", "Regional grid, charging, and service readiness", "Open KPI and expansion-cost exceptions"), recommendation.statement, state)
+    return EVAnalysis(digest, decision_question, horizon, assumptions, tuple(issues), history, tuple(scenarios), options, ("Annual demand realization by scenario", "Capacity utilization and practical availability", "Policy renewal and step-down dates", "Regional grid, charging, and service readiness", "Open KPI and expansion-cost exceptions"), recommendation.statement, state, contract.fingerprint)
 
 def _money(value: float | None) -> str:
     return "n/a" if value is None else f"€{value:,.0f}"
@@ -229,9 +254,11 @@ def write_ev_report(path: Path, ev: EVAnalysis, state: AnalysisState | None = No
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_ev_report(ev, state), encoding="utf-8")
 
-def run_ev_capacity_investment_workflow(store: AnalysisStore, source: Path, *, human_decision: str = "REJECT", output_dir: Path | None = None) -> EVWorkflowResult:
+def run_ev_capacity_investment_workflow(store: AnalysisStore, source: Path, *, human_decision: str = "REJECT", output_dir: Path | None = None, input_contract: AnalysisInputContract | dict[str, Any] | None = None) -> EVWorkflowResult:
     try:
-        ev = analyze_ev_capacity_investment(Path(source))
+        if input_contract is None and store.brief_path.exists():
+            input_contract = normalize_work_brief(store.load_brief()).contract_for_domain("ev_capacity_investment")
+        ev = analyze_ev_capacity_investment(Path(source), input_contract=input_contract)
         pending = store.save_pending(ev.state)
         review = review_analysis_state(pending)
         acceptance = review_and_accept_pending_analysis(store, pending, review, f"review-{pending.investigation_id}-{pending.revision}", human_decision=human_decision)

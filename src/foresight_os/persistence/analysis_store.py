@@ -200,9 +200,14 @@ class AnalysisStore:
             )
         producer_value = value.get("producer")
         producer = MethodProvenance(**producer_value) if producer_value else None
+        analysis_inputs = {
+            str(item["domain"]): dict(item)
+            for item in value.get("analysis_inputs", ())
+        }
         return WorkBrief(**{
             **value,
             "stages": stages,
+            "analysis_inputs": analysis_inputs,
             "execution_intent": execution_intent,
             "producer": producer,
         })

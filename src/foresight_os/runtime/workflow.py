@@ -484,6 +484,7 @@ def _stage_fingerprints(
         "decision_question": input_payload.get("decision_question", ""),
         "horizon": input_payload.get("horizon", ""),
         "relevant_constraints": input_payload.get("relevant_constraints", ()),
+        "analysis_contract_fingerprints": input_payload.get("analysis_contract_fingerprints", {}),
         "dependency_result_hashes": {
             stage_id: _canonical_result_hash(output)
             for stage_id, output in dict(dependency_outputs).items()
@@ -1036,6 +1037,9 @@ async def run_recipe_async(
                 ),
                 dependency_outputs=tuple((dependency, outputs_by_stage[dependency]) for dependency in dependencies),
                 research_needs=tuple(getattr(stage, "research_needs", ()) or ()),
+                analysis_contract_fingerprints=tuple(
+                    sorted((str(domain), str(fingerprint)) for domain, fingerprint in dict(context.get("analysis_contract_fingerprints", {})).items())
+                ),
             )
             stage_outputs, current = await dispatch_stage(stage, stage_input)
             outputs_by_stage[getattr(stage, "stage_id", f"stage-{len(outputs_by_stage) + 1}")] = current

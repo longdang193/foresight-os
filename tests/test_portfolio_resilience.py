@@ -118,3 +118,82 @@ def test_portfolio_workflow_persists_reviewed_finding_and_cited_report(tmp_path:
     assert "Recommended action" in report
     assert "Sales_History" in report
     assert "Counterevidence" in report
+
+
+def test_portfolio_reject_policy_blocks_workflow_acceptance(tmp_path: Path):
+    source = tmp_path / "portfolio.xlsx"
+    _write_portfolio_fixture(source)
+    store = AnalysisStore(tmp_path / "case")
+
+    result = run_portfolio_resilience_workflow(
+        store,
+        source,
+        human_decision="ACCEPT",
+        input_contract={"domain": "portfolio_resilience", "duplicate_policy": "reject"},
+    )
+
+    assert result.status == "failed"
+    assert result.failure and "duplicate policy reject" in result.failure
+
+    missing_value_result = run_portfolio_resilience_workflow(
+        store,
+        source,
+        human_decision="ACCEPT",
+        input_contract={"domain": "portfolio_resilience", "missing_value_policy": "reject"},
+    )
+
+    assert missing_value_result.status == "failed"
+    assert missing_value_result.failure and "missing-value policy reject" in missing_value_result.failure
+
+
+def test_portfolio_report_uses_requested_reporting_currency(tmp_path: Path):
+    source = tmp_path / "portfolio.xlsx"
+    _write_portfolio_fixture(source)
+    store = AnalysisStore(tmp_path / "case")
+
+    result = run_portfolio_resilience_workflow(
+        store,
+        source,
+        human_decision="ACCEPT",
+        input_contract={
+            "domain": "portfolio_resilience",
+            "reporting_currency": "USD",
+            "conversion_rates": {"EUR": 2.0, "USD": 1.0},
+        },
+    )
+
+    assert result.status == "accepted"
+    assert result.portfolio is not None
+    assert next(item for item in result.portfolio.kpi_reconciliations if item.kpi == "Analytics Software CAGR").reported_value == 0.20
+    assert next(item for item in result.portfolio.kpi_reconciliations if item.kpi == "Service Contract renewal proxy").reported_value == 0.91
+    report = result.report_path.read_text(encoding="utf-8") if result.report_path else ""
+    assert "Reporting currency: USD" in report
+    assert "USD " in report
+    assert "€" not in report
+
+
+def test_portfolio_unsupported_fixed_cost_conversion_removes_dependent_results(tmp_path: Path):
+    source = tmp_path / "portfolio.xlsx"
+    source.write_bytes(Path("tests/fixtures/exercise/01_Portfolio_Resilience.xlsx").read_bytes())
+    workbook = openpyxl.load_workbook(source)
+    sheet = workbook["Fixed_Costs"]
+    sheet.cell(3, 3).value = "Currency"
+    for row in range(4, 9):
+        sheet.cell(row, 3).value = "GBP"
+    workbook.save(source)
+
+    result = run_portfolio_resilience_workflow(
+        AnalysisStore(tmp_path / "case"),
+        source,
+        human_decision="ACCEPT",
+        input_contract={
+            "domain": "portfolio_resilience",
+            "reporting_currency": "USD",
+            "conversion_rates": {"EUR": 2.0, "USD": 1.0},
+        },
+    )
+
+    assert result.status == "accepted"
+    assert result.portfolio is not None and not result.portfolio.segment_baselines
+    assert result.portfolio.state.calculations == []
+    assert any(issue.kind == "UNSUPPORTED_CONVERSION" for issue in result.portfolio.data_quality_issues)

@@ -159,6 +159,16 @@ labels model/provider dimensions as `not_measured` when the deterministic
 harness does not expose them. It does not claim model quality or human
 acceptance beyond the explicit simulated local acceptance boundary.
 
+For Release 2 changed-brief evidence, run:
+
+```text
+python evaluation/probes/run_brief_portability_probe.py --output-root work/brief-portability-20261016/final
+```
+
+This probe uses the five production XLSX analyzers and reports exact fixture
+hashes, contract fingerprints, selected inputs, and structural outcome
+assertions. It does not measure provider quality or human acceptance.
+
 `run_optimization_probe.py` is the release-level measurement entry point. It compares cold/warm XLSX reads and all five native MAF patterns, proves a credential-free native Streamable HTTP MCP discovery path, records separate model/local/MCP/external economics, token counters, accepted-finding-normalized values, per-pattern latency components, portable RSS/resource snapshots, and runs a 100-run resource soak. Baseline and release receipts share the schema owned by `optimization_measurement.py`; missing required evidence, workload/schema mismatches, zero denominators, resource growth, or threshold regressions fail comparison closed.
 
 `run_selective_reuse_probe.py` validates fresh-process reuse and sidecar receipt provenance. `run_strategic_exercise.py` stages participant-visible workbooks without the validator key and proves filesystem scope denial. `run_clean_wheel_smoke.py` builds and installs only the new wheel in a disposable environment outside the repository tree.

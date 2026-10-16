@@ -15,6 +15,7 @@ from foresight_os.analysis.powerbi_strategic_portfolio import PowerBIAnalysis, a
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.supplier_resilience import SupplierAnalysis, analyze_supplier_resilience
 from foresight_os.analysis.technology_radar import TechnologyAnalysis, analyze_technology_radar
+from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import (
     AnalyticalRecord,
@@ -260,7 +261,7 @@ def _expected_rows(tables: dict[str, Any]) -> tuple[list[dict[str, Any]], list[d
     return _rows(tables["Planted_Issues"]), _rows(tables["Expected_Reasoning"]), _rows(tables["Expected_Numerical_Checks"])
 
 
-def validate_exercises(validator_source: Path, exercise_dir: Path) -> ValidatorResult:
+def validate_exercises(validator_source: Path, exercise_dir: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None) -> ValidatorResult:
     validator_source = Path(validator_source)
     exercise_dir = Path(exercise_dir)
     source_sha256 = hashlib.sha256(validator_source.read_bytes()).hexdigest()
@@ -287,8 +288,28 @@ def validate_exercises(validator_source: Path, exercise_dir: Path) -> ValidatorR
         "Technology": ("04_Technology_Radar.xlsx", analyze_technology_radar),
         "Power BI": ("05_PowerBI_Strategic_Portfolio.xlsx", analyze_powerbi_strategic_portfolio),
     }
+    def contract_for(exercise: str) -> AnalysisInputContract | dict[str, Any] | None:
+        if input_contract is None:
+            return None
+        aliases = {
+            "Portfolio": "portfolio_resilience",
+            "Supplier": "supplier_resilience",
+            "EV": "ev_capacity_investment",
+            "Technology": "technology_radar",
+            "Power BI": "powerbi_strategic_portfolio",
+        }
+        if isinstance(input_contract, dict) and aliases.get(exercise) in input_contract:
+            return input_contract[aliases[exercise]]
+        if isinstance(input_contract, dict) and exercise in input_contract:
+            return input_contract[exercise]
+        if isinstance(input_contract, dict) and input_contract.get("domain"):
+            return input_contract
+        if isinstance(input_contract, dict):
+            return None
+        return input_contract
+
     analyses: dict[str, Any] = {
-        exercise: analyzer(exercise_dir / filename)
+        exercise: analyzer(exercise_dir / filename, input_contract=contract_for(exercise))
         for exercise, (filename, analyzer) in file_map.items()
     }
     checks: list[ValidatorCheck] = []
@@ -342,11 +363,11 @@ def validate_exercises(validator_source: Path, exercise_dir: Path) -> ValidatorR
             actual = sum(item.revenue for item in portfolio.segment_baselines)
         elif exercise == "Portfolio" and metric.startswith("2026 gross profit"):
             actual = sum(item.gross_profit for item in portfolio.segment_baselines)
-        elif exercise == "EV" and metric.startswith("2030") and "demand" in metric.lower():
+        elif exercise == "EV" and "demand" in metric.lower():
             scenario = metric.split()[1]
-            actual = next((item.demand_units for item in ev.scenarios if item.scenario == scenario and item.year == 2030), None)
+            actual = next((item.demand_units for item in ev.scenarios if item.scenario == scenario), None)
         elif exercise == "EV" and "practical existing capacity" in metric.lower():
-            actual = next((item.practical_capacity for item in ev.scenarios if item.year == 2030), None)
+            actual = next((item.practical_capacity for item in ev.scenarios), None)
         elif exercise == "Power BI" and metric.startswith("2025"):
             actual = powerbi.revenue_2025_jan_sep
         elif exercise == "Power BI" and metric.startswith("2026 Jan-Sep revenue"):
@@ -465,9 +486,15 @@ def run_validator_workflow(
     *,
     human_decision: str = "REJECT",
     output_dir: Path | None = None,
+    input_contract: AnalysisInputContract | dict[str, Any] | None = None,
 ) -> ValidatorWorkflowResult:
     try:
-        result = validate_exercises(Path(validator_source), Path(exercise_dir))
+        if input_contract is None and store.brief_path.exists():
+            input_contract = {
+                contract.domain: contract.to_dict()
+                for contract in normalize_work_brief(store.load_brief()).contracts
+            }
+        result = validate_exercises(Path(validator_source), Path(exercise_dir), input_contract=input_contract)
         pending = store.save_pending(result.state)
         review = review_analysis_state(pending)
         decision = human_decision.upper()
