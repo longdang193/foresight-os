@@ -146,6 +146,37 @@ def test_closed_scope_rejects_new_resources_and_capability_resolution():
         CapabilityResolver().resolve(("spreadsheet_read",), {"scope": scope})
 
 
+def test_scope_close_settles_each_resource_once_across_repeated_cancellation():
+    async def scenario():
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        class SlowCloseable:
+            def __init__(self):
+                self.close_calls = 0
+
+            async def close(self):
+                self.close_calls += 1
+                started.set()
+                await release.wait()
+
+        resource = SlowCloseable()
+        scope = CapabilityScope()
+        scope.register(resource)
+        close_task = asyncio.create_task(scope.close())
+        await started.wait()
+        close_task.cancel()
+        await asyncio.sleep(0)
+        close_task.cancel()
+        release.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await close_task
+        assert resource.close_calls == 1
+
+    asyncio.run(scenario())
+
+
 def test_factory_rejects_participant_capability_denial():
     class Client:
         def as_agent(self, **kwargs):

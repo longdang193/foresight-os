@@ -65,6 +65,7 @@
           "reuse_policy": { "type": "string" },
           "adaptation_policy": { "type": "array", "items": { "type": "string" } }
           ,"synthesis_policy": { "type": "string", "enum": ["single-output", "aggregate-typed-results"] }
+          ,"analysis_domains": { "type": "array", "items": { "type": "string", "minLength": 1 } }
         }
       }
     }

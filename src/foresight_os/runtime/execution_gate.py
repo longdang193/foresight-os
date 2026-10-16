@@ -10,7 +10,7 @@ from foresight_os.domain.approval import AdaptationEnvelope, ApprovalStatus, app
 from foresight_os.controller.recipes import ExecutionRecipe
 from foresight_os.analysis.result_committer import ANALYSIS_STAGE_RESULT_CONTRACT, CanonicalResultCommitter, analysis_stage_result_schema
 from foresight_os.persistence.analysis_store import AnalysisStore
-from foresight_os.domain.analysis_inputs import normalize_work_brief
+from foresight_os.domain.analysis_inputs import GLOBAL_SCOPE, normalize_work_brief
 from foresight_os.persistence.ids import canonical_json_hash
 from foresight_os.runtime.capabilities import CapabilityUnavailableError, prepare_capability_context
 from foresight_os.runtime.workflow import run_recipe_async
@@ -178,8 +178,12 @@ class ExecutionGate:
             "canonical_result_committer": CanonicalResultCommitter(self.store, self.store.load_brief().investigation_id),
             "normalized_intent": normalized_intent,
             "analysis_contract_fingerprints": {
-                contract.domain: contract.fingerprint
+                key: contract.fingerprint
                 for contract in normalized_intent.contracts
+                for key in (
+                    (f"{contract.stage_id or GLOBAL_SCOPE}:{contract.domain}",)
+                    + ((contract.domain,) if contract.stage_id is None else ())
+                )
             },
         })
         return await run_recipe_async(admission.recipe, prompt, client, admission.run_id, context)

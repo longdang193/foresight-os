@@ -384,7 +384,6 @@ class CanonicalResultCommitter:
             expected_contract=contract,
             existing_records=existing_records,
             existing_record_kinds=existing_record_kinds,
-            tolerate_invalid_relationships=bool(context.get("tolerate_invalid_relationships")),
         )
         if normalized.stage_id != stage_id or normalized.contract != contract:
             raise ValidationError("canonical result does not match the recipe stage contract")
@@ -558,7 +557,6 @@ def normalize_stage_result(
     expected_contract: str = ANALYSIS_STAGE_RESULT_CONTRACT,
     existing_records: Mapping[str, object] | None = None,
     existing_record_kinds: Mapping[str, RecordKind] | None = None,
-    tolerate_invalid_relationships: bool = False,
     prefer_current_aliases: bool = False,
     trusted_existing_records: Mapping[str, object] | None = None,
     return_aliases: bool = False,
@@ -783,7 +781,6 @@ def normalize_stage_result(
 
     relationships: list[Relationship] = []
     relationship_aliases: dict[str, str] = {}
-    rejected_relationship_aliases: set[str] = set()
     for index, raw in enumerate(_list(value.get("relationships"), "relationships")):
         item = _mapping(raw, f"relationships[{index}]")
         _validate_fields(item, _RELATIONSHIP_FIELDS, f"relationships[{index}]")
@@ -801,10 +798,6 @@ def normalize_stage_result(
                 f"relationships[{index}].to_id",
             )
         except ValidationError as error:
-            if tolerate_invalid_relationships:
-                if item.get("id") is not None:
-                    rejected_relationship_aliases.add(str(item["id"]))
-                continue
             raise ValidationError(str(error), code="INVALID_RELATIONSHIP") from error
         relation_type = _required_text(item, "relation_type", f"relationships[{index}]")
         try:
@@ -814,19 +807,11 @@ def normalize_stage_result(
         from_kind = record_kinds.get(from_id)
         to_kind = record_kinds.get(to_id)
         if from_kind is None or to_kind is None:
-            if tolerate_invalid_relationships:
-                if item.get("id") is not None:
-                    rejected_relationship_aliases.add(str(item["id"]))
-                continue
             raise ValidationError(
                 f"relationship endpoints must have known record kinds: {from_id} -> {to_id}",
                 code="INVALID_RELATIONSHIP",
             )
         if from_kind not in rule.sources or to_kind not in rule.targets:
-            if tolerate_invalid_relationships:
-                if item.get("id") is not None:
-                    rejected_relationship_aliases.add(str(item["id"]))
-                continue
             raise ValidationError(
                 f"invalid endpoints for relationship {relation_type}: "
                 f"{from_kind.value} -> {to_kind.value}",
@@ -848,16 +833,12 @@ def normalize_stage_result(
     def resolve_relationships(record_id: str, label: str) -> list[str]:
         resolved: list[str] = []
         for reference in record_inputs[record_id]["relationship_ids"]:
-            if reference in rejected_relationship_aliases:
-                continue
             relationship_id = (
                 trusted_relationship_aliases.get(reference)
                 or relationship_aliases.get(reference)
                 or known_relationship_aliases.get(reference)
             )
             if relationship_id is None:
-                if tolerate_invalid_relationships:
-                    continue
                 raise ValidationError(f"unknown reference: {label} -> {reference}", code="INVALID_RELATIONSHIP")
             resolved.append(relationship_id)
         return resolved

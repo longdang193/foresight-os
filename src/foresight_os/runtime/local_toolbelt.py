@@ -127,12 +127,20 @@ class WorkbookReadCache:
         self._entries: dict[tuple[Any, ...], tuple[WorkbookReadResult, int]] = {}
         self._analysis_entries: dict[tuple[Any, ...], tuple[AnalysisResult, int]] = {}
         self._bytes = 0
+        self._read_bytes = 0
+        self._analysis_bytes = 0
         self._transaction: dict[str, Any] | None = None
 
     def begin_transaction(self) -> dict[str, Any]:
         if self._transaction is not None:
             raise RuntimeError("workbook cache transaction already active")
-        self._transaction = {"entries": {}, "analysis_entries": {}, "bytes": self._bytes}
+        self._transaction = {
+            "entries": {},
+            "analysis_entries": {},
+            "bytes": self._bytes,
+            "read_bytes": self._read_bytes,
+            "analysis_bytes": self._analysis_bytes,
+        }
         return self._transaction
 
     def commit_transaction(self, transaction: dict[str, Any]) -> None:
@@ -150,6 +158,8 @@ class WorkbookReadCache:
                 else:
                     entries[key] = previous
         self._bytes = transaction["bytes"]
+        self._read_bytes = transaction["read_bytes"]
+        self._analysis_bytes = transaction["analysis_bytes"]
         self._transaction = None
 
     def _record_transaction(self, name: str, entries: dict[tuple[Any, ...], tuple[Any, int]], key: tuple[Any, ...]) -> None:
@@ -200,6 +210,10 @@ class WorkbookReadCache:
         previous = entries.pop(key, None)
         if previous is not None:
             self._bytes -= previous[1]
+            if name == "entries":
+                self._read_bytes -= previous[1]
+            else:
+                self._analysis_bytes -= previous[1]
         while self._entry_count >= self.max_entries or self._bytes + estimated > self.max_bytes:
             oldest = self._entries if self._entries else self._analysis_entries
             oldest_key = next(iter(oldest))
@@ -207,13 +221,23 @@ class WorkbookReadCache:
             self._record_transaction(oldest_name, oldest, oldest_key)
             _, size = oldest.pop(oldest_key)
             self._bytes -= size
+            if oldest_name == "entries":
+                self._read_bytes -= size
+            else:
+                self._analysis_bytes -= size
         entries[key] = (result, estimated)
         self._bytes += estimated
+        if name == "entries":
+            self._read_bytes += estimated
+        else:
+            self._analysis_bytes += estimated
 
     def clear(self) -> None:
         self._entries.clear()
         self._analysis_entries.clear()
         self._bytes = 0
+        self._read_bytes = 0
+        self._analysis_bytes = 0
 
     @property
     def size(self) -> int:
@@ -229,11 +253,11 @@ class WorkbookReadCache:
 
     @property
     def read_bytes(self) -> int:
-        return sum(size for _, size in self._entries.values())
+        return self._read_bytes
 
     @property
     def analysis_bytes(self) -> int:
-        return sum(size for _, size in self._analysis_entries.values())
+        return self._analysis_bytes
 
 
 @dataclass
@@ -258,12 +282,13 @@ class AuthorityIndex:
         self.calculations: dict[tuple[str, str], CalculationRecord] = {}
         self._measurement_bytes: dict[tuple[str, str, str], int] = {}
         self._calculation_bytes: dict[tuple[str, str], int] = {}
+        self._bytes = 0
         self._transaction: dict[str, Any] | None = None
 
     def begin_transaction(self) -> dict[str, Any]:
         if self._transaction is not None:
             raise RuntimeError("authority transaction already active")
-        self._transaction = {"measurements": {}, "calculations": {}}
+        self._transaction = {"measurements": {}, "calculations": {}, "bytes": self._bytes}
         return self._transaction
 
     def commit_transaction(self, transaction: dict[str, Any]) -> None:
@@ -283,6 +308,7 @@ class AuthorityIndex:
                 else:
                     entries[key] = previous[0]
                     sizes[key] = previous[1]
+        self._bytes = transaction["bytes"]
         self._transaction = None
 
     def _record_transaction(self, name: str, key: tuple[Any, ...], value: Any, size: int) -> None:
@@ -294,29 +320,34 @@ class AuthorityIndex:
             key = (measurement.provenance.workbook_sha256, measurement.id, measurement.provenance.range)
             self._record_transaction("measurements", key, self.measurements.get(key), self._measurement_bytes.get(key, 0))
             self.measurements[key] = measurement
-            self._measurement_bytes[key] = max(1, len(repr(measurement)))
+            size = max(1, len(repr(measurement)))
+            self._bytes += size - self._measurement_bytes.get(key, 0)
+            self._measurement_bytes[key] = size
         while len(self.measurements) > self.max_records:
             key = next(iter(self.measurements))
             self._record_transaction("measurements", key, self.measurements.get(key), self._measurement_bytes.get(key, 0))
             self.measurements.pop(key)
-            self._measurement_bytes.pop(key, None)
+            self._bytes -= self._measurement_bytes.pop(key, 0)
 
     def remember_calculation(self, record: CalculationRecord, workbook_hash: str) -> None:
         key = (workbook_hash, record.id)
         self._record_transaction("calculations", key, self.calculations.get(key), self._calculation_bytes.get(key, 0))
         self.calculations[key] = record
-        self._calculation_bytes[key] = max(1, len(repr(record)))
+        size = max(1, len(repr(record)))
+        self._bytes += size - self._calculation_bytes.get(key, 0)
+        self._calculation_bytes[key] = size
         while len(self.calculations) > self.max_records:
             key = next(iter(self.calculations))
             self._record_transaction("calculations", key, self.calculations.get(key), self._calculation_bytes.get(key, 0))
             self.calculations.pop(key)
-            self._calculation_bytes.pop(key, None)
+            self._bytes -= self._calculation_bytes.pop(key, 0)
 
     def clear(self) -> None:
         self.measurements.clear()
         self.calculations.clear()
         self._measurement_bytes.clear()
         self._calculation_bytes.clear()
+        self._bytes = 0
 
     @property
     def size(self) -> int:
@@ -324,7 +355,7 @@ class AuthorityIndex:
 
     @property
     def estimated_bytes(self) -> int:
-        return sum(self._measurement_bytes.values()) + sum(self._calculation_bytes.values())
+        return self._bytes
 
 
 def _sha256_file(
@@ -653,7 +684,7 @@ class WorkbookContext:
     def __init__(self, *, max_entries: int = 8, max_bytes: int = 50_000_000, max_total_bytes: int = 100_000_000) -> None:
         self.snapshots: dict[str, SourceSnapshot] = {}
         self.cache = WorkbookReadCache(max_entries=max_entries, max_bytes=max_bytes)
-        self.authority_index = AuthorityIndex()
+        self.authority_index = AuthorityIndex(max_records=max(1, max_entries * ToolbeltLimits().max_cells))
         self.stats = WorkbookStats()
         self.max_total_bytes = max(1, max_total_bytes)
         self._closed = False
@@ -697,7 +728,15 @@ class WorkbookContext:
     ) -> WorkbookReadResult:
         self.ensure_open()
         read_limits = _coerce_toolbelt_limits(limits)
+        source = Path(source)
         source_key = str(Path(source).resolve())
+        cached_snapshot = self.snapshots.get(source_key)
+        if cached_snapshot is not None:
+            cached_key = self.cache.key(source, selection, read_limits, snapshot=cached_snapshot)
+            cached_result = self.cache.get(cached_key)
+            if cached_result is not None:
+                self.stats.cache_hits += 1
+                return replace(cached_result, source=str(source))
         had_snapshot = source_key in self.snapshots
         snapshot_bytes = self.stats.snapshot_bytes
         retained_stats = {
