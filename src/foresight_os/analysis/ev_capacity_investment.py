@@ -10,7 +10,7 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
-from foresight_os.analysis.workbook_inputs import require_table, row_evidence, table_rows
+from foresight_os.analysis.workbook_inputs import apply_column_mappings, require_table, row_evidence, table_rows
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
@@ -115,7 +115,7 @@ def analyze_ev_capacity_investment(source: Path, input_contract: AnalysisInputCo
     contract.validate()
     selected_year = int(contract.periods[-1] if contract.periods else "2030")
     selected_regions = set(contract.entity_scope)
-    rows = {name: _rows(table) for name, table in tables.items() if name != "Brief"}
+    rows = {name: apply_column_mappings(_rows(table), contract.column_mappings) for name, table in tables.items() if name != "Brief"}
     evidence: list[Evidence] = []
     by_row: dict[tuple[str, int], Evidence] = {}
     for name, table in tables.items():

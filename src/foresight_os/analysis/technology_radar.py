@@ -9,7 +9,7 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
-from foresight_os.analysis.workbook_inputs import require_table, row_evidence, table_rows
+from foresight_os.analysis.workbook_inputs import apply_column_mappings, require_table, row_evidence, table_rows
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
@@ -110,7 +110,7 @@ def analyze_technology_radar(source: Path, input_contract: AnalysisInputContract
     )
     contract.validate()
     selected_technologies = set(contract.entity_scope)
-    signals, relevances, competitors, signposts, priorities = [_rows(table) for table in (signal_table, relevance_table, competitor_table, signpost_table, priority_table)]
+    signals, relevances, competitors, signposts, priorities = [apply_column_mappings(_rows(table), contract.column_mappings) for table in (signal_table, relevance_table, competitor_table, signpost_table, priority_table)]
     evidence: list[Evidence] = []
     by_row: dict[tuple[str, int], Evidence] = {}
     for table in (signal_table, relevance_table, competitor_table, signpost_table, priority_table):

@@ -108,6 +108,47 @@ def test_portfolio_column_mapping_and_reporting_units_reach_calculations(tmp_pat
     assert analysis.state.calculations[0].key.units == "USD"
 
 
+@pytest.mark.parametrize("conversion_rates", [{}, {"GBP": 1.3}])
+def test_portfolio_missing_conversion_does_not_relabel_eur_as_usd(conversion_rates):
+    analysis = analyze_portfolio_resilience(
+        Path("tests/fixtures/exercise/01_Portfolio_Resilience.xlsx"),
+        AnalysisInputContract(domain="portfolio_resilience", reporting_currency="USD", conversion_rates=conversion_rates),
+    )
+
+    assert any(issue.kind == "UNSUPPORTED_CONVERSION" for issue in analysis.data_quality_issues)
+    assert sum(item.revenue for item in analysis.segment_baselines) == 0
+
+
+def test_powerbi_column_mapping_reaches_revenue_calculation(tmp_path):
+    from openpyxl import load_workbook
+
+    source = tmp_path / "powerbi.xlsx"
+    source.write_bytes(Path("tests/fixtures/exercise/05_PowerBI_Strategic_Portfolio.xlsx").read_bytes())
+    workbook = load_workbook(source)
+    workbook["Fact_Performance"].cell(3, 9).value = "Revenue_USD"
+    workbook.save(source)
+
+    analysis = analyze_powerbi_strategic_portfolio(
+        source,
+        AnalysisInputContract(domain="powerbi_strategic_portfolio", column_mappings={"Revenue_EUR": "Revenue_USD"}),
+    )
+
+    assert analysis.revenue_2025_jan_sep > 0
+    assert analysis.revenue_2026_jan_sep > 0
+
+
+def test_portfolio_selected_scenarios_are_not_invented():
+    analysis = analyze_portfolio_resilience(
+        Path("tests/fixtures/exercise/01_Portfolio_Resilience.xlsx"),
+        AnalysisInputContract(domain="portfolio_resilience", scenarios=("Base",)),
+    )
+
+    statement = next(item.statement for item in analysis.state.claims if item.id == "portfolio-claim-analytics-software")
+    assert "Base" in statement
+    assert "Downside" not in statement
+    assert "Upside" not in statement
+
+
 def test_powerbi_changed_period_narrative_follows_computed_direction():
     analysis = analyze_powerbi_strategic_portfolio(
         Path("tests/fixtures/exercise/05_PowerBI_Strategic_Portfolio.xlsx"),

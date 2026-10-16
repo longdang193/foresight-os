@@ -118,3 +118,52 @@ def test_portfolio_workflow_persists_reviewed_finding_and_cited_report(tmp_path:
     assert "Recommended action" in report
     assert "Sales_History" in report
     assert "Counterevidence" in report
+
+
+def test_portfolio_reject_policy_blocks_workflow_acceptance(tmp_path: Path):
+    source = tmp_path / "portfolio.xlsx"
+    _write_portfolio_fixture(source)
+    store = AnalysisStore(tmp_path / "case")
+
+    result = run_portfolio_resilience_workflow(
+        store,
+        source,
+        human_decision="ACCEPT",
+        input_contract={"domain": "portfolio_resilience", "duplicate_policy": "reject"},
+    )
+
+    assert result.status == "failed"
+    assert result.failure and "duplicate policy reject" in result.failure
+
+    missing_value_result = run_portfolio_resilience_workflow(
+        store,
+        source,
+        human_decision="ACCEPT",
+        input_contract={"domain": "portfolio_resilience", "missing_value_policy": "reject"},
+    )
+
+    assert missing_value_result.status == "failed"
+    assert missing_value_result.failure and "missing-value policy reject" in missing_value_result.failure
+
+
+def test_portfolio_report_uses_requested_reporting_currency(tmp_path: Path):
+    source = tmp_path / "portfolio.xlsx"
+    _write_portfolio_fixture(source)
+    store = AnalysisStore(tmp_path / "case")
+
+    result = run_portfolio_resilience_workflow(
+        store,
+        source,
+        human_decision="ACCEPT",
+        input_contract={
+            "domain": "portfolio_resilience",
+            "reporting_currency": "USD",
+            "conversion_rates": {"EUR": 2.0, "USD": 1.0},
+        },
+    )
+
+    assert result.status == "accepted"
+    report = result.report_path.read_text(encoding="utf-8") if result.report_path else ""
+    assert "Reporting currency: USD" in report
+    assert "USD " in report
+    assert "€" not in report
