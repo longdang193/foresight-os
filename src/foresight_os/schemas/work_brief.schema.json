@@ -34,6 +34,7 @@
         "required": ["domain"],
         "properties": {
           "domain": { "type": "string", "minLength": 1 },
+          "stage_id": { "type": ["string", "null"], "minLength": 1 },
           "required_tables": { "type": "array", "items": { "type": "string" } },
           "column_mappings": { "type": "object", "additionalProperties": { "type": "string" } },
           "entity_scope": { "type": "array", "items": { "type": "string" } },

@@ -385,13 +385,20 @@ def _synthesize_stage_outputs(
     *,
     allow_legacy_fallback: bool = False,
     existing_records: Mapping[str, object] | None = None,
-    tolerate_invalid_relationships: bool = False,
-    tolerate_conflicting_records: bool = False,
     cancel_check: Callable[[], bool] | None = None,
+    participant_ids: tuple[str, ...] | None = None,
 ) -> object:
+    operation_limit: int | None = None
+    operation_count = 0
+
     def checkpoint() -> None:
+        nonlocal operation_count
         if cancel_check is not None and cancel_check():
             raise RunCanceledError("run canceled during stage synthesis")
+        if operation_limit is not None:
+            operation_count += 1
+            if operation_count > operation_limit:
+                raise _synthesis_error("BUDGET_EXHAUSTED", "typed stage synthesis exceeded the normalization operation budget")
 
     checkpoint()
     if len(outputs) == 1 and not failures:
@@ -429,12 +436,13 @@ def _synthesize_stage_outputs(
         default=64,
         label="max_synthesis_dependency_depth",
     )
-    max_normalization_operations = _positive_limit(
-        limits.get("max_synthesis_normalization_operations"),
-        default=max(1, len(outputs) + 1),
-        label="max_synthesis_normalization_operations",
-    )
+    if limits.get("max_synthesis_normalization_operations") is not None:
+        operation_limit = _positive_limit(
+            limits.get("max_synthesis_normalization_operations"),
+            label="max_synthesis_normalization_operations",
+        )
     collections = ("evidence", "calculations", "claims", "implications", "recommendations", "artifacts", "relationships")
+    participant_ids = tuple(participant_ids or ())
     collection_kinds = {
         "evidence": RecordKind.EVIDENCE,
         "claims": RecordKind.CLAIM,
@@ -494,8 +502,6 @@ def _synthesize_stage_outputs(
         raise _synthesis_error("BUDGET_EXHAUSTED", f"typed stage synthesis exceeded {max_aliases} aliases")
     if preflight_calculations > max_records:
         raise _synthesis_error("BUDGET_EXHAUSTED", f"typed stage synthesis exceeded {max_records} calculations")
-    if max_normalization_operations < len(outputs) + 1:
-        raise _synthesis_error("BUDGET_EXHAUSTED", "typed stage synthesis exceeded the normalization operation budget")
     dependency_depth = 0
     for root in raw_record_ids:
         checkpoint()
@@ -577,7 +583,6 @@ def _synthesize_stage_outputs(
                     expected_stage_id=str(getattr(stage, "stage_id", "stage")),
                     existing_records=dependency_records,
                     existing_record_kinds=dependency_record_kinds,
-                    tolerate_invalid_relationships=tolerate_invalid_relationships,
                     prefer_current_aliases=True,
                     trusted_existing_records=existing_records or {},
                     return_aliases=True,
@@ -585,7 +590,12 @@ def _synthesize_stage_outputs(
             except ValidationError as error:
                 if getattr(error, "participant_index", None) is not None:
                     raise
-                raise ValidationError(str(error), code=getattr(error, "code", None) or "MALFORMED_OUTPUT", participant_index=index) from error
+                raise ValidationError(
+                    str(error),
+                    code=getattr(error, "code", None) or "MALFORMED_OUTPUT",
+                    participant_index=index,
+                    participant_id=participant_ids[index] if index < len(participant_ids) else None,
+                ) from error
             next_outputs.append(normalized.to_contract_payload())
             participant_alias_maps.append(dict(output_aliases))
             canonical_records = normalized.canonical_records()
@@ -689,12 +699,11 @@ def _synthesize_stage_outputs(
                     merged.append(entry)
                     continue
                 if record_hash(existing) != record_hash(entry):
-                    if tolerate_conflicting_records:
-                        continue
                     raise ValidationError(
                         f"conflicting canonical record for {key}:{record_id}",
                         code="MATERIAL_CONFLICT",
                         participant_index=participant_index,
+                        participant_id=participant_ids[participant_index] if participant_index < len(participant_ids) else None,
                     )
         return merged
 
@@ -716,14 +725,18 @@ def _synthesize_stage_outputs(
                 expected_stage_id=str(getattr(stage, "stage_id", "stage")),
                 existing_records=merge_alias_records,
                 existing_record_kinds=merge_alias_kinds,
-                tolerate_invalid_relationships=tolerate_invalid_relationships,
                 prefer_current_aliases=True,
                 trusted_existing_records=existing_records or {},
             ).to_contract_payload()
         except ValidationError as error:
             if getattr(error, "participant_index", None) is not None or len(outputs) != 1:
                 raise
-            raise ValidationError(str(error), code=getattr(error, "code", None) or "MALFORMED_OUTPUT", participant_index=0) from error
+            raise ValidationError(
+                str(error),
+                code=getattr(error, "code", None) or "MALFORMED_OUTPUT",
+                participant_index=0,
+                participant_id=participant_ids[0] if participant_ids else None,
+            ) from error
     return first
 
 
@@ -1179,7 +1192,7 @@ async def run_recipe_async(
                 raise BudgetExceededError("maximum concurrent branches exceeded before dispatch")
         async def invoke(stage_prompt: str | None = None) -> tuple[list[object], object]:
             prompt_value = stage_prompt or str(stage_input)
-            if stage_context.get("correction_participant_indices") and client is not None and pattern != ExecutionPattern.DIRECT:
+            if stage_context.get("correction_participant_ids") and client is not None and pattern != ExecutionPattern.DIRECT:
                 raise _synthesis_error("UNSUPPORTED_RECOVERY", "native orchestration cannot expose participant-local correction state")
             if client is not None and pattern != ExecutionPattern.DIRECT:
                 native_outputs = await _run_native_stage(pattern, prompt_value, client, participants, metrics, stage_context)
@@ -1191,8 +1204,6 @@ async def run_recipe_async(
                     native_outputs,
                     allow_legacy_fallback=context.get("analysis_store") is None,
                     existing_records=context.get("canonical_records"),
-                    tolerate_invalid_relationships=bool(stage_context.get("tolerate_invalid_relationships")),
-                    tolerate_conflicting_records=bool(stage_context.get("tolerate_conflicting_records")),
                 )
             if pattern == ExecutionPattern.DIRECT:
                 stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(prompt_value)]
@@ -1201,40 +1212,51 @@ async def run_recipe_async(
                 branch_count = len(participant_roles)
                 metrics.branches = branch_count
                 metrics.parallelism = branch_count
-                correction_indices = tuple(int(index) for index in stage_context.pop("correction_participant_indices", ()))
-                if correction_indices and not stage_context.get("participant_outputs"):
+                participant_configs = tuple(
+                    ParticipantConfig.from_mapping(item, f"participant-{index + 1}")
+                    for index, item in enumerate(participant_roles)
+                )
+                participant_ids = tuple(item.id for item in participant_configs)
+                correction_ids = tuple(str(item) for item in stage_context.pop("correction_participant_ids", ()))
+                participant_outputs = dict(stage_context.get("participant_outputs", {}))
+                if correction_ids and not participant_outputs:
                     raise _synthesis_error("UNSUPPORTED_RECOVERY", "participant-local correction state is unavailable")
-                selected_indices = correction_indices or tuple(range(branch_count))
-                branch_results = list(stage_context.get("participant_outputs", [None] * branch_count))
-                if len(branch_results) != branch_count:
-                    raise _synthesis_error("UNSUPPORTED_RECOVERY", "participant-local correction state is incomplete")
+                if participant_outputs and set(participant_outputs) - set(participant_ids):
+                    raise _synthesis_error("UNSUPPORTED_RECOVERY", "participant-local correction state contains an unknown participant")
+                selected_ids = correction_ids or participant_ids
+                if any(item not in participant_ids for item in selected_ids):
+                    raise _synthesis_error("UNSUPPORTED_RECOVERY", "participant-local correction state contains an unknown participant")
                 selected_results = await asyncio.gather(
                     *[
-                        AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participant_roles[index], f"participant-{index + 1}"), stage_context).execute(prompt_value)
-                        for index in selected_indices
+                        AnalystExecutor(client, factory, participant_configs[participant_ids.index(participant_id)], stage_context).execute(prompt_value)
+                        for participant_id in selected_ids
                     ],
                     return_exceptions=True,
                 )
-                failed_indices: list[int] = []
-                for index, item in zip(selected_indices, selected_results, strict=False):
-                    branch_results[index] = item
+                for participant_id, item in zip(selected_ids, selected_results, strict=False):
+                    participant_outputs[participant_id] = item
+                if len(participant_outputs) != branch_count:
+                    raise _synthesis_error("UNSUPPORTED_RECOVERY", "participant-local correction state is incomplete")
+                failed_ids: list[str] = []
+                for participant_id in participant_ids:
+                    item = participant_outputs[participant_id]
                     if isinstance(item, BaseException):
-                        failed_indices.append(index)
-                stage_context["participant_outputs"] = list(branch_results)
-                if any(isinstance(item, (asyncio.CancelledError, RunCanceledError)) for item in branch_results):
-                    cancellation = next(item for item in branch_results if isinstance(item, (asyncio.CancelledError, RunCanceledError)))
+                        failed_ids.append(participant_id)
+                stage_context["participant_outputs"] = participant_outputs
+                if any(isinstance(item, (asyncio.CancelledError, RunCanceledError)) for item in participant_outputs.values()):
+                    cancellation = next(item for item in participant_outputs.values() if isinstance(item, (asyncio.CancelledError, RunCanceledError)))
                     raise cancellation
-                results = tuple(item for item in branch_results if not isinstance(item, BaseException))
-                failures = tuple(item for item in branch_results if isinstance(item, BaseException))
-                stage_context["failed_participant_indices"] = tuple(failed_indices)
+                successful_ids = tuple(item for item in participant_ids if not isinstance(participant_outputs[item], BaseException))
+                results = tuple(participant_outputs[item] for item in successful_ids)
+                failures = tuple(participant_outputs[item] for item in participant_ids if isinstance(participant_outputs[item], BaseException))
+                stage_context["failed_participant_ids"] = tuple(failed_ids)
                 return list(results), _synthesize_stage_outputs(
                     stage,
                     list(results),
                     failures,
                     allow_legacy_fallback=context.get("analysis_store") is None,
                     existing_records=context.get("canonical_records"),
-                    tolerate_invalid_relationships=bool(stage_context.get("tolerate_invalid_relationships")),
-                    tolerate_conflicting_records=bool(stage_context.get("tolerate_conflicting_records")),
+                    participant_ids=successful_ids,
                 )
             elif pattern == ExecutionPattern.GROUP_CHAT:
                 stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(prompt_value)]
@@ -1258,8 +1280,6 @@ async def run_recipe_async(
                 stage_outputs,
                 allow_legacy_fallback=context.get("analysis_store") is None,
                 existing_records=context.get("canonical_records"),
-                tolerate_invalid_relationships=bool(stage_context.get("tolerate_invalid_relationships")),
-                tolerate_conflicting_records=bool(stage_context.get("tolerate_conflicting_records")),
             )
         committer = context.get("canonical_result_committer")
         correction_prompt: str | None = None
@@ -1270,14 +1290,14 @@ async def run_recipe_async(
                     stage_outputs, current = await asyncio.wait_for(invoke(correction_prompt), float(max_timeout))
                 else:
                     stage_outputs, current = await invoke(correction_prompt)
-                failed_participant_indices = tuple(stage_context.pop("failed_participant_indices", ()))
-                if failed_participant_indices and correction_prompt is None:
+                failed_participant_ids = tuple(stage_context.pop("failed_participant_ids", ()))
+                if failed_participant_ids and correction_prompt is None:
                     if not budget.correct():
                         raise _synthesis_error("BUDGET_EXHAUSTED", "participant correction budget exhausted")
                     if pattern not in {ExecutionPattern.CONCURRENT, ExecutionPattern.DIRECT}:
                         raise _synthesis_error("UNSUPPORTED_RECOVERY", "participant-local correction is unsupported for this execution pattern")
                     metrics.correction_rounds += 1
-                    stage_context["correction_participant_indices"] = failed_participant_indices
+                    stage_context["correction_participant_ids"] = failed_participant_ids
                     correction_prompt = (
                         f"{json.dumps(_stage_input_payload(stage_input), default=str, ensure_ascii=False, sort_keys=True)}\n\n"
                         "The previous participant result failed during execution. Correct only your participant result, "
@@ -1307,8 +1327,8 @@ async def run_recipe_async(
                         f"{json.dumps(_stage_input_payload(stage_input), default=str, ensure_ascii=False, sort_keys=True)}\n\n"
                         "The previous structured result was rejected by canonical validation. "
                         "Correct only the validation issue and return the complete result again. "
-                        "For relationships, remove any invalid relationship and its ID from every "
-                        "relationship_ids list rather than returning a guessed or dangling edge. "
+                        "For relationships, correct only the exact invalid edge when its participants "
+                        "are known; never silently drop a required edge or return a guessed edge. "
                         "For dependency outputs, reference an existing canonical dependency ID only "
                         "after you validate its hash and invalidation state, dependency closure, and "
                         "participant authorization. "
@@ -1317,8 +1337,11 @@ async def run_recipe_async(
                     continue
                 if not budget.correct():
                     raise
+                participant_id = getattr(error, "participant_id", None)
                 participant_index = getattr(error, "participant_index", None)
-                if participant_index is None and len(participants) > 1:
+                if participant_id is None and participant_index is not None and 0 <= int(participant_index) < len(participants):
+                    participant_id = participants[int(participant_index)].id
+                if participant_id is None and len(participants) > 1:
                     raise _synthesis_error(
                         "UNSUPPORTED_RECOVERY",
                         "validation failure does not identify a safe participant-local correction target",
@@ -1329,19 +1352,17 @@ async def run_recipe_async(
                         f"participant-local correction is unsupported for {pattern.value}",
                     ) from error
                 metrics.correction_rounds += 1
-                if recovery_code == "INVALID_RELATIONSHIP":
-                    stage_context["tolerate_invalid_relationships"] = True
-                if participant_index is not None:
-                    stage_context["correction_participant_indices"] = (int(participant_index),)
+                if participant_id is not None:
+                    stage_context["correction_participant_ids"] = (str(participant_id),)
                 correction_prompt = (
                     f"{json.dumps(_stage_input_payload(stage_input), default=str, ensure_ascii=False, sort_keys=True)}\n\n"
                     "The previous structured result was rejected by canonical validation. "
                     "Correct only the validation issue and return the complete result again. "
                      "For relationships, every from_id and to_id must refer to a record declared "
-                     "in this current result or copied exactly from dependency_outputs. If either "
-                     "endpoint is missing, undeclared, or has an invalid kind, remove the invalid "
-                     "relationship and its ID from every relationship_ids list; do not replace it "
-                     "with a guessed or dangling edge. "
+                     "in this current result or copied exactly from dependency_outputs. Correct "
+                     "only the exact invalid edge when both participants and the intended edge are "
+                     "known; otherwise stop with an explicit unsupported recovery result. Never "
+                     "silently drop a required edge or replace it with a guessed or dangling edge. "
                      "Before returning, audit every evidence_ids, relationship_ids, input_ids, "
                      "from_id, and to_id value against an ID declared in this payload; remove any "
                      "reference without a matching local record, and do not reuse IDs from another "
@@ -1451,11 +1472,19 @@ async def run_recipe_async(
                 for domain, fingerprint in dict(context.get("analysis_contract_fingerprints", {})).items()
             }
             declared_domains = tuple(str(item) for item in getattr(stage, "analysis_domains", ()))
-            relevant_contract_fingerprints = (
-                {domain: all_contract_fingerprints[domain] for domain in declared_domains if domain in all_contract_fingerprints}
-                if declared_domains
-                else all_contract_fingerprints
-            )
+            stage_id = str(getattr(stage, "stage_id", "stage"))
+            relevant_contract_fingerprints = {
+                domain: all_contract_fingerprints.get(
+                    f"{stage_id}:{domain}",
+                    all_contract_fingerprints.get(f"GLOBAL_SCOPE:{domain}", all_contract_fingerprints.get(domain)),
+                )
+                for domain in declared_domains
+                if all_contract_fingerprints.get(
+                    f"{stage_id}:{domain}",
+                    all_contract_fingerprints.get(f"GLOBAL_SCOPE:{domain}", all_contract_fingerprints.get(domain)),
+                )
+                is not None
+            }
             stage_input = StageInput(
                 decision_question=str(getattr(stage, "decision_question", "") or context.get("decision_question") or recipe.metadata.get("decision_question") or prompt),
                 horizon=str(getattr(stage, "horizon", "") or context.get("horizon") or recipe.metadata.get("horizon", "unspecified")),

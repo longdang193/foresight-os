@@ -101,37 +101,50 @@ class CapabilityScope:
         if self._closed:
             return
         self._closed = True
-        errors: list[BaseException] = []
-        if self.executor is not None:
-            executor = self.executor
-            self.executor = None
-            try:
-                await asyncio.to_thread(executor.shutdown, wait=True, cancel_futures=False)
-            except BaseException as error:
-                errors.append(error)
-        workbook_owner = self.workbook_context
-        if workbook_owner is not None:
-            clear = getattr(workbook_owner, "clear", None)
-            if clear is not None:
+        async def settle() -> list[BaseException]:
+            errors: list[BaseException] = []
+            if self.executor is not None:
+                executor = self.executor
+                self.executor = None
                 try:
-                    clear()
+                    await asyncio.to_thread(executor.shutdown, wait=True, cancel_futures=False)
                 except BaseException as error:
                     errors.append(error)
-            self.workbook_context = None
-        for resource in reversed(self.resources):
-            close = getattr(resource, "close", None)
-            if close is None:
-                continue
+            workbook_owner = self.workbook_context
+            if workbook_owner is not None:
+                clear = getattr(workbook_owner, "clear", None)
+                if clear is not None:
+                    try:
+                        clear()
+                    except BaseException as error:
+                        errors.append(error)
+                self.workbook_context = None
+            for resource in reversed(self.resources):
+                close = getattr(resource, "close", None)
+                if close is None:
+                    continue
+                try:
+                    result = close()
+                    if inspect.isawaitable(result):
+                        await result
+                except BaseException as error:
+                    errors.append(error)
+            return errors
+
+        cleanup_task = asyncio.create_task(settle())
+        interrupted = False
+        while not cleanup_task.done():
             try:
-                result = close()
-                if inspect.isawaitable(result):
-                    await result
-            except BaseException as error:
-                errors.append(error)
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError:
+                interrupted = True
+        errors = await cleanup_task
         if errors:
             error = RuntimeError(f"failed to close {len(errors)} capability resource(s)")
             error.errors = errors
             raise error from errors[0]
+        if interrupted:
+            raise asyncio.CancelledError
 
 
 class CapabilityResolver:

@@ -52,7 +52,7 @@ def test_recipe_compiles_explicit_contract_domains_without_wire_field_drift():
     assert recipe.stages[0].analysis_domains == ("portfolio_resilience",)
     assert recipe.stages[1].analysis_domains == ("supplier_resilience",)
     assert restored.stages[0].analysis_domains == ("portfolio_resilience",)
-    assert "analysis_domains" not in recipe.to_dict()["stages"][0]
+    assert recipe.to_dict()["stages"][0]["analysis_domains"] == ["portfolio_resilience"]
 
 
 def test_stage_input_contains_only_declared_dependency_outputs(monkeypatch):

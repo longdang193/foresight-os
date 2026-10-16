@@ -159,6 +159,7 @@ class RecipeStage:
             "adaptation_policy": list(self.adaptation_policy),
             "result_contract": self.result_contract,
             "synthesis_policy": self.synthesis_policy,
+             "analysis_domains": list(self.analysis_domains),
         }
         return value
 
@@ -272,13 +273,20 @@ class ExecutionRecipe:
     def from_dict(cls, value: dict[str, Any]) -> "ExecutionRecipe":
         metadata = dict(value.get("metadata", {}))
         try:
-            analysis_domains = json.loads(metadata.get("analysis_contract_domains", "{}"))
+            legacy_analysis_domains = json.loads(metadata.get("analysis_contract_domains", "{}"))
         except (TypeError, ValueError):
-            analysis_domains = {}
+            legacy_analysis_domains = {}
         stages = tuple(RecipeStage.from_dict(stage) for stage in value.get("stages", ()))
         stages = tuple(
-            replace(stage, analysis_domains=tuple(str(item) for item in analysis_domains.get(stage.stage_id, ())))
-            for stage in stages
+            replace(
+                stage,
+                analysis_domains=(
+                    tuple(str(item) for item in value["stages"][index].get("analysis_domains", ()))
+                    if "analysis_domains" in value["stages"][index]
+                    else tuple(str(item) for item in legacy_analysis_domains.get(stage.stage_id, ()))
+                ),
+            )
+            for index, stage in enumerate(stages)
         )
         return cls(
             name=RecipeName(value["name"]),

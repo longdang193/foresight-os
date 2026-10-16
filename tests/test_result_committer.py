@@ -316,7 +316,8 @@ def test_multi_participant_validation_uses_correction_budget(monkeypatch):
 
     assert result.metrics.correction_rounds == 1
     assert native_calls == 2
-    assert "remove any invalid relationship" in prompts[1]
+    assert "correct only the exact invalid edge" in prompts[1]
+    assert "never silently drop" in prompts[1]
 
 
 def test_tool_enabled_multi_participant_correction_can_dispatch_again(monkeypatch):
@@ -545,7 +546,7 @@ def test_committer_rejects_same_id_with_different_persisted_content(tmp_path):
         committer(stage, _payload(), {})
 
 
-def test_normalizer_can_drop_invalid_relationships_only_after_explicit_retry():
+def test_normalizer_rejects_invalid_relationships():
     payload = _payload(
         relationships=[
             {
@@ -557,13 +558,11 @@ def test_normalizer_can_drop_invalid_relationships_only_after_explicit_retry():
         ]
     )
 
-    normalized = normalize_stage_result(payload, tolerate_invalid_relationships=True)
-
-    assert normalized.relationships == ()
-    assert normalized.claims[0].relationship_ids == []
+    with pytest.raises(ValidationError):
+        normalize_stage_result(payload)
 
 
-def test_normalizer_can_drop_unknown_relationship_endpoints_after_explicit_retry():
+def test_normalizer_rejects_unknown_relationship_endpoints():
     payload = _payload(
         relationships=[
             {
@@ -575,22 +574,18 @@ def test_normalizer_can_drop_unknown_relationship_endpoints_after_explicit_retry
         ]
     )
 
-    normalized = normalize_stage_result(payload, tolerate_invalid_relationships=True)
-
-    assert normalized.relationships == ()
-    assert normalized.claims[0].relationship_ids == []
+    with pytest.raises(ValidationError):
+        normalize_stage_result(payload)
 
 
-def test_normalizer_can_drop_unresolved_relationship_references_after_explicit_retry():
+def test_normalizer_rejects_unresolved_relationship_references():
     payload = _payload(
         relationships=[],
         claims=[{**_payload()["claims"][0], "relationship_ids": ["missing-relationship"]}],
     )
 
-    normalized = normalize_stage_result(payload, tolerate_invalid_relationships=True)
-
-    assert normalized.relationships == ()
-    assert normalized.claims[0].relationship_ids == []
+    with pytest.raises(ValidationError):
+        normalize_stage_result(payload)
 
 
 def test_workflow_retries_and_drops_unknown_record_relationship_reference(tmp_path):
@@ -637,21 +632,19 @@ def test_workflow_retries_and_drops_unknown_record_relationship_reference(tmp_pa
         def as_agent(self, **kwargs):
             return Agent()
 
-    result = asyncio.run(
-        run_recipe_async(
-            recipe,
-            "question",
-            client=Client(),
-            run_id="relationship-reference-correction",
-            run_context={"canonical_result_committer": CanonicalResultCommitter(store, "case")},
+    with pytest.raises(ValidationError):
+        asyncio.run(
+            run_recipe_async(
+                recipe,
+                "question",
+                client=Client(),
+                run_id="relationship-reference-correction",
+                run_context={"canonical_result_committer": CanonicalResultCommitter(store, "case")},
+            )
         )
-    )
-
-    assert result.metrics.correction_rounds == 1
-    assert store.load_pending().implications[0].relationship_ids == []
 
 
-def test_synthesis_can_drop_invalid_relationships_after_explicit_retry():
+def test_synthesis_rejects_invalid_relationships():
     base = make_recipe(RecipeName.DIRECT)
     stage = RecipeStage(
         "stage-1",
@@ -672,16 +665,11 @@ def test_synthesis_can_drop_invalid_relationships_after_explicit_retry():
         ]
     )
 
-    synthesized = _synthesize_stage_outputs(
-        stage,
-        [payload, payload],
-        tolerate_invalid_relationships=True,
-    )
-
-    assert synthesized["relationships"] == []
+    with pytest.raises(ValidationError):
+        _synthesize_stage_outputs(stage, [payload, payload])
 
 
-def test_synthesis_can_preserve_first_conflicting_record_after_explicit_retry():
+def test_synthesis_rejects_conflicting_records():
     stage = RecipeStage(
         "stage-1",
         ExecutionPattern.CONCURRENT,
@@ -695,9 +683,8 @@ def test_synthesis_can_preserve_first_conflicting_record_after_explicit_retry():
         {"evidence": [{"id": "e1", "statement": "second"}], "claims": [], "calculations": [], "implications": [], "recommendations": [], "artifacts": [], "relationships": [], "assumptions": [], "uncertainty": [], "monitoring_indicators": []},
     ]
 
-    synthesized = _synthesize_stage_outputs(stage, outputs, tolerate_conflicting_records=True)
-
-    assert synthesized["evidence"] == [{"id": "e1", "statement": "first"}]
+    with pytest.raises(ValidationError, match="conflicting canonical record"):
+        _synthesize_stage_outputs(stage, outputs)
 
 
 def test_synthesis_preserves_trusted_existing_evidence_when_peer_reuses_its_alias():
@@ -825,15 +812,28 @@ def test_synthesis_keeps_valid_relationship_alias_after_an_invalid_relationship_
         relationships=[],
     )
 
-    synthesized = _synthesize_stage_outputs(
-        stage,
-        [output, peer_output],
-        tolerate_invalid_relationships=True,
+    with pytest.raises(ValidationError):
+        _synthesize_stage_outputs(stage, [output, peer_output])
+
+
+def test_synthesis_reports_material_conflict_by_stable_participant_id():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "alpha"}, {"id": "beta"}),
+        "prompt",
+        "typed-result",
+        {},
+        synthesis_policy="aggregate-typed-results",
     )
+    first = {"evidence": [{"id": "e1", "statement": "first"}], "claims": [], "calculations": [], "implications": [], "recommendations": [], "artifacts": [], "relationships": [], "assumptions": [], "uncertainty": [], "monitoring_indicators": []}
+    second = {"evidence": [{"id": "e1", "statement": "second"}], "claims": [], "calculations": [], "implications": [], "recommendations": [], "artifacts": [], "relationships": [], "assumptions": [], "uncertainty": [], "monitoring_indicators": []}
 
-    assert synthesized["claims"][0]["relationship_ids"]
-    assert synthesized["claims"][0]["relationship_ids"][0] == synthesized["relationships"][0]["id"]
+    with pytest.raises(ValidationError) as caught:
+        _synthesize_stage_outputs(stage, [first, second], participant_ids=("alpha", "beta"))
 
+    assert caught.value.code == "MATERIAL_CONFLICT"
+    assert caught.value.participant_id == "beta"
 
 def test_workflow_hydrates_canonical_records_from_persisted_state_for_cache_reuse(tmp_path):
     store = AnalysisStore(tmp_path / "case")

@@ -6,7 +6,7 @@ from datetime import date
 from typing import Any, Iterable, Mapping
 
 from foresight_os.domain.models import Evidence, SourceLocator
-from foresight_os.runtime.local_toolbelt import SourceSnapshot, ToolbeltError, spreadsheet_read
+from foresight_os.runtime.local_toolbelt import SourceSnapshot, ToolbeltError, ToolbeltLimits, spreadsheet_read
 
 
 def read_workbook(
@@ -19,7 +19,12 @@ def read_workbook(
 ) -> Any:
     if workbook_context is not None:
         return workbook_context.read(source, selection, limits, cancel_check=cancel_check)
-    snapshot = SourceSnapshot.capture(source, cancel_check=cancel_check)
+    read_limits = limits or {}
+    snapshot = SourceSnapshot.capture(
+        source,
+        cancel_check=cancel_check,
+        max_bytes=int(read_limits.get("max_bytes", ToolbeltLimits().max_bytes)),
+    )
     return spreadsheet_read(source, selection, limits, cancel_check=cancel_check, _snapshot=snapshot)
 
 
@@ -42,7 +47,7 @@ def validate_mapping_targets(headers: Iterable[str], mappings: Mapping[str, str]
     missing = [
         (str(canonical), str(source))
         for canonical, source in mappings.items()
-        if str(source) not in available and str(canonical) not in available
+        if str(source) not in available
     ]
     if missing:
         details = ", ".join(f"{source} for canonical column {canonical}" for canonical, source in missing)

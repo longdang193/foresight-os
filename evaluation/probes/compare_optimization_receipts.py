@@ -22,7 +22,7 @@ SOAK_FIELDS = (
     "owned_capability_resources",
     "mcp_session_count",
 )
-MEASUREMENT_STATUSES = {"VERIFIED", "FAILED", "NOT_MEASURED", "DEFERRED"}
+MEASUREMENT_STATUSES = {"VERIFIED", "FAILED", "NOT_MEASURED", "DEFERRED", "FINAL_ONLY"}
 
 
 def _tool_calls(receipt: dict) -> int:
@@ -54,15 +54,14 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
         missing.append(f"schema_version={SCHEMA_VERSION}")
     evidence = receipt.get("evidence")
     evidence_statuses: dict[str, str] = {}
-    if evidence is not None:
-        for dimension in ("correctness", "latency", "allocation", "soak"):
-            item = evidence.get(dimension, {})
-            status = item.get("status")
-            evidence_statuses[dimension] = status
-            if status not in MEASUREMENT_STATUSES:
-                missing.append(f"evidence.{dimension}.status")
-            elif status != "VERIFIED" and not isinstance(item.get("limitation"), str):
-                missing.append(f"evidence.{dimension}.limitation")
+    for dimension in ("correctness", "latency", "allocation", "soak"):
+        item = evidence.get(dimension, {}) if isinstance(evidence, dict) else {}
+        status = item.get("status")
+        evidence_statuses[dimension] = status
+        if status not in MEASUREMENT_STATUSES:
+            missing.append(f"evidence.{dimension}.status")
+        elif status != "VERIFIED" and not isinstance(item.get("limitation"), str):
+            missing.append(f"evidence.{dimension}.limitation")
     revision = receipt.get("revision", {})
     for field in ("commit", "repo_root", "package_path"):
         if not isinstance(revision.get(field), str) or not revision[field].strip():
@@ -108,7 +107,7 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
             missing.append(f"maf_patterns.{name}.latency.wall_time_ms_p95>0")
     soak = receipt.get("soak", {})
     required_soak_runs = int(receipt.get("acceptance", {}).get("soak_runs", 0) or 0)
-    soak_verified = evidence_statuses.get("soak", "VERIFIED") == "VERIFIED"
+    soak_verified = evidence_statuses.get("soak") == "VERIFIED"
     snapshots = soak.get("snapshots", ())
     if soak_verified and (not isinstance(snapshots, list) or len(snapshots) < required_soak_runs):
         missing.append("soak.snapshots")
@@ -133,6 +132,8 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
         status = item.get("status")
         if status not in MEASUREMENT_STATUSES:
             missing.append(f"xlsx.workloads.{name}.status")
+        elif status == "FAILED":
+            missing.append(f"xlsx.workloads.{name}.status=not_failed")
         elif status != "VERIFIED" and not isinstance(item.get("limitation"), str):
             missing.append(f"xlsx.workloads.{name}.limitation")
     return sorted(set(missing))
@@ -249,8 +250,8 @@ def compare(baseline: dict, release: dict) -> dict:
         release_latency = float(release["maf_patterns"][name]["latency"]["wall_time_ms_p95"])
         pattern_regressions[name] = _pct(release_latency, baseline_latency)
         pattern_comparisons[name] = _comparison_metric(baseline_latency, release_latency)
-    latency_measured = release_evidence.get("latency", {}).get("status", "VERIFIED") == "VERIFIED"
-    allocation_measured = release_evidence.get("allocation", {}).get("status", "VERIFIED") == "VERIFIED"
+    latency_measured = release_evidence.get("latency", {}).get("status") == "VERIFIED"
+    allocation_measured = release_evidence.get("allocation", {}).get("status") == "VERIFIED"
     p95_regression = _pct(float(release["xlsx"]["p95_ms"]), float(baseline["xlsx"]["p95_ms"])) if latency_measured else None
     allocation_regression = _pct(float(release["xlsx"]["peak_allocation_bytes"]), float(baseline["xlsx"]["peak_allocation_bytes"])) if allocation_measured else None
     rss_regression = _pct(float(release["resource"]["rss_bytes"]), float(baseline["resource"]["rss_bytes"]))

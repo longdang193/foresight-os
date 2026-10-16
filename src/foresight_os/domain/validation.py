@@ -21,10 +21,18 @@ from .relationships import RecordKind, relationship_rule
 class ValidationError(ValueError):
     """Raised when a durable Foresight OS record violates its trust boundary."""
 
-    def __init__(self, message: str, *, code: str | None = None, participant_index: int | None = None):
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str | None = None,
+        participant_index: int | None = None,
+        participant_id: str | None = None,
+    ):
         super().__init__(message)
         self.code = code
         self.participant_index = participant_index
+        self.participant_id = participant_id
 
 
 CURRENT_SCHEMA_VERSION = 2
@@ -221,14 +229,30 @@ def _normalize_work_brief(value: dict[str, Any]) -> dict[str, Any]:
     if "analysis_inputs" in normalized:
         contracts = normalized["analysis_inputs"]
         if isinstance(contracts, dict):
-            contracts = [
-                {**dict(contract), "domain": str(domain)} if isinstance(contract, dict) else {"domain": str(domain)}
-                for domain, contract in contracts.items()
-            ]
+            expanded = []
+            for domain, contract in contracts.items():
+                if isinstance(contract, (list, tuple)):
+                    expanded.extend(
+                        {**dict(item), "domain": str(domain)} if isinstance(item, dict) else {"domain": str(domain)}
+                        for item in contract
+                    )
+                else:
+                    expanded.append({**dict(contract), "domain": str(domain)} if isinstance(contract, dict) else {"domain": str(domain)})
+            contracts = expanded
         normalized_contracts = []
+        stage_ids = {str(stage.get("stage_id", "")) for stage in stages}
+        seen_scopes = set()
         for contract in contracts:
             try:
-                normalized_contracts.append(AnalysisInputContract.from_dict(contract).to_dict())
+                parsed = AnalysisInputContract.from_dict(contract)
+                scope = parsed.stage_id or "GLOBAL_SCOPE"
+                key = (scope, parsed.domain.lower())
+                if key in seen_scopes:
+                    raise ValueError(f"duplicate analysis input contract scope: {scope}:{parsed.domain}")
+                if parsed.stage_id is not None and parsed.stage_id not in stage_ids:
+                    raise ValueError(f"unknown analysis input contract stage: {parsed.stage_id}")
+                seen_scopes.add(key)
+                normalized_contracts.append(parsed.to_dict())
             except ValueError as exc:
                 raise ValidationError(str(exc)) from exc
         normalized["analysis_inputs"] = normalized_contracts

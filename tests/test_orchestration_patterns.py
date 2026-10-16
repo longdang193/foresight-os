@@ -270,6 +270,29 @@ def test_typed_synthesis_honors_cancellation_checkpoint():
         )
 
 
+def test_typed_synthesis_counts_material_work_against_operation_budget():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "one"}, {"id": "two"}),
+        "typed-result",
+        "typed-result",
+        {"max_synthesis_normalization_operations": 2},
+        synthesis_policy="aggregate-typed-results",
+    )
+
+    with pytest.raises(ValidationError) as caught:
+        _synthesize_stage_outputs(
+            stage,
+            [
+                _typed_stage_result("stage-1", "provider-one", "observation"),
+                _typed_stage_result("stage-1", "provider-two", "observation"),
+            ],
+        )
+
+    assert caught.value.code == "BUDGET_EXHAUSTED"
+
+
 def test_native_sequential_reviewer_retains_original_stage_context(monkeypatch):
     prompts = []
 

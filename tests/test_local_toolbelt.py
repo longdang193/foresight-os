@@ -133,6 +133,23 @@ def test_workbook_context_reuses_identical_views_without_reusing_different_selec
     assert context.stats.openpyxl_load_count == 4
 
 
+def test_workbook_context_warm_hit_skips_cache_and_authority_transactions(workbook_path: Path, monkeypatch):
+    context = WorkbookContext()
+    selection = SheetSelection(sheet_names=("Demand",), include_hidden=True, include_hidden_rows=True)
+    context.read(workbook_path, selection)
+
+    def fail_transaction(*_args, **_kwargs):
+        raise AssertionError("warm cache hit must not open a mutation transaction")
+
+    monkeypatch.setattr(context.cache, "begin_transaction", fail_transaction)
+    monkeypatch.setattr(context.authority_index, "begin_transaction", fail_transaction)
+
+    result = context.read(workbook_path, selection)
+
+    assert result.workbook_sha256
+    assert context.stats.cache_hits == 1
+
+
 def test_workbook_context_currentness_and_cleanup_are_explicit(tmp_path: Path):
     source = tmp_path / "context.csv"
     source.write_text("Region,Value\nNorth,10\n", encoding="utf-8")
@@ -228,6 +245,16 @@ def test_xlsx_read_uses_pinned_snapshot_bytes_when_live_path_changes(workbook_pa
 
     assert result.workbook_sha256 == snapshot.sha256
     assert result.tables
+
+
+def test_standalone_workbook_read_enforces_max_bytes(tmp_path: Path):
+    from foresight_os.analysis.workbook_inputs import read_workbook
+
+    source = tmp_path / "bounded.csv"
+    source.write_text("Region,Value\nNorth,10\n", encoding="utf-8")
+
+    with pytest.raises(ToolbeltError, match="byte limit"):
+        read_workbook(source, limits={"max_bytes": 4})
 
 
 def test_provider_spreadsheet_arguments_are_json_coerced(workbook_path: Path):

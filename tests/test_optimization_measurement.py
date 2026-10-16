@@ -53,7 +53,15 @@ def _receipt() -> dict:
             }
         ],
         "resource": {"rss_bytes": 100},
-        "xlsx": {"p95_ms": 10, "peak_allocation_bytes": 100, "deterministic_key": "same"},
+        "xlsx": {
+            "p95_ms": 10,
+            "peak_allocation_bytes": 100,
+            "deterministic_key": "same",
+            "workloads": {
+                "base_workload": {"executed": True, "status": "VERIFIED", "limitation": None},
+                "final_only_workload": {"executed": True, "status": "FINAL_ONLY", "limitation": "no base counterpart"},
+            },
+        },
         "workload": {"fixture_sha256": "same", "warmups": 2, "measured_runs": 10, "patterns": list(PATTERNS)},
         "acceptance": {"p95_regression_pct": 20, "peak_allocation_regression_pct": 15, "soak_runs": 2, "tool_calls_per_finding_increase": 0},
         "maf_patterns": {
@@ -73,6 +81,12 @@ def _receipt() -> dict:
             "monotonic_growth": False,
         },
         "native_mcp": {"status": "VERIFIED", "tool_calls": 1},
+        "evidence": {
+            "correctness": {"status": "VERIFIED", "limitation": None},
+            "latency": {"status": "VERIFIED", "limitation": None},
+            "allocation": {"status": "VERIFIED", "limitation": None},
+            "soak": {"status": "VERIFIED", "limitation": None},
+        },
     }
 
 
@@ -101,6 +115,30 @@ def test_comparator_rejects_missing_or_zero_denominator_without_raising():
     release = deepcopy(baseline)
     del release["revision"]
     assert not compare(baseline, release)["accepted"]
+
+
+def test_comparator_rejects_missing_evidence_statuses():
+    baseline = _receipt()
+    release = deepcopy(baseline)
+    del release["evidence"]
+
+    result = compare(baseline, release)
+
+    assert result["accepted"] is False
+    assert "evidence.correctness.status" in result["missing_required_evidence"]["release"]
+    assert "evidence.latency.status" in result["missing_required_evidence"]["release"]
+
+
+def test_comparator_accepts_final_only_workloads_but_rejects_failed_workloads():
+    baseline = _receipt()
+    release = deepcopy(baseline)
+    release["revision"]["commit"] = "release-commit"
+    assert compare(baseline, release)["accepted"]
+
+    release["xlsx"]["workloads"]["final_only_workload"]["status"] = "FAILED"
+    result = compare(baseline, release)
+    assert not result["accepted"]
+    assert "xlsx.workloads.final_only_workload.status=not_failed" in result["missing_required_evidence"]["release"]
 
 
 def test_comparator_rejects_workload_pattern_and_resource_regressions():

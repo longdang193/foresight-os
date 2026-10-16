@@ -265,7 +265,7 @@ class WorkBrief:
     horizon: str = "unspecified"
     consequence_level: str = "standard"
     user_preferences: dict[str, Any] = field(default_factory=dict)
-    analysis_inputs: dict[str, Any] = field(default_factory=dict)
+    analysis_inputs: Any = field(default_factory=dict)
     execution_intent: ExecutionIntent | None = None
     producer: MethodProvenance | None = None
 
@@ -278,6 +278,11 @@ class WorkBrief:
             value["producer"] = self.producer.to_dict()
         if not self.analysis_inputs:
             value.pop("analysis_inputs", None)
+        elif isinstance(self.analysis_inputs, dict):
+            value["analysis_inputs"] = [
+                {**dict(contract), "domain": str(domain)} if isinstance(contract, dict) else {"domain": str(domain)}
+                for domain, contract in self.analysis_inputs.items()
+            ]
         if self.execution_intent is None:
             if self.execution_pattern_override is None:
                 value.pop("execution_intent", None)

@@ -19,7 +19,7 @@ from foresight_os.runtime.local_toolbelt import AnalysisOperation, SheetSelectio
 
 
 SCHEMA_VERSION = 2
-MEASUREMENT_STATUSES = {"VERIFIED", "FAILED", "NOT_MEASURED", "DEFERRED"}
+MEASUREMENT_STATUSES = {"VERIFIED", "FAILED", "NOT_MEASURED", "DEFERRED", "FINAL_ONLY"}
 
 
 def _revision_metadata() -> dict[str, str]:
@@ -162,6 +162,9 @@ def _summarize_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
         values = [float(item[field]) for item in samples]
         summary[f"{field}_p50"] = _percentile(values, 0.50)
         summary[f"{field}_p95"] = _percentile(values, 0.95)
+        summary[f"{field}_min"] = round(min(values), 3) if values else 0.0
+        summary[f"{field}_max"] = round(max(values), 3) if values else 0.0
+        summary[f"{field}_p95_max"] = summary[f"{field}_p95"]
     for field in (
         "model_calls",
         "tool_calls_total",
@@ -239,7 +242,15 @@ def build_receipt(
         "status": "VERIFIED" if native_mcp.get("status") == "VERIFIED" else "FAILED",
         "environment": _environment_metadata(),
         "revision": _revision_metadata(),
-        "workload": {"fixture": fixture.name, "fixture_sha256": hashlib.sha256(fixture.read_bytes()).hexdigest(), "warmups": 2, "measured_runs": 10, "patterns": sorted(patterns)},
+        "workload": {
+            "fixture": fixture.name,
+            "fixture_sha256": hashlib.sha256(fixture.read_bytes()).hexdigest(),
+            "warmups": 2,
+            "measured_runs": 10,
+            "process_runs": len(patterns),
+            "samples_per_process_run": 10,
+            "patterns": sorted(patterns),
+        },
         "acceptance": thresholds,
         "accepted_finding_count": accepted_count,
         "economics": economics,

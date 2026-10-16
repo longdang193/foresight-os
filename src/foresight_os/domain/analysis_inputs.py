@@ -36,6 +36,7 @@ ANALYSIS_INPUT_CONTRACT_FIELDS = frozenset(
         "compatibility_assumption",
     }
 )
+GLOBAL_SCOPE = "GLOBAL_SCOPE"
 
 
 def _tuple(value: Any) -> tuple[str, ...]:
@@ -130,6 +131,16 @@ class AnalysisInputContract:
     compatibility_assumption: str | None = None
 
     def __post_init__(self) -> None:
+        for field_name in (
+            "required_tables",
+            "entity_scope",
+            "periods",
+            "scenarios",
+            "required_calculations",
+            "required_validation_checks",
+            "assumptions",
+        ):
+            object.__setattr__(self, field_name, _tuple(getattr(self, field_name)))
         object.__setattr__(self, "column_mappings", MappingProxyType({str(key): str(value) for key, value in self.column_mappings.items()}))
         object.__setattr__(self, "conversion_rates", MappingProxyType({str(key): float(value) for key, value in self.conversion_rates.items()}))
         self.validate()
@@ -259,27 +270,64 @@ class NormalizedIntent:
         }
         return hashlib.sha256(json.dumps(_canonical(payload), sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
-    def contract_for_domain(self, domain: str) -> AnalysisInputContract | None:
+    def contract_for_domain(self, domain: str, stage_id: str | None = None) -> AnalysisInputContract | None:
         wanted = str(domain).lower()
-        return next((contract for contract in self.contracts if contract.domain.lower() == wanted), None)
+        if stage_id is not None:
+            scoped = next(
+                (
+                    contract
+                    for contract in self.contracts
+                    if contract.stage_id == str(stage_id) and contract.domain.lower() == wanted
+                ),
+                None,
+            )
+            if scoped is not None:
+                return scoped
+        return next(
+            (
+                contract
+                for contract in self.contracts
+                if contract.stage_id is None and contract.domain.lower() == wanted
+            ),
+            None,
+        )
 
 
-def contract_for_domain(intent: NormalizedIntent | None, domain: str) -> AnalysisInputContract | None:
-    return intent.contract_for_domain(domain) if intent is not None else None
+def contract_for_domain(
+    intent: NormalizedIntent | None,
+    domain: str,
+    stage_id: str | None = None,
+) -> AnalysisInputContract | None:
+    return intent.contract_for_domain(domain, stage_id) if intent is not None else None
 
 
 def normalize_work_brief(brief: Any) -> NormalizedIntent:
     value = brief.to_dict() if hasattr(brief, "to_dict") else dict(brief)
     contracts_value = value.get("analysis_inputs") or {}
     if isinstance(contracts_value, Mapping):
-        contracts_value = [
-            {**dict(contract), "domain": str(domain)} if isinstance(contract, Mapping) else {"domain": str(domain)}
-            for domain, contract in contracts_value.items()
-        ]
+        expanded: list[Mapping[str, Any]] = []
+        for domain, contract in contracts_value.items():
+            if isinstance(contract, (list, tuple)):
+                expanded.extend(
+                    {**dict(item), "domain": str(domain)} if isinstance(item, Mapping) else {"domain": str(domain)}
+                    for item in contract
+                )
+            else:
+                expanded.append({**dict(contract), "domain": str(domain)} if isinstance(contract, Mapping) else {"domain": str(domain)})
+        contracts_value = expanded
+    stages = tuple(dict(stage) for stage in value.get("stages", ()))
+    stage_ids = {str(stage.get("stage_id", "")) for stage in stages}
     contracts = tuple(AnalysisInputContract.from_dict(item) for item in contracts_value)
+    seen_scopes: set[tuple[str, str]] = set()
     for contract in contracts:
         contract.validate()
-    stages = tuple(dict(stage) for stage in value.get("stages", ()))
+        scope = contract.stage_id or GLOBAL_SCOPE
+        key = (scope, contract.domain.lower())
+        if key in seen_scopes:
+            raise ValueError(f"duplicate analysis input contract scope: {scope}:{contract.domain}")
+        seen_scopes.add(key)
+        if contract.stage_id is not None and contract.stage_id not in stage_ids:
+            raise ValueError(f"unknown analysis input contract stage: {contract.stage_id}")
     source_needs = tuple(
         dict(need)
         for stage in stages

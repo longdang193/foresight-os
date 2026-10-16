@@ -22,7 +22,13 @@ sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 from agent_framework import Agent, ChatResponse, ChatResponseUpdate, Content, FunctionInvocationContext, Message, ResponseStream
 
 from foresight_os.controller.recipes import ExecutionPattern, RecipeName, make_recipe
-from foresight_os.runtime.capabilities import CapabilityDefinition, CapabilityScope, instrument_tool
+from foresight_os.runtime.capabilities import (
+    CapabilityDefinition,
+    CapabilityScope,
+    ExecutionMode,
+    ScopeOwnership,
+    instrument_tool,
+)
 from foresight_os.runtime.local_toolbelt import AnalysisOperation, SheetSelection, WorkbookContext, data_analysis, spreadsheet_read
 from foresight_os.analysis.independent_validation import run_independent_validation
 from foresight_os.runtime.workflow import run_recipe_async
@@ -133,7 +139,223 @@ async def _native_mcp_receipt() -> dict[str, object]:
             process.kill()
 
 
-def _measure_workbook(path: Path, measurement_mode: str = "full") -> dict[str, object]:
+def _write_probe_workbook(path: Path, row_count: int, value_offset: int = 0) -> None:
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    for sheet_index in range(1, 4):
+        sheet = workbook.create_sheet(f"Sheet{sheet_index}")
+        sheet.append(["Category", "Value"])
+        for row_index in range(row_count):
+            sheet.append([f"item-{row_index}", value_offset + sheet_index + row_index])
+    workbook.save(path)
+
+
+def _analysis_value(table: object) -> float | None:
+    columns = getattr(table, "columns", ())
+    value_column = "Value" if "Value" in columns else (columns[-1] if columns else None)
+    if value_column is None:
+        return None
+    result = data_analysis(table, AnalysisOperation("aggregate", value_column=value_column))
+    if result.rows and isinstance(result.rows[0], dict):
+        value = result.rows[0].get("sum")
+        if value is None:
+            value = result.rows[0].get("value")
+        return float(value) if value is not None else None
+    return None
+
+
+async def _cancelled_read_workload(path: Path) -> dict[str, object]:
+    from foresight_os.runtime.local_toolbelt import ToolbeltError
+    from foresight_os.runtime.metrics import RunMetrics
+
+    scope = CapabilityScope(ownership=ScopeOwnership.RUN)
+    metrics = RunMetrics("optimization-cancel", "DIRECT", "direct")
+    worker_started = threading.Event()
+    worker_failed = threading.Event()
+    worker_failure: dict[str, str] = {}
+
+    def blocking_read(source: str, selection: SheetSelection | None = None, cancel_check=None):
+        worker_started.set()
+        while not cancel_check():
+            time.sleep(0.001)
+        try:
+            return spreadsheet_read(source, selection, cancel_check=cancel_check)
+        except ToolbeltError as error:
+            worker_failure["type"] = type(error).__name__
+            worker_failed.set()
+            return None
+
+    wrapped = instrument_tool(
+        blocking_read,
+        CapabilityDefinition("spreadsheet_read", "local_deterministic", execution_mode=ExecutionMode.BLOCKING),
+        {"scope": scope, "metrics": metrics},
+    )
+    task = asyncio.create_task(wrapped(str(path), SheetSelection(include_hidden=True, include_hidden_rows=True)))
+    started = await asyncio.to_thread(worker_started.wait, 5)
+    caller_cancelled = False
+    if started:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            caller_cancelled = True
+    cleanup_error = None
+    try:
+        await scope.close()
+    except Exception as error:
+        cleanup_error = type(error).__name__
+    return {
+        "executed": True,
+        "status": "VERIFIED" if started and worker_failed.is_set() and caller_cancelled and cleanup_error is None else "FAILED",
+        "correctness": "VERIFIED" if started and worker_failed.is_set() and caller_cancelled else "FAILED",
+        "worker_observed": started,
+        "worker_failed": worker_failed.is_set(),
+        "worker_failure_type": worker_failure.get("type"),
+        "caller_cancelled": caller_cancelled,
+        "cancellation_settlements": metrics.cancellation_settlements,
+        "cache_entries_after_settlement": 0 if scope.workbook_context is None else scope.workbook_context.cache.size,
+        "authority_records_after_settlement": 0 if scope.workbook_context is None else scope.workbook_context.authority_index.size,
+        "cleanup_complete": scope.executor is None and scope.workbook_context is None and cleanup_error is None,
+        "limitation": None if cleanup_error is None else f"cleanup failed: {cleanup_error}",
+    }
+
+
+def _repeated_workflow(path: Path) -> dict[str, object]:
+    from foresight_os.analysis.evidence_workflow import run_xlsx_finding_workflow
+    from foresight_os.persistence.analysis_store import AnalysisStore
+
+    with tempfile.TemporaryDirectory(prefix="foresight-repeat-") as temporary_dir:
+        store = AnalysisStore(Path(temporary_dir) / "state")
+        selection = SheetSelection(include_hidden=True, include_hidden_rows=True)
+        started = time.perf_counter()
+        first = run_xlsx_finding_workflow(
+            store,
+            path,
+            AnalysisOperation("aggregate", value_column="Value"),
+            selection=selection,
+            investigation_id="optimization-repeat",
+            human_decision="ACCEPT",
+        )
+        second = run_xlsx_finding_workflow(
+            store,
+            path,
+            AnalysisOperation("aggregate", value_column="Value"),
+            selection=selection,
+            investigation_id="optimization-repeat",
+            human_decision="ACCEPT",
+        )
+        elapsed_ms = (time.perf_counter() - started) * 1000
+    first_hash = first.evidence.source_locator.file_version if first.evidence is not None else None
+    second_hash = second.evidence.source_locator.file_version if second.evidence is not None else None
+    first_value = first.analysis.calculations[0].output if first.analysis and first.analysis.calculations else None
+    second_value = second.analysis.calculations[0].output if second.analysis and second.analysis.calculations else None
+    correct = (
+        first.status == "accepted"
+        and second.status == "accepted"
+        and first_hash is not None
+        and first_hash == second_hash
+        and first_value == second_value
+    )
+    return {
+        "executed": True,
+        "status": "VERIFIED" if correct else "FAILED",
+        "correctness": "VERIFIED" if correct else "FAILED",
+        "first_status": first.status,
+        "second_status": second.status,
+        "same_source_hash": first_hash == second_hash,
+        "same_calculation_value": first_value == second_value,
+        "wall_time_ms": round(elapsed_ms, 3),
+        "local_tool_calls": len(first.tool_calls) + len(second.tool_calls),
+        "limitation": None,
+    }
+
+
+def _retained_context_workloads() -> dict[str, object]:
+    results: dict[str, object] = {}
+    with tempfile.TemporaryDirectory(prefix="foresight-context-sizes-") as temporary_dir:
+        root = Path(temporary_dir)
+        for label, rows in (("small", 8), ("medium", 128), ("large", 2048)):
+            source = root / f"{label}.xlsx"
+            _write_probe_workbook(source, rows)
+            context = WorkbookContext(max_entries=4, max_bytes=20_000_000, max_total_bytes=30_000_000)
+            selection = SheetSelection(include_hidden=True, include_hidden_rows=True)
+            first = context.read(source, selection)
+            before = (context.stats.capture_count, context.stats.capture_hash_count, context.stats.xlsx_parse_count)
+            started = time.perf_counter()
+            warm = context.read(source, selection)
+            warm_ms = (time.perf_counter() - started) * 1000
+            after = (context.stats.capture_count, context.stats.capture_hash_count, context.stats.xlsx_parse_count)
+            retained = context.stats.snapshot_bytes + context.stats.retained_read_result_bytes + context.stats.retained_authority_record_bytes
+            results[label] = {
+                "rows": rows,
+                "status": "VERIFIED" if warm.workbook_sha256 == first.workbook_sha256 and before == after and retained <= context.max_total_bytes else "FAILED",
+                "correctness": "VERIFIED" if warm.workbook_sha256 == first.workbook_sha256 else "FAILED",
+                "warm_time_ms": round(warm_ms, 3),
+                "before_counts": before,
+                "after_counts": after,
+                "retained_bytes": retained,
+                "retained_budget_bytes": context.max_total_bytes,
+            }
+            context.clear()
+    return results
+
+
+async def _multi_workbook_soak() -> dict[str, object]:
+    with tempfile.TemporaryDirectory(prefix="foresight-multi-workbook-") as temporary_dir:
+        root = Path(temporary_dir)
+        sources: list[Path] = []
+        for index, rows in enumerate((16, 32, 64), 1):
+            source = root / f"source-{index}.xlsx"
+            _write_probe_workbook(source, rows, value_offset=index * 10_000)
+            sources.append(source)
+        context = WorkbookContext(max_entries=2, max_bytes=20_000_000, max_total_bytes=40_000_000)
+        scope = CapabilityScope(ownership=ScopeOwnership.RUN)
+        scope.workbook_context = context
+        selection = SheetSelection(include_hidden=True, include_hidden_rows=True)
+        results = [context.read(source, selection) for source in sources]
+        cache_keys_after_three = tuple(context.cache._entries)
+        retained = context.stats.snapshot_bytes + context.stats.retained_read_result_bytes + context.stats.retained_authority_record_bytes
+        hashes = tuple(result.workbook_sha256 for result in results)
+        no_cross_source_authority_aliasing = len({key[0] for key in context.authority_index.measurements}) == 3
+        repeated = context.read(sources[0], selection)
+        cache_keys_after_repeat = tuple(context.cache._entries)
+        evicted_first = not any(key[0] == str(sources[0].resolve()) for key in cache_keys_after_three)
+        cleanup_error = None
+        try:
+            await scope.close()
+        except Exception as error:
+            cleanup_error = type(error).__name__
+        correct = (
+            context.stats.capture_count == 3
+            and len(set(hashes)) == 3
+            and no_cross_source_authority_aliasing
+            and repeated.workbook_sha256 == hashes[0]
+            and evicted_first
+            and len(cache_keys_after_repeat) <= 2
+            and retained <= context.max_total_bytes
+            and scope.workbook_context is None
+            and cleanup_error is None
+        )
+        return {
+            "executed": True,
+            "status": "VERIFIED" if correct else "FAILED",
+            "correctness": "VERIFIED" if correct else "FAILED",
+            "source_count": len(sources),
+            "capture_count": context.stats.capture_count,
+            "distinct_source_hashes": len(set(hashes)),
+            "no_cross_source_authority_aliasing": no_cross_source_authority_aliasing,
+            "deterministic_eviction": evicted_first and len(cache_keys_after_repeat) <= 2,
+            "retained_bytes_before_cleanup": retained,
+            "retained_budget_bytes": context.max_total_bytes,
+            "owned_resources_after_cleanup": 0 if scope.workbook_context is None and scope.executor is None and not scope.resources else 1,
+            "cleanup_complete": cleanup_error is None and scope.workbook_context is None,
+            "limitation": None if cleanup_error is None else f"cleanup failed: {cleanup_error}",
+        }
+
+
+async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: str = "baseline") -> dict[str, object]:
     durations: list[float] = []
     allocations: list[int] = []
     result = None
@@ -171,8 +393,9 @@ def _measure_workbook(path: Path, measurement_mode: str = "full") -> dict[str, o
     context.currentness(path)
     sheet_names = tuple(sheet.name for sheet in result.sheets)
     workloads: dict[str, dict[str, object]] = {
-        "cold_read": {"status": "VERIFIED", "correctness": "VERIFIED", "wall_time_ms": round(cold_read_ms, 3)},
+        "cold_read": {"executed": True, "status": "VERIFIED", "correctness": "VERIFIED", "wall_time_ms": round(cold_read_ms, 3)},
         "same_view_repeat": {
+            "executed": True,
             "status": "VERIFIED" if context.stats.capture_count == 1 and context.stats.xlsx_parse_count == 1 else "FAILED",
             "correctness": "VERIFIED" if warm_result.workbook_sha256 == result.workbook_sha256 else "FAILED",
             "wall_time_ms": round(warm_read_ms, 3),
@@ -180,31 +403,19 @@ def _measure_workbook(path: Path, measurement_mode: str = "full") -> dict[str, o
             "xlsx_parse_count": context.stats.xlsx_parse_count,
         },
         "bounded_multi_sheet": {
+            "executed": True,
             "status": "VERIFIED" if len(sheet_names) > 1 else "NOT_MEASURED",
             "correctness": "VERIFIED" if len(sheet_names) > 1 else "NOT_MEASURED",
             "limitation": None if len(sheet_names) > 1 else "fixture contains one sheet",
             "sheet_count": len(sheet_names),
         },
         "analyst_to_validator_reuse": {
+            "executed": True,
             "status": "VERIFIED" if validator_report.accepted else "FAILED",
             "correctness": "VERIFIED" if validator_report.accepted else "FAILED",
             "validator_accepted": validator_report.accepted,
         },
-        "changed_selection": {
-            "status": "VERIFIED" if len(sheet_names) > 1 else "NOT_MEASURED",
-            "correctness": "VERIFIED" if len(sheet_names) > 1 else "NOT_MEASURED",
-            "limitation": None if len(sheet_names) > 1 else "fixture contains no alternate sheet selection",
-        },
-        "cancelled_read": {
-            "status": "DEFERRED",
-            "correctness": "NOT_MEASURED",
-            "limitation": "spreadsheet_read is synchronous; cancellation remains covered by runtime boundary tests",
-        },
-        "large_context_warm_hit": {
-            "status": "DEFERRED",
-            "correctness": "NOT_MEASURED",
-            "limitation": "no dedicated large-context fixture is declared for this release",
-        },
+        "changed_selection": {"executed": False, "status": "NOT_MEASURED", "correctness": "NOT_MEASURED", "limitation": "alternate selection is populated below"},
     }
     with tempfile.TemporaryDirectory(prefix="foresight-optimization-") as temporary_dir:
         changed_path = Path(temporary_dir) / path.name
@@ -218,20 +429,62 @@ def _measure_workbook(path: Path, measurement_mode: str = "full") -> dict[str, o
         changed_context = WorkbookContext()
         changed_result = changed_context.read(changed_path, selection)
         workloads["changed_source"] = {
+            "executed": True,
             "status": "VERIFIED" if changed_context.stats.capture_count == 1 and changed_result.workbook_sha256 != result.workbook_sha256 else "FAILED",
             "correctness": "VERIFIED" if changed_context.stats.capture_count == 1 and changed_result.workbook_sha256 != result.workbook_sha256 else "FAILED",
             "source_identity_changed": changed_result.workbook_sha256 != result.workbook_sha256,
         }
-    workloads["multi_workbook_run"] = {
-        "status": "DEFERRED",
-        "correctness": "NOT_MEASURED",
-        "limitation": "the matched fixture set contains one workbook",
-    }
-    workloads["repeated_run"] = {
-        "status": "VERIFIED",
-        "correctness": "VERIFIED",
-        "limitation": None,
-    }
+    if len(sheet_names) > 1:
+        alternate_selection = SheetSelection(sheet_names=(sheet_names[-1],), include_hidden=True, include_hidden_rows=True)
+        alternate_context = WorkbookContext()
+        alternate = alternate_context.read(path, alternate_selection)
+        alternate_value = _analysis_value(alternate.tables[0]) if alternate.tables else None
+        primary_value = _analysis_value(result.tables[0])
+        workloads["changed_selection"] = {
+            "executed": True,
+            "status": "VERIFIED" if alternate.workbook_sha256 == result.workbook_sha256 and alternate_value != primary_value and alternate_context.stats.capture_count == 1 else "FAILED",
+            "correctness": "VERIFIED" if alternate.workbook_sha256 == result.workbook_sha256 and alternate_value != primary_value else "FAILED",
+            "capture_count": alternate_context.stats.capture_count,
+            "xlsx_parse_count": alternate_context.stats.xlsx_parse_count,
+            "primary_value": primary_value,
+            "alternate_sheet": sheet_names[-1],
+            "alternate_value": alternate_value,
+            "limitation": None,
+        }
+    workloads["repeated_run"] = _repeated_workflow(path)
+    if mode == "release":
+        cancellation = await _cancelled_read_workload(path)
+        workloads["cancelled_read"] = {
+            **cancellation,
+            "status": "FINAL_ONLY" if cancellation["status"] == "VERIFIED" else "FAILED",
+            "limitation": "new final-only blocking cancellation workload; no base counterpart",
+        }
+        sizes = _retained_context_workloads()
+        large = sizes["large"]
+        workloads["large_context_warm_hit"] = {
+            "executed": True,
+            "status": "FINAL_ONLY" if large["status"] == "VERIFIED" else "FAILED",
+            "correctness": large["correctness"],
+            "sizes": sizes,
+            "limitation": "new final-only retained-context workload; no base counterpart",
+        }
+        multi = await _multi_workbook_soak()
+        workloads["multi_workbook_run"] = {
+            **multi,
+            "status": "FINAL_ONLY" if multi["status"] == "VERIFIED" else "FAILED",
+            "limitation": "new final-only multi-workbook soak; no base counterpart",
+        }
+    from foresight_os.runtime.metrics import RunMetrics
+
+    local_metrics = RunMetrics("optimization-local", "DIRECT", "direct")
+    local_scope = CapabilityScope(ownership=ScopeOwnership.RUN)
+    local_read = instrument_tool(
+        spreadsheet_read,
+        CapabilityDefinition("spreadsheet_read", "local_deterministic", execution_mode=ExecutionMode.BLOCKING),
+        {"scope": local_scope, "metrics": local_metrics},
+    )
+    await local_read(str(path), selection)
+    await local_scope.close()
     return {
         "source": "fixture",
         "sheet_count": len(result.sheets),
@@ -246,7 +499,7 @@ def _measure_workbook(path: Path, measurement_mode: str = "full") -> dict[str, o
         "workloads": workloads,
         "deterministic_key": analysis.deterministic_key,
         "source_hash": result.workbook_sha256,
-        "local_tool_calls": 13,
+        "local_tool_calls": local_metrics.local_tool_calls + int(workloads["repeated_run"].get("local_tool_calls", 0) or 0),
         "run_owned_context": {
             "capture_count": context.stats.capture_count,
             "capture_hash_count": context.stats.capture_hash_count,
@@ -365,7 +618,7 @@ async def _soak_receipt() -> dict[str, object]:
 
 
 async def _run(mode: str, fixture: Path, evidence_root: Path, measurement_mode: str = "full") -> dict[str, object]:
-    workbook = _measure_workbook(fixture, measurement_mode)
+    workbook = await _measure_workbook(fixture, measurement_mode, mode)
     patterns, stage_metrics = await _measure_patterns()
     soak = await _soak_receipt()
 
@@ -418,7 +671,6 @@ def main() -> int:
     output.write_text(json.dumps(result, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result, sort_keys=True))
     return 0 if result["status"] == "VERIFIED" else 1
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

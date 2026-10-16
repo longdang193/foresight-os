@@ -8,9 +8,10 @@ from foresight_os.analysis.portfolio_resilience import analyze_portfolio_resilie
 from foresight_os.analysis.powerbi_strategic_portfolio import analyze_powerbi_strategic_portfolio
 from foresight_os.analysis.technology_radar import analyze_technology_radar
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
-from foresight_os.domain.models import WorkBrief
+from foresight_os.domain.models import WorkBrief, WorkStage
 from foresight_os.domain.validation import ValidationError, validate_work_brief
 from foresight_os.runtime.local_toolbelt import ToolbeltError
+from foresight_os.persistence.analysis_store import AnalysisStore
 
 
 def _brief(**analysis_inputs):
@@ -102,6 +103,83 @@ def test_normalized_intent_freezes_nested_policy_and_stage_values():
     assert normalized.resource_limits["max_timeout_seconds"] == 30
 
 
+def test_stage_scoped_contracts_prefer_exact_scope_and_preserve_same_domain_identity():
+    normalized = normalize_work_brief({
+        "decision_question": "Question",
+        "horizon": "2030",
+        "stages": [
+            {"stage_id": "stage-a", "objective": "Assess A"},
+            {"stage_id": "stage-b", "objective": "Assess B"},
+        ],
+        "analysis_inputs": [
+            {"domain": "shared", "required_tables": ["Global"]},
+            {"domain": "shared", "stage_id": "stage-a", "required_tables": ["A"]},
+            {"domain": "shared", "stage_id": "stage-b", "required_tables": ["B"]},
+        ],
+    })
+
+    assert normalized.contract_for_domain("shared", "stage-a").required_tables == ("A",)
+    assert normalized.contract_for_domain("shared", "stage-b").required_tables == ("B",)
+    assert normalized.contract_for_domain("shared", "unscoped").required_tables == ("Global",)
+
+
+def test_duplicate_or_unknown_stage_scoped_contracts_fail():
+    duplicate = {
+        "decision_question": "Question",
+        "stages": [{"stage_id": "stage-a", "objective": "Assess A"}],
+        "analysis_inputs": [
+            {"domain": "shared", "stage_id": "stage-a"},
+            {"domain": "shared", "stage_id": "stage-a"},
+        ],
+    }
+    unknown = {
+        "decision_question": "Question",
+        "stages": [{"stage_id": "stage-a", "objective": "Assess A"}],
+        "analysis_inputs": [{"domain": "shared", "stage_id": "missing"}],
+    }
+
+    with pytest.raises(ValidationError, match="duplicate analysis input contract scope"):
+        validate_work_brief(WorkBrief(
+            "duplicate",
+            "Question",
+            [],
+            [],
+            [],
+            [],
+            "inspect",
+            "execute",
+            stages=[WorkStage("stage-a", "Assess A")],
+            analysis_inputs=duplicate["analysis_inputs"],
+        ))
+    with pytest.raises(ValueError, match="unknown analysis input contract stage"):
+        normalize_work_brief(unknown)
+
+
+def test_stage_scoped_contracts_round_trip_through_brief_store(tmp_path):
+    brief = WorkBrief(
+        "round-trip",
+        "Question",
+        [],
+        [],
+        [],
+        [],
+        "inspect",
+        "execute",
+            stages=[WorkStage("stage-a", "Assess A"), WorkStage("stage-b", "Assess B")],
+        analysis_inputs=[
+            {"domain": "shared", "stage_id": "stage-a", "required_tables": ["A"]},
+            {"domain": "shared", "stage_id": "stage-b", "required_tables": ["B"]},
+        ],
+    )
+    store = AnalysisStore(tmp_path / "case")
+    store.save_brief(brief)
+    restored = store.load_brief()
+    normalized = normalize_work_brief(restored)
+
+    assert normalized.contract_for_domain("shared", "stage-a").required_tables == ("A",)
+    assert normalized.contract_for_domain("shared", "stage-b").required_tables == ("B",)
+
+
 def test_unsupported_domain_period_fails_before_workbook_capture(monkeypatch):
     import foresight_os.analysis.ev_capacity_investment as ev_module
 
@@ -119,6 +197,13 @@ def test_explicit_column_mapping_to_missing_source_fails_before_row_defaults():
 
     with pytest.raises(ToolbeltError, match="MISSING_MAPPED_COLUMN.*Missing"):
         apply_column_mappings([{"Actual": 1}], {"Canonical": "Missing"})
+
+
+def test_explicit_column_mapping_does_not_fallback_to_existing_canonical_name():
+    from foresight_os.analysis.workbook_inputs import apply_column_mappings
+
+    with pytest.raises(ToolbeltError, match="MISSING_MAPPED_COLUMN.*Missing"):
+        apply_column_mappings([{"Canonical": 1}], {"Canonical": "Missing"})
 
 
 def test_explicit_incomplete_supplier_conversion_does_not_use_legacy_fx():
@@ -190,7 +275,7 @@ def test_portfolio_column_mapping_and_reporting_units_reach_calculations(tmp_pat
     source = tmp_path / "portfolio.xlsx"
     source.write_bytes(Path("tests/fixtures/exercise/01_Portfolio_Resilience.xlsx").read_bytes())
     workbook = load_workbook(source)
-    workbook["Sales_History"].cell(1, 1).value = "FiscalQuarter"
+    workbook["Sales_History"].cell(3, 1).value = "FiscalQuarter"
     workbook.save(source)
 
     analysis = analyze_portfolio_resilience(
