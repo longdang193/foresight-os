@@ -32,7 +32,8 @@ from foresight_os.domain.models import (
     SourceLocator,
 )
 from foresight_os.persistence.analysis_store import AnalysisStore
-from foresight_os.runtime.local_toolbelt import SheetSelection, SourceSnapshot, ToolbeltError, spreadsheet_read
+from foresight_os.analysis.workbook_inputs import read_workbook
+from foresight_os.runtime.local_toolbelt import SheetSelection, ToolbeltError
 
 
 @dataclass(frozen=True)
@@ -261,16 +262,15 @@ def _expected_rows(tables: dict[str, Any]) -> tuple[list[dict[str, Any]], list[d
     return _rows(tables["Planted_Issues"]), _rows(tables["Expected_Reasoning"]), _rows(tables["Expected_Numerical_Checks"])
 
 
-def validate_exercises(validator_source: Path, exercise_dir: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None) -> ValidatorResult:
+def validate_exercises(validator_source: Path, exercise_dir: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None, *, workbook_context: Any | None = None) -> ValidatorResult:
     validator_source = Path(validator_source)
     exercise_dir = Path(exercise_dir)
-    snapshot = SourceSnapshot.capture(validator_source)
-    source_sha256 = snapshot.sha256
-    workbook = spreadsheet_read(
+    workbook = read_workbook(
         validator_source,
         SheetSelection(sheet_names=("Overview", "Planted_Issues", "Expected_Reasoning", "Expected_Numerical_Checks"), include_hidden=True, include_hidden_rows=True),
-        _snapshot=snapshot,
+        workbook_context=workbook_context,
     )
+    source_sha256 = workbook.workbook_sha256
     tables = {table.sheet: table for table in workbook.tables}
     key_evidence = [
         _row_evidence(table, index, source_sha256)
@@ -311,7 +311,7 @@ def validate_exercises(validator_source: Path, exercise_dir: Path, input_contrac
         return input_contract
 
     analyses: dict[str, Any] = {
-        exercise: analyzer(exercise_dir / filename, input_contract=contract_for(exercise))
+        exercise: analyzer(exercise_dir / filename, input_contract=contract_for(exercise), workbook_context=workbook_context)
         for exercise, (filename, analyzer) in file_map.items()
     }
     checks: list[ValidatorCheck] = []

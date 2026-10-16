@@ -2,6 +2,7 @@ from pathlib import Path
 
 from foresight_os.analysis.portfolio_resilience import analyze_portfolio_resilience
 from foresight_os.domain.analysis_inputs import AnalysisInputContract
+from foresight_os.runtime.local_toolbelt import WorkbookContext
 
 
 def test_changed_portfolio_contract_changes_selected_baseline_scope():
@@ -41,3 +42,17 @@ def test_brief_portability_probe_uses_all_production_xlsx_analyzers(tmp_path):
     assert all(item["source_sha256"] == item["fixture_copy_sha256"] for item in receipt["cases"])
     assert all(item["provider_status"] == "not_measured" and item["human_acceptance"] == "not_measured" for item in receipt["cases"])
     assert any("UNSUPPORTED_CONVERSION" in item["changed"]["issue_kinds"] for item in receipt["cases"])
+
+
+def test_portfolio_analyzer_reuses_run_workbook_context(tmp_path):
+    source = Path("tests/fixtures/exercise/01_Portfolio_Resilience.xlsx")
+    context = WorkbookContext()
+
+    first = analyze_portfolio_resilience(source, workbook_context=context)
+    second = analyze_portfolio_resilience(source, workbook_context=context)
+
+    assert first.source_sha256 == second.source_sha256
+    assert context.stats.capture_count == 1
+    assert context.stats.capture_hash_count == 1
+    assert context.stats.xlsx_parse_count == 1
+    assert context.stats.cache_hits == 1

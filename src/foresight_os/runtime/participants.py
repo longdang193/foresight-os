@@ -127,17 +127,15 @@ class AgentFactory:
                 "use produces only from claim/implication/recommendation to artifact."
             )
             instructions += (
-                " The stage result must be self-contained: include every evidence record used by "
-                "this stage in the current payload, and re-declare dependency evidence before "
-                "referencing it. Before any claim, implication, or recommendation references an "
-                "evidence ID from dependency_outputs, copy that evidence record verbatim into the "
-                "current evidence collection; never reference dependency-only evidence. Every "
-                "relationship_ids entry must refer to a relationship "
-                "declared in the current relationships collection or an existing canonical "
-                "relationship; never reference an ID that appears only in dependency_outputs. "
-                "Before returning, audit every evidence_ids, relationship_ids, input_ids, from_id, "
-                "and to_id value against an ID declared in the current payload; remove any "
-                "reference without a matching local record."
+                " The stage result must preserve canonical dependency references: an existing "
+                "dependency ID may be referenced without copying its record when the dependency "
+                "is authorized and current. Validate the dependency hash, invalidation state, "
+                "closure, and participant authorization before using it; materialize a record only "
+                "when the current contract requires it, and copy every field verbatim when you do. "
+                "Every relationship_ids entry must refer to a declared current relationship or an "
+                "authorized existing canonical relationship. Before returning, audit every "
+                "evidence_ids, relationship_ids, input_ids, from_id, and to_id value against a "
+                "declared or authorized canonical ID; remove any reference that cannot be proven."
             )
             instructions += (
                 " When re-declaring an existing dependency record, copy every field verbatim; do not "
@@ -156,8 +154,9 @@ class AgentFactory:
                     "[sheet_name, cell_range] pairs, for example [[\"Channel Dynamic\", \"A1:H20\"]]. "
                     "When ranges or tables are used, also provide sheet_names for every selected "
                     "sheet and keep each range within the sheet's used area; do not request a "
-                    "blanket workbook read or padded rows and columns. Read one sheet per call "
-                    "when auditing a workbook so the returned evidence stays bounded."
+                    "blanket workbook read or padded rows and columns. Request the smallest bounded "
+                    "set of sheets and ranges needed for one analytical step; combine compatible ranges "
+                    "in one call when this keeps the selection bounded and avoids repeated extraction."
                 )
         kwargs: dict[str, Any] = {
             "id": config.id,

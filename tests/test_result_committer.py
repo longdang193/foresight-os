@@ -185,8 +185,22 @@ def test_invalid_relationship_endpoint_types_are_rejected_during_normalization()
         ],
     )
 
-    with pytest.raises(ValidationError, match="invalid endpoints for relationship produces"):
+    with pytest.raises(ValidationError, match="invalid endpoints for relationship produces") as caught:
         normalize_stage_result(payload)
+
+    assert caught.value.code == "INVALID_RELATIONSHIP"
+
+
+def test_unknown_record_reference_has_a_typed_validation_code():
+    payload = _payload(
+        claims=[{**_payload()["claims"][0], "evidence_ids": ["missing-evidence"]}],
+        relationships=[],
+    )
+
+    with pytest.raises(ValidationError, match="unknown reference") as caught:
+        normalize_stage_result(payload)
+
+    assert caught.value.code == "UNRESOLVED_REFERENCE"
 
 
 @pytest.mark.parametrize("output", [True, float("nan"), float("inf"), "not-a-number"])
@@ -302,7 +316,7 @@ def test_multi_participant_validation_uses_correction_budget(monkeypatch):
 
     assert result.metrics.correction_rounds == 1
     assert native_calls == 2
-    assert "remove the invalid relationship" in prompts[1]
+    assert "remove any invalid relationship" in prompts[1]
 
 
 def test_tool_enabled_multi_participant_correction_can_dispatch_again(monkeypatch):
@@ -949,7 +963,7 @@ def test_workflow_uses_one_correction_round_for_canonical_validation_feedback():
 
     def committer(stage, output, context):
         if len(prompts) == 1:
-            raise ValidationError("unknown reference: relationships[0].from_id -> missing")
+            raise ValidationError("relationship endpoint is missing", code="INVALID_RELATIONSHIP", participant_index=0)
         return CanonicalStageResult(("result",), (canonical_json_hash(output),), output)
 
     result = asyncio.run(
@@ -996,7 +1010,7 @@ def test_workflow_explains_dependency_record_redeclaration_on_unknown_reference(
 
     def committer(stage, output, context):
         if len(prompts) == 1:
-            raise ValidationError("unknown reference: implications[0].evidence_ids -> dependency-evidence")
+            raise ValidationError("dependency record is unresolved", code="UNRESOLVED_REFERENCE", participant_index=0)
         return CanonicalStageResult(("result",), (canonical_json_hash(output),), output)
 
     asyncio.run(
@@ -1009,11 +1023,11 @@ def test_workflow_explains_dependency_record_redeclaration_on_unknown_reference(
         )
     )
 
-    assert "copy the exact referenced evidence" in prompts[1]
+    assert "reference an existing canonical dependency ID" in prompts[1]
     assert "every from_id and to_id must refer to a record declared" in prompts[1]
     assert '"dependency_outputs"' in prompts[1]
     assert "audit every evidence_ids" in prompts[1]
-    assert "never reference a record that exists only under dependency_outputs" in prompts[1]
+    assert "validate its hash and invalidation state" in prompts[1]
     assert "Every text-list item" in prompts[1]
 
 
@@ -1052,24 +1066,24 @@ def test_workflow_retries_same_id_conflict_as_canonical_validation(tmp_path):
         def as_agent(self, **kwargs):
             return Agent()
 
-    result = asyncio.run(
-        run_recipe_async(
-            recipe,
-            "question",
-            client=Client(),
-            run_id="same-id-correction",
-            run_context={
-                "analysis_store": store,
-                "canonical_result_committer": committer,
-                "require_structured_output": True,
-                "structured_output_schema": analysis_stage_result_schema(),
-            },
+    with pytest.raises(ValidationError, match="same-ID/different-content") as caught:
+        asyncio.run(
+            run_recipe_async(
+                recipe,
+                "question",
+                client=Client(),
+                run_id="same-id-correction",
+                run_context={
+                    "analysis_store": store,
+                    "canonical_result_committer": committer,
+                    "require_structured_output": True,
+                    "structured_output_schema": analysis_stage_result_schema(),
+                },
+            )
         )
-    )
 
-    assert result.metrics.correction_rounds == 1
-    assert len(prompts) == 2
-    assert "canonical validation" in prompts[1]
+    assert caught.value.code == "MATERIAL_CONFLICT"
+    assert len(prompts) == 1
 
 
 def test_canonical_correction_retry_reserves_agent_call_budget():

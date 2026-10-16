@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import json
 
 from foresight_os.controller.recipes import (
     INDEPENDENT_VALIDATION_POLICY,
@@ -11,6 +12,7 @@ from foresight_os.controller.recipes import (
     minimum_stage_agent_calls,
 )
 from foresight_os.controller.task_shape import TaskShape
+from foresight_os.domain.analysis_inputs import NormalizedIntent, normalize_work_brief
 from foresight_os.domain.models import ResearchNeed, ResearchNeedKind, WorkBrief
 
 
@@ -238,6 +240,7 @@ def _recipe_for_patterns(
     review_required: bool = False,
     reviewer_execution_required: bool = False,
     brief: WorkBrief | None = None,
+    normalized_intent: NormalizedIntent | None = None,
 ) -> ExecutionRecipe:
     if not patterns:
         raise ValueError("at least one execution pattern is required")
@@ -268,8 +271,16 @@ def _recipe_for_patterns(
         ResearchNeedKind.ARTIFACT_OUTPUT.value: ("artifact_generation",),
     }
     intent = getattr(brief, "execution_intent", None)
-    required_capabilities = tuple(str(item) for item in getattr(intent, "required_capabilities", ()) if str(item) not in {item.value for item in ReviewCheckKind})
-    required_participants = tuple(str(item) for item in getattr(intent, "required_participants", ()) if str(item))
+    required_capabilities = tuple(
+        str(item)
+        for item in (normalized_intent.required_capabilities if normalized_intent is not None else getattr(intent, "required_capabilities", ()))
+        if str(item) not in {item.value for item in ReviewCheckKind}
+    )
+    required_participants = tuple(
+        str(item)
+        for item in (normalized_intent.required_participants if normalized_intent is not None else getattr(intent, "required_participants", ()))
+        if str(item)
+    )
 
     def stage_requirements(stage: object) -> tuple[tuple[str, ...], tuple[str, ...]]:
         stage_intent = getattr(stage, "execution_intent", None)
@@ -391,6 +402,17 @@ def _recipe_for_patterns(
         )
         max_total_agent_calls = max(max_total_agent_calls, planned_agent_calls)
 
+    contracts = tuple(normalized_intent.contracts) if normalized_intent is not None else ()
+    has_explicit_stage_contracts = any(contract.stage_id for contract in contracts)
+
+    def stage_analysis_domains(stage: object, index: int) -> tuple[str, ...]:
+        if not contracts:
+            return ()
+        stage_id = str(getattr(stage, "stage_id", f"stage-{index}"))
+        if has_explicit_stage_contracts:
+            return tuple(contract.domain for contract in contracts if contract.stage_id == stage_id)
+        return tuple(contract.domain for contract in contracts)
+
     stages = tuple(
         RecipeStage(
             getattr(work_stages[index - 1], "stage_id", f"stage-{index}") if index <= len(work_stages) else f"stage-{index}",
@@ -461,6 +483,7 @@ def _recipe_for_patterns(
             escalation_rule="escalate unresolved capability, contradiction, or budget exhaustion",
             partial_result_rule="preserve completed evidence and mark incomplete stage explicitly",
             adaptation_policy=("bounded_retry", "reduced_concurrency", "dependency_safe_topology_reduction"),
+            analysis_domains=stage_analysis_domains(work_stages[index - 1] if index <= len(work_stages) else object(), index),
         )
         for index in range(1, stage_count + 1)
     )
@@ -488,6 +511,15 @@ def _recipe_for_patterns(
                 for stage in work_stages
                 for need in stage_capabilities(stage)[1]
             ),
+            "analysis_contract_domains": json.dumps(
+                {
+                    stage.stage_id: list(stage.analysis_domains)
+                    for stage in stages
+                    if stage.analysis_domains
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
             "decision_question": getattr(brief, "decision_question", "") if brief is not None else "",
             "horizon": getattr(brief, "horizon", "unspecified") if brief is not None else "unspecified",
             "relevant_constraints": "|".join(
@@ -510,11 +542,13 @@ def _recipe_for_patterns(
 
 
 def select_recipe(brief: WorkBrief, task_shape: TaskShape | None = None, override=None) -> ExecutionRecipe:
-    intent = getattr(brief, "execution_intent", None)
-    required_capabilities = tuple(str(item) for item in getattr(intent, "required_capabilities", ()) if str(item) not in {item.value for item in ReviewCheckKind})
-    required_participants = tuple(str(item) for item in getattr(intent, "required_participants", ()) if str(item))
-    if override is None and intent is not None and intent.required_patterns:
-        override = list(intent.required_patterns)
+    normalized_intent = normalize_work_brief(brief)
+    required_capabilities = tuple(
+        str(item) for item in normalized_intent.required_capabilities if str(item) not in {item.value for item in ReviewCheckKind}
+    )
+    required_participants = tuple(str(item) for item in normalized_intent.required_participants if str(item))
+    if override is None and normalized_intent.topology_requirements:
+        override = list(normalized_intent.topology_requirements)
     override = override if override is not None else brief.execution_pattern_override
     if override is not None:
         selected = _patterns_from_override(override)
@@ -531,6 +565,7 @@ def select_recipe(brief: WorkBrief, task_shape: TaskShape | None = None, overrid
             _explicit_reviewer_requested(brief, task_shape),
             _explicit_reviewer_requested(brief, task_shape),
             brief,
+            normalized_intent=normalized_intent,
         )
     if task_shape is not None:
         patterns: list[ExecutionPattern] = []
@@ -551,8 +586,9 @@ def select_recipe(brief: WorkBrief, task_shape: TaskShape | None = None, overrid
                 _explicit_reviewer_requested(brief, task_shape),
                 _explicit_reviewer_requested(brief, task_shape),
                 brief,
+                normalized_intent=normalized_intent,
             )
-        return _recipe_for_patterns((ExecutionPattern.DIRECT,), "task_shape", "direct task shape", brief.stages, brief=brief)
+        return _recipe_for_patterns((ExecutionPattern.DIRECT,), "task_shape", "direct task shape", brief.stages, brief=brief, normalized_intent=normalized_intent)
     if brief.stages:
         return _recipe_for_patterns(
             (ExecutionPattern.SEQUENTIAL,),
@@ -562,15 +598,17 @@ def select_recipe(brief: WorkBrief, task_shape: TaskShape | None = None, overrid
             True,
             True,
             brief,
+            normalized_intent=normalized_intent,
         )
     if brief.desired_deliverables:
-        if intent is None or not (required_capabilities or required_participants):
+        if not (required_capabilities or required_participants):
             return _recipe_for_patterns(
                 (ExecutionPattern.SEQUENTIAL,),
                 "work_brief",
                 "desired deliverables require bounded analysis and independent validation",
                 brief=brief,
                 review_required=True,
+                normalized_intent=normalized_intent,
             )
         return _recipe_for_patterns(
             (ExecutionPattern.SEQUENTIAL,),
@@ -580,8 +618,9 @@ def select_recipe(brief: WorkBrief, task_shape: TaskShape | None = None, overrid
             True,
             _explicit_reviewer_requested(brief, task_shape),
             brief,
+            normalized_intent=normalized_intent,
         )
-    if intent is not None and (required_capabilities or required_participants):
+    if required_capabilities or required_participants:
         return _recipe_for_patterns(
             (ExecutionPattern.SEQUENTIAL,),
             "work_brief",
@@ -590,6 +629,7 @@ def select_recipe(brief: WorkBrief, task_shape: TaskShape | None = None, overrid
             True,
             _explicit_reviewer_requested(brief, task_shape),
             brief,
+            normalized_intent=normalized_intent,
         )
     return make_recipe(RecipeName.DIRECT)
 

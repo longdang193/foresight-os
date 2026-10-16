@@ -12,6 +12,7 @@ from typing import Any, Mapping
 ANALYSIS_INPUT_CONTRACT_FIELDS = frozenset(
     {
         "domain",
+        "stage_id",
         "name",
         "required_tables",
         "tables",
@@ -55,11 +56,62 @@ def _canonical(value: Any) -> Any:
     return value
 
 
+def _freeze(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({str(key): _freeze(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_freeze(item) for item in value)
+    return value
+
+
+@dataclass(frozen=True)
+class _PeriodSpec:
+    raw: str
+    start_year: int
+    start_month: int | None
+    end_year: int
+    end_month: int | None
+    granularity: str
+
+    @property
+    def is_cross_year(self) -> bool:
+        return self.start_year != self.end_year
+
+    @property
+    def start_key(self) -> tuple[int, int]:
+        return self.start_year, self.start_month or 1
+
+    @property
+    def end_key(self) -> tuple[int, int]:
+        return self.end_year, self.end_month or 12
+
+
+def _parse_period(value: str) -> _PeriodSpec:
+    raw = str(value)
+    match = re.fullmatch(r"(\d{4})(?:-(\d{2}))?(?::(\d{4})(?:-(\d{2}))?)?", raw)
+    if match is None:
+        raise ValueError(f"invalid period syntax: {raw}")
+    start_year = int(match.group(1))
+    start_month = int(match.group(2)) if match.group(2) is not None else None
+    end_year = int(match.group(3) or match.group(1))
+    end_month = int(match.group(4)) if match.group(4) is not None else None
+    for month in (start_month, end_month):
+        if month is not None and not 1 <= month <= 12:
+            raise ValueError(f"invalid period month: {raw}")
+    if (start_year, start_month or 1) > (end_year, end_month or 12):
+        raise ValueError(f"invalid period range: {raw}")
+    granularity = "range" if ":" in raw else "month" if start_month is not None else "year"
+    return _PeriodSpec(raw, start_year, start_month, end_year, end_month, granularity)
+
+
 @dataclass(frozen=True)
 class AnalysisInputContract:
     """Immutable, serializable input contract for one domain analysis."""
 
     domain: str
+    stage_id: str | None = None
     required_tables: tuple[str, ...] = ()
     column_mappings: dict[str, str] = field(default_factory=dict)
     entity_scope: tuple[str, ...] = ()
@@ -93,6 +145,7 @@ class AnalysisInputContract:
         rates = {str(key): float(rate) for key, rate in dict(data.get("conversion_rates", {})).items()}
         return cls(
             domain=str(data.get("domain", data.get("name", ""))),
+            stage_id=str(data["stage_id"]) if data.get("stage_id") is not None else None,
             required_tables=_tuple(data.get("required_tables", data.get("tables", ()))),
             column_mappings={str(key): str(item) for key, item in dict(data.get("column_mappings", {})).items()},
             entity_scope=_tuple(data.get("entity_scope", data.get("entities", ()))),
@@ -114,6 +167,7 @@ class AnalysisInputContract:
     def to_dict(self) -> dict[str, Any]:
         return {
             "domain": self.domain,
+            **({"stage_id": self.stage_id} if self.stage_id else {}),
             "required_tables": list(self.required_tables),
             "column_mappings": dict(sorted(self.column_mappings.items())),
             "entity_scope": list(self.entity_scope),
@@ -137,6 +191,10 @@ class AnalysisInputContract:
         payload = json.dumps(_canonical(self.to_dict()), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
+    @property
+    def period_specs(self) -> tuple[_PeriodSpec, ...]:
+        return tuple(_parse_period(period) for period in (*self.periods, self.baseline_period, self.comparison_period) if period is not None)
+
     def validate(self) -> None:
         if not self.domain.strip():
             raise ValueError("analysis input contract requires a domain")
@@ -146,15 +204,7 @@ class AnalysisInputContract:
             raise ValueError(f"unsupported duplicate policy: {self.duplicate_policy}")
         if self.missing_value_policy not in {"preserve_as_issue", "exclude", "reject"}:
             raise ValueError(f"unsupported missing-value policy: {self.missing_value_policy}")
-        for period in (*self.periods, self.baseline_period, self.comparison_period):
-            if period is None:
-                continue
-            match = re.fullmatch(r"(\d{4})(?:-(\d{2}))?(?::(\d{4})(?:-(\d{2}))?)?", period)
-            if match is None:
-                raise ValueError(f"invalid period syntax: {period}")
-            for month in (match.group(2), match.group(4)):
-                if month is not None and not 1 <= int(month) <= 12:
-                    raise ValueError(f"invalid period month: {period}")
+        self.period_specs
         for field_name, value in (("units", self.units), ("reporting_currency", self.reporting_currency)):
             if value and not value.strip():
                 raise ValueError(f"{field_name} must not be blank")
@@ -176,10 +226,21 @@ class NormalizedIntent:
     dependencies: tuple[str, ...] = ()
     source_needs: tuple[dict[str, Any], ...] = ()
     required_capabilities: tuple[str, ...] = ()
+    required_participants: tuple[str, ...] = ()
     review_checks: tuple[str, ...] = ()
     topology_requirements: tuple[str, ...] = ()
     resource_limits: dict[str, int | str] = field(default_factory=dict)
     contracts: tuple[AnalysisInputContract, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "stages", tuple(_freeze(item) for item in self.stages))
+        object.__setattr__(self, "source_needs", tuple(_freeze(item) for item in self.source_needs))
+        object.__setattr__(self, "resource_limits", _freeze(self.resource_limits))
+        object.__setattr__(self, "dependencies", tuple(str(item) for item in self.dependencies))
+        object.__setattr__(self, "required_capabilities", tuple(str(item) for item in self.required_capabilities))
+        object.__setattr__(self, "required_participants", tuple(str(item) for item in self.required_participants))
+        object.__setattr__(self, "review_checks", tuple(str(item) for item in self.review_checks))
+        object.__setattr__(self, "topology_requirements", tuple(str(item) for item in self.topology_requirements))
 
     @property
     def fingerprint(self) -> str:
@@ -190,6 +251,7 @@ class NormalizedIntent:
             "dependencies": self.dependencies,
             "source_needs": self.source_needs,
             "required_capabilities": self.required_capabilities,
+            "required_participants": self.required_participants,
             "review_checks": self.review_checks,
             "topology_requirements": self.topology_requirements,
             "resource_limits": self.resource_limits,
@@ -231,6 +293,17 @@ def normalize_work_brief(brief: Any) -> NormalizedIntent:
         for capability in (item.get("execution_intent") or {}).get("required_capabilities", ())
     )
     required_capabilities = tuple(dict.fromkeys(str(capability) for capability in required_capabilities_values))
+    required_participants_values = list((value.get("execution_intent") or {}).get("required_participants", ()))
+    required_participants_values.extend(
+        participant
+        for item in stages
+        for participant in (item.get("execution_intent") or {}).get("required_participants", ())
+    )
+    required_participants = tuple(dict.fromkeys(str(participant) for participant in required_participants_values))
+    resource_limits = dict(value.get("resource_limits") or {})
+    resource_limits.update(dict((value.get("execution_intent") or {}).get("resource_limits") or {}))
+    for item in stages:
+        resource_limits.update(dict(item.get("limits") or {}))
     return NormalizedIntent(
         decision_question=str(value.get("decision_question", "")),
         horizon=str(value.get("horizon", "unspecified")),
@@ -238,8 +311,9 @@ def normalize_work_brief(brief: Any) -> NormalizedIntent:
         dependencies=tuple(str(item) for item in value.get("open_dependencies", ())),
         source_needs=source_needs,
         required_capabilities=required_capabilities,
+        required_participants=required_participants,
         review_checks=tuple(str(item) for item in value.get("user_preferences", {}).get("review_checks", ())),
         topology_requirements=tuple(str(item) for item in (value.get("execution_intent") or {}).get("required_patterns", ())),
-        resource_limits={},
+        resource_limits=resource_limits,
         contracts=contracts,
     )

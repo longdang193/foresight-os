@@ -8,12 +8,12 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
-from foresight_os.analysis.workbook_inputs import apply_column_mappings, require_row_columns, require_table, row_evidence, table_rows
+from foresight_os.analysis.workbook_inputs import apply_column_mappings, read_workbook, require_row_columns, require_table, row_evidence, table_rows, validate_mapping_targets
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
 from foresight_os.persistence.analysis_store import AnalysisStore
-from foresight_os.runtime.local_toolbelt import SheetSelection, SourceSnapshot, ToolbeltError, spreadsheet_read
+from foresight_os.runtime.local_toolbelt import SheetSelection, ToolbeltError
 
 
 @dataclass(frozen=True)
@@ -111,12 +111,8 @@ def _unit_cost_eur(row: dict[str, Any], rates: dict[str, float] | None = None, *
 def _record(record_id: str, statement: str, evidence_ids: list[str], assumptions: tuple[str, ...], uncertainty: tuple[str, ...], disconfirmation: tuple[str, ...], monitoring: tuple[str, ...]) -> AnalyticalRecord:
     return AnalyticalRecord(record_id, statement, Basis.DERIVED, Assessment.SUPPORTED, evidence_ids=list(dict.fromkeys(evidence_ids)), assumptions=assumptions, uncertainty=uncertainty, confidence_rationale="Derived from deterministic row-level calculations with explicit exclusions and assumptions.", disconfirmation_conditions=disconfirmation, monitoring_indicators=monitoring)
 
-def analyze_supplier_resilience(source: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None) -> SupplierAnalysis:
+def analyze_supplier_resilience(source: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None, *, workbook_context: Any | None = None) -> SupplierAnalysis:
     source = Path(source)
-    snapshot = SourceSnapshot.capture(source)
-    digest = snapshot.sha256
-    workbook = spreadsheet_read(source, SheetSelection(sheet_names=("Brief", "Supplier_Master", "Incidents", "Scenario_Assumptions", "Mitigation_Options"), include_hidden=True, include_hidden_rows=True), _snapshot=snapshot)
-    brief, supplier_table, incident_table, scenario_table, option_table = [_table(workbook, name) for name in ("Brief", "Supplier_Master", "Incidents", "Scenario_Assumptions", "Mitigation_Options")]
     contract = AnalysisInputContract.from_dict(input_contract) if input_contract is not None else AnalysisInputContract(
         domain="supplier_resilience",
         required_tables=("Brief", "Supplier_Master", "Incidents", "Scenario_Assumptions", "Mitigation_Options"),
@@ -126,10 +122,22 @@ def analyze_supplier_resilience(source: Path, input_contract: AnalysisInputContr
         compatibility_assumption="legacy supplier workbook FX map: EUR=1.0, USD=0.92, CNY=0.13",
     )
     contract.validate()
+    workbook = read_workbook(source, SheetSelection(sheet_names=("Brief", "Supplier_Master", "Incidents", "Scenario_Assumptions", "Mitigation_Options"), include_hidden=True, include_hidden_rows=True), workbook_context=workbook_context)
+    digest = workbook.workbook_sha256
+    brief, supplier_table, incident_table, scenario_table, option_table = [_table(workbook, name) for name in ("Brief", "Supplier_Master", "Incidents", "Scenario_Assumptions", "Mitigation_Options")]
     conversion_rates = contract.conversion_rates
     reporting_unit = contract.reporting_currency or contract.units or "EUR"
     legacy_conversion = input_contract is None
-    supplier_rows, incident_rows, scenario_rows, option_rows = [apply_column_mappings(_rows(table), contract.column_mappings) for table in (supplier_table, incident_table, scenario_table, option_table)]
+    mapping_headers = {
+        column
+        for table in (supplier_table, incident_table, scenario_table, option_table)
+        for column in getattr(table, "columns", ())
+    }
+    validate_mapping_targets(mapping_headers, contract.column_mappings)
+    supplier_rows, incident_rows, scenario_rows, option_rows = [
+        apply_column_mappings(_rows(table), contract.column_mappings, available_headers=mapping_headers)
+        for table in (supplier_table, incident_table, scenario_table, option_table)
+    ]
     for sheet, rows, columns in (
         (supplier_table.sheet, supplier_rows, ("Line_ID", "Supplier", "Country", "Part_Family", "Annual_Spend", "Currency", "Criticality_1_5", "Lead_Time_Days", "Defect_PPM", "Qualified_Alternatives", "Geo_Risk_1_5", "Unit_Cost")),
         (incident_table.sheet, incident_rows, ("Incident_ID", "Date", "Supplier", "Part_Family", "Disruption_Days", "Expedite_Premium_pct")),

@@ -2,6 +2,7 @@ import hashlib
 import json
 import re
 import zipfile
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import get_type_hints
@@ -25,6 +26,7 @@ from foresight_os.runtime.local_toolbelt import (
     domain_validation,
     spreadsheet_read,
     WorkbookReadCache,
+    _coerce_typed_table,
     bind_local_toolbelt,
 )
 from foresight_os.domain.models import Evidence, SourceLocator
@@ -164,6 +166,8 @@ def test_workbook_context_rolls_back_retained_state_when_budget_rejects_read(tmp
     assert context.cache.size == 0
     assert context.authority_index.size == 0
     assert context.stats.snapshot_bytes == 0
+    assert context.stats.capture_count == 1
+    assert context.stats.xlsx_parse_count == 0
 
 
 def test_analysis_cache_uses_material_identity_not_reused_table_ids():
@@ -180,6 +184,40 @@ def test_analysis_cache_uses_material_identity_not_reused_table_ids():
     assert second.rows[0]["sum"] == 30.0
     assert repeat.rows[0]["sum"] == 10.0
     assert cache.size == 2
+
+
+def test_typed_table_identity_is_derived_from_material_not_caller_fingerprint():
+    table = _coerce_typed_table(
+        {
+            "id": "same-id",
+            "name": "Values",
+            "sheet": "Sheet1",
+            "headers": [["Value"]],
+            "rows": [[10]],
+            "row_provenance": [],
+            "source_range": "A1:A2",
+            "material_fingerprint": "caller-controlled",
+        }
+    )
+
+    changed_rows = replace(table, rows=((30,),))
+    changed_range = replace(table, source_range="A1:A3")
+    changed_hidden = replace(table, hidden=True)
+    coerced = _coerce_typed_table({**table.to_dict(), "rows": [[99]], "material_fingerprint": "caller-controlled"})
+
+    assert table.material_fingerprint != "caller-controlled"
+    assert len({table.material_fingerprint, changed_rows.material_fingerprint, changed_range.material_fingerprint, changed_hidden.material_fingerprint, coerced.material_fingerprint}) == 5
+
+
+def test_join_table_material_identity_changes_analysis_cache_key():
+    cache = WorkbookReadCache()
+    table = TypedTable("same-id", "Values", "Sheet1", (("Region", "Value"),), (("North", 10),), ())
+    first_join = TypedTable("join-id", "Join", "Sheet2", (("Region", "Factor"),), (("North", 1),), ())
+    second_join = replace(first_join, rows=(("North", 2),))
+    first_operation = AnalysisOperation("join", join_table=first_join, join_keys=("Region", "Region"), value_column="Value")
+    second_operation = replace(first_operation, join_table=second_join)
+
+    assert cache.analysis_key(table, first_operation, ToolbeltLimits()) != cache.analysis_key(table, second_operation, ToolbeltLimits())
 
 
 def test_xlsx_read_uses_pinned_snapshot_bytes_when_live_path_changes(workbook_path: Path):

@@ -22,6 +22,7 @@ SOAK_FIELDS = (
     "owned_capability_resources",
     "mcp_session_count",
 )
+MEASUREMENT_STATUSES = {"VERIFIED", "FAILED", "NOT_MEASURED", "DEFERRED"}
 
 
 def _tool_calls(receipt: dict) -> int:
@@ -51,6 +52,17 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
     missing.extend(key for key in required if key not in receipt)
     if receipt.get("schema_version") != SCHEMA_VERSION:
         missing.append(f"schema_version={SCHEMA_VERSION}")
+    evidence = receipt.get("evidence")
+    evidence_statuses: dict[str, str] = {}
+    if evidence is not None:
+        for dimension in ("correctness", "latency", "allocation", "soak"):
+            item = evidence.get(dimension, {})
+            status = item.get("status")
+            evidence_statuses[dimension] = status
+            if status not in MEASUREMENT_STATUSES:
+                missing.append(f"evidence.{dimension}.status")
+            elif status != "VERIFIED" and not isinstance(item.get("limitation"), str):
+                missing.append(f"evidence.{dimension}.limitation")
     revision = receipt.get("revision", {})
     for field in ("commit", "repo_root", "package_path"):
         if not isinstance(revision.get(field), str) or not revision[field].strip():
@@ -82,9 +94,9 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
     for field in ("p95_ms", "peak_allocation_bytes", "deterministic_key"):
         if field not in workbook:
             missing.append(f"xlsx.{field}")
-    if not _is_number(workbook.get("p95_ms")) or float(workbook.get("p95_ms", 0)) <= 0:
+    if evidence_statuses.get("latency", "VERIFIED") == "VERIFIED" and (not _is_number(workbook.get("p95_ms")) or float(workbook.get("p95_ms", 0)) <= 0):
         missing.append("xlsx.p95_ms>0")
-    if not _is_number(workbook.get("peak_allocation_bytes")) or int(workbook.get("peak_allocation_bytes", 0)) <= 0:
+    if evidence_statuses.get("allocation", "VERIFIED") == "VERIFIED" and (not _is_number(workbook.get("peak_allocation_bytes")) or int(workbook.get("peak_allocation_bytes", 0)) <= 0):
         missing.append("xlsx.peak_allocation_bytes>0")
     patterns = receipt.get("maf_patterns", {})
     missing.extend(f"maf_patterns.{name}" for name in sorted(REQUIRED_PATTERNS - set(patterns)))
@@ -96,26 +108,33 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
             missing.append(f"maf_patterns.{name}.latency.wall_time_ms_p95>0")
     soak = receipt.get("soak", {})
     required_soak_runs = int(receipt.get("acceptance", {}).get("soak_runs", 0) or 0)
+    soak_verified = evidence_statuses.get("soak", "VERIFIED") == "VERIFIED"
     snapshots = soak.get("snapshots", ())
-    if not isinstance(snapshots, list) or len(snapshots) < required_soak_runs:
+    if soak_verified and (not isinstance(snapshots, list) or len(snapshots) < required_soak_runs):
         missing.append("soak.snapshots")
-    for index, snapshot in enumerate(snapshots):
+    for index, snapshot in enumerate(snapshots if soak_verified else ()):
         for field in SOAK_FIELDS:
             value = snapshot.get(field)
             if not _is_number(value) or int(value) < 0:
                 missing.append(f"soak.snapshots[{index}].{field}")
         if not _is_number(snapshot.get("event_loop_lag_ms")) or float(snapshot.get("event_loop_lag_ms", -1)) < 0:
             missing.append(f"soak.snapshots[{index}].event_loop_lag_ms")
-    if soak.get("monotonic_growth") is not False:
+    if soak_verified and soak.get("monotonic_growth") is not False:
         missing.append("soak.monotonic_growth=false")
     growth = soak.get("resource_growth", {})
-    for field in SOAK_FIELDS:
+    for field in SOAK_FIELDS if soak_verified else ():
         if field not in growth:
             missing.append(f"soak.resource_growth.{field}")
     if receipt.get("native_mcp", {}).get("status") != "VERIFIED":
         missing.append("native_mcp.status=VERIFIED")
     if not receipt.get("workload", {}).get("patterns"):
         missing.append("workload.patterns")
+    for name, item in receipt.get("xlsx", {}).get("workloads", {}).items():
+        status = item.get("status")
+        if status not in MEASUREMENT_STATUSES:
+            missing.append(f"xlsx.workloads.{name}.status")
+        elif status != "VERIFIED" and not isinstance(item.get("limitation"), str):
+            missing.append(f"xlsx.workloads.{name}.limitation")
     return sorted(set(missing))
 
 
@@ -209,6 +228,13 @@ def compare(baseline: dict, release: dict) -> dict:
     if mismatches:
         return {"accepted": False, "mismatched_comparison_inputs": mismatches}
 
+    release_evidence = release.get("evidence", {})
+    unavailable_dimensions = [
+        name
+        for name in ("latency", "allocation", "soak")
+        if release_evidence.get(name, {}).get("status") in {"FAILED", "NOT_MEASURED", "DEFERRED"}
+    ]
+
     baseline_count = int(baseline["accepted_finding_count"])
     baseline_economics = baseline["economics"]
     release_economics = release["economics"]
@@ -223,13 +249,15 @@ def compare(baseline: dict, release: dict) -> dict:
         release_latency = float(release["maf_patterns"][name]["latency"]["wall_time_ms_p95"])
         pattern_regressions[name] = _pct(release_latency, baseline_latency)
         pattern_comparisons[name] = _comparison_metric(baseline_latency, release_latency)
-    p95_regression = _pct(float(release["xlsx"]["p95_ms"]), float(baseline["xlsx"]["p95_ms"]))
-    allocation_regression = _pct(float(release["xlsx"]["peak_allocation_bytes"]), float(baseline["xlsx"]["peak_allocation_bytes"]))
+    latency_measured = release_evidence.get("latency", {}).get("status", "VERIFIED") == "VERIFIED"
+    allocation_measured = release_evidence.get("allocation", {}).get("status", "VERIFIED") == "VERIFIED"
+    p95_regression = _pct(float(release["xlsx"]["p95_ms"]), float(baseline["xlsx"]["p95_ms"])) if latency_measured else None
+    allocation_regression = _pct(float(release["xlsx"]["peak_allocation_bytes"]), float(baseline["xlsx"]["peak_allocation_bytes"])) if allocation_measured else None
     rss_regression = _pct(float(release["resource"]["rss_bytes"]), float(baseline["resource"]["rss_bytes"]))
     absolute = {
         "xlsx": {
-            "p95_ms": _comparison_metric(float(baseline["xlsx"]["p95_ms"]), float(release["xlsx"]["p95_ms"])),
-            "peak_allocation_bytes": _comparison_metric(float(baseline["xlsx"]["peak_allocation_bytes"]), float(release["xlsx"]["peak_allocation_bytes"])),
+            "p95_ms": _comparison_metric(float(baseline["xlsx"]["p95_ms"]), float(release["xlsx"]["p95_ms"])) if latency_measured else None,
+            "peak_allocation_bytes": _comparison_metric(float(baseline["xlsx"]["peak_allocation_bytes"]), float(release["xlsx"]["peak_allocation_bytes"])) if allocation_measured else None,
         },
         "resource": {
             "rss_bytes": _comparison_metric(float(baseline["resource"]["rss_bytes"]), float(release["resource"]["rss_bytes"])),
@@ -253,12 +281,13 @@ def compare(baseline: dict, release: dict) -> dict:
         for field in {"model_calls", "tool_calls_total", "local_tool_calls", "mcp_tool_calls", "external_http_requests"}
     )
     accepted = (
-        p95_regression <= 20
-        and allocation_regression <= 15
+        (p95_regression is None or p95_regression <= 20)
+        and (allocation_regression is None or allocation_regression <= 15)
         and rss_regression <= 15
         and all(value <= 20 for value in pattern_regressions.values())
         and non_regressive_economics
         and not reused_stage_new_calls
+        and not unavailable_dimensions
     )
     return {
         "accepted": accepted,
@@ -270,6 +299,8 @@ def compare(baseline: dict, release: dict) -> dict:
         "workload": baseline["workload"],
         "native_mcp": {"baseline": baseline["native_mcp"]["status"], "release": release["native_mcp"]["status"]},
         "reused_stage_new_calls": reused_stage_new_calls,
+        "evidence": {"release": release_evidence, "unavailable_dimensions": unavailable_dimensions},
+        "gate": "PASS" if accepted else ("NOT_MEASURED" if unavailable_dimensions else "FAILED"),
     }
 
 

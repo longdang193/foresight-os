@@ -44,6 +44,31 @@ def test_resolver_is_lazy_and_reuses_run_scope_binding():
     assert resource.closed
 
 
+def test_capability_admission_is_metadata_only_for_resource_factories():
+    calls = []
+    scope = CapabilityScope()
+    resolver = CapabilityResolver({"resource": CapabilityDefinition("resource", "external_read")})
+
+    def factory(_context):
+        calls.append(True)
+        return Closeable()
+
+    result = resolver.admit(
+        ("resource",),
+        {
+            "scope": scope,
+            "local_capabilities": {
+                "resource": CapabilityBinding(factory, CapabilityBindingKind.RESOURCE_FACTORY, CapabilityOwnership.OWNED)
+            },
+        },
+    )
+
+    assert result["resource"].available
+    assert result["resource"].tool is None
+    assert calls == []
+    assert scope.resources == []
+
+
 def test_tool_binding_is_not_invoked_during_resolution():
     calls = []
 

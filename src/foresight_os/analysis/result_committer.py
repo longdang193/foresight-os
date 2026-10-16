@@ -336,7 +336,7 @@ def _merge_record_collection(current: list[Any], incoming: tuple[Any, ...] | lis
             result.append(item)
             continue
         if canonical_json_hash(asdict(result[existing_index])) != canonical_json_hash(asdict(item)):
-            raise ValidationError(f"same-ID/different-content conflict for {label} {item.id}")
+            raise ValidationError(f"same-ID/different-content conflict for {label} {item.id}", code="MATERIAL_CONFLICT")
     return result
 
 
@@ -424,7 +424,7 @@ class CanonicalResultCommitter:
 
 def _mapping(value: object, label: str) -> dict[str, Any]:
     if not isinstance(value, Mapping):
-        raise ValidationError(f"{label} must be an object, not prose")
+        raise ValidationError(f"{label} must be an object, not prose", code="MALFORMED_OUTPUT")
     return dict(value)
 
 
@@ -432,14 +432,14 @@ def _list(value: object, label: str) -> list[object]:
     if value is None:
         return []
     if not isinstance(value, list):
-        raise ValidationError(f"{label} must be a list")
+        raise ValidationError(f"{label} must be a list", code="MALFORMED_OUTPUT")
     return value
 
 
 def _required_text(value: Mapping[str, Any], key: str, label: str) -> str:
     result = value.get(key)
     if not isinstance(result, str) or not result.strip():
-        raise ValidationError(f"{label}.{key} must be non-empty text")
+        raise ValidationError(f"{label}.{key} must be non-empty text", code="MALFORMED_OUTPUT")
     return result
 
 
@@ -448,14 +448,14 @@ def _optional_text(value: Mapping[str, Any], key: str, label: str, default: str 
     if result is None:
         return default
     if not isinstance(result, str):
-        raise ValidationError(f"{label}.{key} must be text")
+        raise ValidationError(f"{label}.{key} must be text", code="MALFORMED_OUTPUT")
     return result
 
 
 def _validate_fields(value: Mapping[str, Any], allowed: frozenset[str], label: str) -> None:
     unknown = set(value) - allowed
     if unknown:
-        raise ValidationError(f"{label} contains unsupported fields: {', '.join(sorted(unknown))}")
+        raise ValidationError(f"{label} contains unsupported fields: {', '.join(sorted(unknown))}", code="MALFORMED_OUTPUT")
 
 
 def _text_list(value: object, label: str) -> list[str]:
@@ -463,7 +463,7 @@ def _text_list(value: object, label: str) -> list[str]:
     result: list[str] = []
     for index, entry in enumerate(entries):
         if not isinstance(entry, str) or not entry.strip():
-            raise ValidationError(f"{label}[{index}] must be non-empty text")
+            raise ValidationError(f"{label}[{index}] must be non-empty text", code="MALFORMED_OUTPUT")
         result.append(entry)
     return result
 
@@ -481,14 +481,14 @@ def _register_alias(
     label: str,
 ) -> None:
     if canonical_id in canonical_ids:
-        raise ValidationError(f"duplicate canonical identifier: {canonical_id}")
+        raise ValidationError(f"duplicate canonical identifier: {canonical_id}", code="AMBIGUOUS_ALIAS")
     canonical_ids.add(canonical_id)
     if supplied_id is None:
         return
     if not isinstance(supplied_id, str) or not supplied_id.strip():
-        raise ValidationError(f"{label}.id must be non-empty text")
+        raise ValidationError(f"{label}.id must be non-empty text", code="MALFORMED_OUTPUT")
     if supplied_id in supplied_ids:
-        raise ValidationError(f"duplicate identifier: {supplied_id}")
+        raise ValidationError(f"duplicate identifier: {supplied_id}", code="AMBIGUOUS_ALIAS")
     supplied_ids.add(supplied_id)
     aliases[supplied_id] = canonical_id
 
@@ -497,15 +497,15 @@ def _enum_value(enum_type: type, value: object, label: str) -> Any:
     try:
         return enum_type(str(value))
     except (TypeError, ValueError) as exc:
-        raise ValidationError(f"{label} has unsupported value: {value}") from exc
+        raise ValidationError(f"{label} has unsupported value: {value}", code="MALFORMED_OUTPUT") from exc
 
 
 def _finite_number(value: object, label: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValidationError(f"{label}.output must be a finite number")
+        raise ValidationError(f"{label}.output must be a finite number", code="MALFORMED_OUTPUT")
     result = float(value)
     if not math.isfinite(result):
-        raise ValidationError(f"{label}.output must be a finite number")
+        raise ValidationError(f"{label}.output must be a finite number", code="MALFORMED_OUTPUT")
     return result
 
 
@@ -524,9 +524,9 @@ def _measurement_key(value: object, label: str) -> MeasurementKey:
 
 def _resolve(value: object, aliases: Mapping[str, str], label: str) -> str:
     if not isinstance(value, str) or not value.strip():
-        raise ValidationError(f"{label} must reference a non-empty ID")
+        raise ValidationError(f"{label} must reference a non-empty ID", code="UNRESOLVED_REFERENCE")
     if value not in aliases:
-        raise ValidationError(f"unknown reference: {label} -> {value}")
+        raise ValidationError(f"unknown reference: {label} -> {value}", code="UNRESOLVED_REFERENCE")
     return aliases[value]
 
 
@@ -568,14 +568,14 @@ def normalize_stage_result(
     value = _mapping(payload, "stage result")
     unknown = set(value) - _RECOGNIZED_FIELDS
     if unknown:
-        raise ValidationError(f"stage result contains unsupported fields: {', '.join(sorted(unknown))}")
+        raise ValidationError(f"stage result contains unsupported fields: {', '.join(sorted(unknown))}", code="MALFORMED_OUTPUT")
     if value.get("contract") != expected_contract:
-        raise ValidationError(f"stage result contract must be {expected_contract}")
+        raise ValidationError(f"stage result contract must be {expected_contract}", code="MALFORMED_OUTPUT")
     stage_id = _required_text(value, "stage_id", "stage result")
     if expected_stage_id and stage_id != expected_stage_id:
-        raise ValidationError(f"stage result stage_id must be {expected_stage_id}")
+        raise ValidationError(f"stage result stage_id must be {expected_stage_id}", code="MALFORMED_OUTPUT")
     if not any(value.get(key) for key in ("evidence", "calculations", "claims", "implications", "recommendations", "artifacts", "relationships")):
-        raise ValidationError("stage result must contain at least one typed analytical collection")
+        raise ValidationError("stage result must contain at least one typed analytical collection", code="MALFORMED_OUTPUT")
 
     aliases: dict[str, str] = {}
     supplied_ids: set[str] = set()
@@ -673,7 +673,8 @@ def normalize_stage_result(
         input_ids = [
             _resolve(
                 entry,
-                ({**evidence_aliases, **calculation_aliases, **known_evidence_aliases, **known_calculation_aliases,
+                ({**known_evidence_aliases, **known_calculation_aliases,
+                  **evidence_aliases, **calculation_aliases,
                   **trusted_evidence_aliases, **trusted_calculation_aliases}
                  if prefer_current_aliases else
                  {**evidence_aliases, **calculation_aliases, **known_evidence_aliases, **known_calculation_aliases,
@@ -683,7 +684,7 @@ def normalize_stage_result(
             for entry in _reference_list(item.get("input_ids"), f"calculations[{index}].input_ids")
         ]
         if not input_ids:
-            raise ValidationError(f"calculations[{index}].input_ids must not be empty")
+            raise ValidationError(f"calculations[{index}].input_ids must not be empty", code="MISSING_INPUT")
         formula = _required_text(item, "formula", f"calculations[{index}]")
         units = _required_text(item, "units", f"calculations[{index}]")
         source_locators = _text_list(item.get("source_locators", ()), f"calculations[{index}].source_locators")
@@ -718,7 +719,7 @@ def normalize_stage_result(
             evidence_ids = [
                 _resolve(
                     entry,
-                    ({**evidence_aliases, **known_evidence_aliases, **trusted_evidence_aliases}
+                    ({**known_evidence_aliases, **evidence_aliases, **trusted_evidence_aliases}
                      if prefer_current_aliases else
                      {**evidence_aliases, **known_evidence_aliases, **trusted_evidence_aliases}),
                     f"{collection}[{index}].evidence_ids",
@@ -789,31 +790,27 @@ def normalize_stage_result(
         try:
             from_id = _resolve(
                 item.get("from_id"),
-                ({**known_evidence_aliases, **known_record_aliases, **record_aliases}
+                ({**known_evidence_aliases, **known_record_aliases, **record_aliases, **trusted_evidence_aliases, **trusted_record_aliases}
                  if not prefer_current_aliases else
-                 {**record_aliases, **known_evidence_aliases, **known_record_aliases})
-                | trusted_evidence_aliases
-                | trusted_record_aliases,
+                 {**known_evidence_aliases, **known_record_aliases, **record_aliases, **trusted_evidence_aliases, **trusted_record_aliases}),
                 f"relationships[{index}].from_id",
             )
             to_id = _resolve(
                 item.get("to_id"),
-                ({**record_aliases, **known_evidence_aliases, **known_record_aliases}
-                 | trusted_evidence_aliases
-                 | trusted_record_aliases),
+                {**known_evidence_aliases, **known_record_aliases, **record_aliases, **trusted_evidence_aliases, **trusted_record_aliases},
                 f"relationships[{index}].to_id",
             )
-        except ValidationError:
+        except ValidationError as error:
             if tolerate_invalid_relationships:
                 if item.get("id") is not None:
                     rejected_relationship_aliases.add(str(item["id"]))
                 continue
-            raise
+            raise ValidationError(str(error), code="INVALID_RELATIONSHIP") from error
         relation_type = _required_text(item, "relation_type", f"relationships[{index}]")
         try:
             rule = relationship_rule(relation_type)
         except ValueError as exc:
-            raise ValidationError(str(exc)) from exc
+            raise ValidationError(str(exc), code="INVALID_RELATIONSHIP") from exc
         from_kind = record_kinds.get(from_id)
         to_kind = record_kinds.get(to_id)
         if from_kind is None or to_kind is None:
@@ -822,7 +819,8 @@ def normalize_stage_result(
                     rejected_relationship_aliases.add(str(item["id"]))
                 continue
             raise ValidationError(
-                f"relationship endpoints must have known record kinds: {from_id} -> {to_id}"
+                f"relationship endpoints must have known record kinds: {from_id} -> {to_id}",
+                code="INVALID_RELATIONSHIP",
             )
         if from_kind not in rule.sources or to_kind not in rule.targets:
             if tolerate_invalid_relationships:
@@ -831,7 +829,8 @@ def normalize_stage_result(
                 continue
             raise ValidationError(
                 f"invalid endpoints for relationship {relation_type}: "
-                f"{from_kind.value} -> {to_kind.value}"
+                f"{from_kind.value} -> {to_kind.value}",
+                code="INVALID_RELATIONSHIP",
             )
         relationship_id = deterministic_id("relationship", {"stage_id": stage_id, "from_id": from_id, "to_id": to_id, "relation_type": relation_type})
         if relationship_id in relationship_aliases:
@@ -859,7 +858,7 @@ def normalize_stage_result(
             if relationship_id is None:
                 if tolerate_invalid_relationships:
                     continue
-                raise ValidationError(f"unknown reference: {label} -> {reference}")
+                raise ValidationError(f"unknown reference: {label} -> {reference}", code="INVALID_RELATIONSHIP")
             resolved.append(relationship_id)
         return resolved
 

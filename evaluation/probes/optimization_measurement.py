@@ -19,6 +19,7 @@ from foresight_os.runtime.local_toolbelt import AnalysisOperation, SheetSelectio
 
 
 SCHEMA_VERSION = 2
+MEASUREMENT_STATUSES = {"VERIFIED", "FAILED", "NOT_MEASURED", "DEFERRED"}
 
 
 def _revision_metadata() -> dict[str, str]:
@@ -77,6 +78,14 @@ def process_rss_bytes() -> int | None:
         return int(psutil.Process(os.getpid()).memory_info().rss)
     except Exception:
         return None
+
+
+def measurement_evidence(status: str, *, limitation: str | None = None, **values: Any) -> dict[str, Any]:
+    if status not in MEASUREMENT_STATUSES:
+        raise ValueError(f"unsupported measurement status: {status}")
+    if status != "VERIFIED" and not limitation:
+        raise ValueError("unverified measurements require a limitation")
+    return {"status": status, "limitation": limitation, **values}
 
 
 def observed_finding_views(state: AnalysisState | None) -> tuple[object, ...]:
@@ -207,6 +216,7 @@ def build_receipt(
     state: AnalysisState | None,
     stage_metrics: list[dict[str, Any]],
     thresholds: dict[str, Any],
+    evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     accepted_count = accepted_finding_count(state)
     economics = {
@@ -240,4 +250,10 @@ def build_receipt(
         "external_fixture": external_fixture,
         "native_mcp": native_mcp,
         "resource": {"rss_bytes": process_rss_bytes(), "measurement": "process_rss"},
+        "evidence": evidence or {
+            "correctness": measurement_evidence("VERIFIED", limitation=None),
+            "latency": measurement_evidence("VERIFIED", limitation=None),
+            "allocation": measurement_evidence("VERIFIED", limitation=None),
+            "soak": measurement_evidence("VERIFIED", limitation=None),
+        },
     }

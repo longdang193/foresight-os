@@ -9,7 +9,7 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
-from foresight_os.analysis.workbook_inputs import apply_column_mappings, require_row_columns, require_table, row_evidence, table_rows
+from foresight_os.analysis.workbook_inputs import apply_column_mappings, read_workbook, require_row_columns, require_table, row_evidence, table_rows, validate_mapping_targets
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import (
@@ -27,7 +27,7 @@ from foresight_os.domain.models import (
     SourceLocator,
 )
 from foresight_os.persistence.analysis_store import AnalysisStore
-from foresight_os.runtime.local_toolbelt import SheetSelection, SourceSnapshot, ToolbeltError, spreadsheet_read
+from foresight_os.runtime.local_toolbelt import SheetSelection, ToolbeltError
 
 
 @dataclass(frozen=True)
@@ -183,20 +183,8 @@ def _record(
     )
 
 
-def analyze_portfolio_resilience(source: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None) -> PortfolioAnalysis:
+def analyze_portfolio_resilience(source: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None, *, workbook_context: Any | None = None) -> PortfolioAnalysis:
     source = Path(source)
-    snapshot = SourceSnapshot.capture(source)
-    source_sha256 = snapshot.sha256
-    workbook = spreadsheet_read(
-        source,
-        SheetSelection(
-            sheet_names=("Brief", "Sales_History", "Fixed_Costs", "Scenario_Assumptions", "Strategic_Options", "Reported_KPIs"),
-            include_hidden=True,
-            include_hidden_rows=True,
-        ),
-        _snapshot=snapshot,
-    )
-    brief_table = _table(workbook, "Brief")
     contract = AnalysisInputContract.from_dict(input_contract) if input_contract is not None else AnalysisInputContract(
         domain="portfolio_resilience",
         required_tables=("Brief", "Sales_History", "Fixed_Costs", "Scenario_Assumptions", "Strategic_Options", "Reported_KPIs"),
@@ -209,19 +197,43 @@ def analyze_portfolio_resilience(source: Path, input_contract: AnalysisInputCont
         compatibility_assumption="legacy workbook metadata defaults",
     )
     contract.validate()
-    selected_period = contract.baseline_period or (contract.periods[-1] if contract.periods else "2026")
-    comparison_period = contract.comparison_period or (contract.periods[-2] if len(contract.periods) > 1 else "2025")
+    period_by_raw = {spec.raw: spec for spec in contract.period_specs}
+    selected_spec = period_by_raw.get(contract.baseline_period or "") or (contract.period_specs[-1] if contract.period_specs else None)
+    comparison_spec = period_by_raw.get(contract.comparison_period or "") or (contract.period_specs[-2] if len(contract.period_specs) > 1 else None)
+    if selected_spec is not None and (selected_spec.granularity != "year" or selected_spec.is_cross_year):
+        raise ValueError("unsupported period granularity for portfolio_resilience: year required")
+    if comparison_spec is not None and (comparison_spec.granularity != "year" or comparison_spec.is_cross_year):
+        raise ValueError("unsupported comparison period granularity for portfolio_resilience: year required")
+    selected_period = str(selected_spec.start_year if selected_spec is not None else 2026)
+    comparison_period = str(comparison_spec.start_year if comparison_spec is not None else 2025)
+    workbook = read_workbook(
+        source,
+        SheetSelection(
+            sheet_names=("Brief", "Sales_History", "Fixed_Costs", "Scenario_Assumptions", "Strategic_Options", "Reported_KPIs"),
+            include_hidden=True,
+            include_hidden_rows=True,
+        ),
+        workbook_context=workbook_context,
+    )
+    source_sha256 = workbook.workbook_sha256
+    brief_table = _table(workbook, "Brief")
     selected_entities = set(contract.entity_scope)
     sales_table = _table(workbook, "Sales_History")
     fixed_table = _table(workbook, "Fixed_Costs")
     scenario_table = _table(workbook, "Scenario_Assumptions")
     options_table = _table(workbook, "Strategic_Options")
     kpi_table = _table(workbook, "Reported_KPIs")
-    sales_rows = apply_column_mappings(_rows(sales_table), contract.column_mappings)
-    fixed_rows = apply_column_mappings(_rows(fixed_table), contract.column_mappings)
-    scenario_rows = apply_column_mappings(_rows(scenario_table), contract.column_mappings)
-    option_rows = apply_column_mappings(_rows(options_table), contract.column_mappings)
-    kpi_rows = apply_column_mappings(_rows(kpi_table), contract.column_mappings)
+    mapping_headers = {
+        column
+        for table in (sales_table, fixed_table, scenario_table, options_table, kpi_table)
+        for column in getattr(table, "columns", ())
+    }
+    validate_mapping_targets(mapping_headers, contract.column_mappings)
+    sales_rows = apply_column_mappings(_rows(sales_table), contract.column_mappings, available_headers=mapping_headers)
+    fixed_rows = apply_column_mappings(_rows(fixed_table), contract.column_mappings, available_headers=mapping_headers)
+    scenario_rows = apply_column_mappings(_rows(scenario_table), contract.column_mappings, available_headers=mapping_headers)
+    option_rows = apply_column_mappings(_rows(options_table), contract.column_mappings, available_headers=mapping_headers)
+    kpi_rows = apply_column_mappings(_rows(kpi_table), contract.column_mappings, available_headers=mapping_headers)
     for sheet, rows, columns in (
         (sales_table.sheet, sales_rows, ("Quarter", "Region", "Segment", "Units", "List_Price", "Discount_pct", "Variable_Cost_per_Unit", "Revenue", "Gross_Profit")),
         (fixed_table.sheet, fixed_rows, ("Segment", "Annual_Fixed_Cost_EUR")),

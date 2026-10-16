@@ -27,6 +27,9 @@ class ToolbeltError(ValueError):
     pass
 
 
+_MISSING = object()
+
+
 @dataclass(frozen=True)
 class SourceSnapshot:
     source: str
@@ -124,6 +127,34 @@ class WorkbookReadCache:
         self._entries: dict[tuple[Any, ...], tuple[WorkbookReadResult, int]] = {}
         self._analysis_entries: dict[tuple[Any, ...], tuple[AnalysisResult, int]] = {}
         self._bytes = 0
+        self._transaction: dict[str, Any] | None = None
+
+    def begin_transaction(self) -> dict[str, Any]:
+        if self._transaction is not None:
+            raise RuntimeError("workbook cache transaction already active")
+        self._transaction = {"entries": {}, "analysis_entries": {}, "bytes": self._bytes}
+        return self._transaction
+
+    def commit_transaction(self, transaction: dict[str, Any]) -> None:
+        if self._transaction is not transaction:
+            raise RuntimeError("workbook cache transaction is not active")
+        self._transaction = None
+
+    def rollback_transaction(self, transaction: dict[str, Any]) -> None:
+        if self._transaction is not transaction:
+            raise RuntimeError("workbook cache transaction is not active")
+        for name, entries in (("entries", self._entries), ("analysis_entries", self._analysis_entries)):
+            for key, previous in transaction[name].items():
+                if previous is _MISSING:
+                    entries.pop(key, None)
+                else:
+                    entries[key] = previous
+        self._bytes = transaction["bytes"]
+        self._transaction = None
+
+    def _record_transaction(self, name: str, entries: dict[tuple[Any, ...], tuple[Any, int]], key: tuple[Any, ...]) -> None:
+        if self._transaction is not None and key not in self._transaction[name]:
+            self._transaction[name][key] = entries.get(key, _MISSING)
 
     def source_hash(self, source: Path) -> str:
         return _sha256_file(source)
@@ -164,12 +195,17 @@ class WorkbookReadCache:
         estimated = max(1, len(repr(result)))
         if estimated > self.max_bytes:
             return
+        name = "entries" if entries is self._entries else "analysis_entries"
+        self._record_transaction(name, entries, key)
         previous = entries.pop(key, None)
         if previous is not None:
             self._bytes -= previous[1]
         while self._entry_count >= self.max_entries or self._bytes + estimated > self.max_bytes:
             oldest = self._entries if self._entries else self._analysis_entries
-            _, size = oldest.pop(next(iter(oldest)))
+            oldest_key = next(iter(oldest))
+            oldest_name = "entries" if oldest is self._entries else "analysis_entries"
+            self._record_transaction(oldest_name, oldest, oldest_key)
+            _, size = oldest.pop(oldest_key)
             self._bytes -= size
         entries[key] = (result, estimated)
         self._bytes += estimated
@@ -220,22 +256,67 @@ class AuthorityIndex:
         self.max_records = max(1, max_records)
         self.measurements: dict[tuple[str, str, str], TypedMeasurement] = {}
         self.calculations: dict[tuple[str, str], CalculationRecord] = {}
+        self._measurement_bytes: dict[tuple[str, str, str], int] = {}
+        self._calculation_bytes: dict[tuple[str, str], int] = {}
+        self._transaction: dict[str, Any] | None = None
+
+    def begin_transaction(self) -> dict[str, Any]:
+        if self._transaction is not None:
+            raise RuntimeError("authority transaction already active")
+        self._transaction = {"measurements": {}, "calculations": {}}
+        return self._transaction
+
+    def commit_transaction(self, transaction: dict[str, Any]) -> None:
+        if self._transaction is not transaction:
+            raise RuntimeError("authority transaction is not active")
+        self._transaction = None
+
+    def rollback_transaction(self, transaction: dict[str, Any]) -> None:
+        if self._transaction is not transaction:
+            raise RuntimeError("authority transaction is not active")
+        for name, entries in (("measurements", self.measurements), ("calculations", self.calculations)):
+            sizes = self._measurement_bytes if name == "measurements" else self._calculation_bytes
+            for key, previous in transaction[name].items():
+                if previous is _MISSING:
+                    entries.pop(key, None)
+                    sizes.pop(key, None)
+                else:
+                    entries[key] = previous[0]
+                    sizes[key] = previous[1]
+        self._transaction = None
+
+    def _record_transaction(self, name: str, key: tuple[Any, ...], value: Any, size: int) -> None:
+        if self._transaction is not None and key not in self._transaction[name]:
+            self._transaction[name][key] = _MISSING if value is None else (value, size)
 
     def remember_measurements(self, measurements: Iterable[TypedMeasurement]) -> None:
         for measurement in measurements:
             key = (measurement.provenance.workbook_sha256, measurement.id, measurement.provenance.range)
+            self._record_transaction("measurements", key, self.measurements.get(key), self._measurement_bytes.get(key, 0))
             self.measurements[key] = measurement
+            self._measurement_bytes[key] = max(1, len(repr(measurement)))
         while len(self.measurements) > self.max_records:
-            self.measurements.pop(next(iter(self.measurements)))
+            key = next(iter(self.measurements))
+            self._record_transaction("measurements", key, self.measurements.get(key), self._measurement_bytes.get(key, 0))
+            self.measurements.pop(key)
+            self._measurement_bytes.pop(key, None)
 
     def remember_calculation(self, record: CalculationRecord, workbook_hash: str) -> None:
-        self.calculations[(workbook_hash, record.id)] = record
+        key = (workbook_hash, record.id)
+        self._record_transaction("calculations", key, self.calculations.get(key), self._calculation_bytes.get(key, 0))
+        self.calculations[key] = record
+        self._calculation_bytes[key] = max(1, len(repr(record)))
         while len(self.calculations) > self.max_records:
-            self.calculations.pop(next(iter(self.calculations)))
+            key = next(iter(self.calculations))
+            self._record_transaction("calculations", key, self.calculations.get(key), self._calculation_bytes.get(key, 0))
+            self.calculations.pop(key)
+            self._calculation_bytes.pop(key, None)
 
     def clear(self) -> None:
         self.measurements.clear()
         self.calculations.clear()
+        self._measurement_bytes.clear()
+        self._calculation_bytes.clear()
 
     @property
     def size(self) -> int:
@@ -243,7 +324,7 @@ class AuthorityIndex:
 
     @property
     def estimated_bytes(self) -> int:
-        return sum(len(repr(item)) for item in self.measurements.values()) + sum(len(repr(item)) for item in self.calculations.values())
+        return sum(self._measurement_bytes.values()) + sum(self._calculation_bytes.values())
 
 
 def _sha256_file(
@@ -396,6 +477,9 @@ def _stable_material_value(value: Any) -> Any:
     return repr(value)
 
 
+TYPED_TABLE_IDENTITY_VERSION = "typed-table-material-v2"
+
+
 @dataclass(frozen=True)
 class TypedTable:
     id: str
@@ -408,12 +492,11 @@ class TypedTable:
     source_range: str = ""
     related_provenance: tuple[CellProvenance, ...] = ()
     row_measurements: tuple[tuple[TypedMeasurement, ...], ...] = ()
-    material_fingerprint: str = ""
+    material_fingerprint: str = field(default="", init=False)
 
     def __post_init__(self) -> None:
-        if self.material_fingerprint:
-            return
         payload = {
+            "identity_version": TYPED_TABLE_IDENTITY_VERSION,
             "name": self.name,
             "sheet": self.sheet,
             "headers": self.headers,
@@ -613,16 +696,20 @@ class WorkbookContext:
         cancel_check: Callable[[], bool] | None = None,
     ) -> WorkbookReadResult:
         self.ensure_open()
-        checkpoint = (
-            dict(self.snapshots),
-            dict(self.cache._entries),
-            dict(self.cache._analysis_entries),
-            self.cache._bytes,
-            dict(self.authority_index.measurements),
-            dict(self.authority_index.calculations),
-            dict(vars(self.stats)),
-        )
         read_limits = _coerce_toolbelt_limits(limits)
+        source_key = str(Path(source).resolve())
+        had_snapshot = source_key in self.snapshots
+        snapshot_bytes = self.stats.snapshot_bytes
+        retained_stats = {
+            name: getattr(self.stats, name)
+            for name in (
+                "retained_read_result_bytes",
+                "retained_analysis_result_bytes",
+                "retained_authority_record_bytes",
+            )
+        }
+        cache_transaction = self.cache.begin_transaction()
+        authority_transaction = self.authority_index.begin_transaction()
         try:
             snapshot = self.capture(source, cancel_check=cancel_check, max_bytes=read_limits.max_bytes)
             result = spreadsheet_read(
@@ -637,26 +724,17 @@ class WorkbookContext:
             )
             self._refresh_retained_stats()
             self._enforce_budget()
+            self.cache.commit_transaction(cache_transaction)
+            self.authority_index.commit_transaction(authority_transaction)
             return result
         except BaseException:
-            (
-                snapshots,
-                cache_entries,
-                analysis_entries,
-                cache_bytes,
-                measurements,
-                calculations,
-                stats,
-            ) = checkpoint
-            self.snapshots.clear()
-            self.snapshots.update(snapshots)
-            self.cache._entries = cache_entries
-            self.cache._analysis_entries = analysis_entries
-            self.cache._bytes = cache_bytes
-            self.authority_index.measurements = measurements
-            self.authority_index.calculations = calculations
-            vars(self.stats).clear()
-            vars(self.stats).update(stats)
+            self.cache.rollback_transaction(cache_transaction)
+            self.authority_index.rollback_transaction(authority_transaction)
+            if not had_snapshot:
+                self.snapshots.pop(source_key, None)
+                self.stats.snapshot_bytes = snapshot_bytes
+            for name, value in retained_stats.items():
+                setattr(self.stats, name, value)
             raise
 
     def _refresh_retained_stats(self) -> None:
@@ -1362,7 +1440,6 @@ def _coerce_typed_table(value: TypedTable | Mapping[str, Any]) -> TypedTable:
         source_range=str(value.get("source_range", "")),
         related_provenance=related_provenance,
         row_measurements=row_measurements,
-        material_fingerprint=str(value.get("material_fingerprint", "")),
     )
 
 

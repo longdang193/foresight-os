@@ -4,6 +4,7 @@ from foresight_os.controller.policy import select_recipe
 from foresight_os.controller.recipes import ExecutionPattern, RecipeStage, StageInput
 from foresight_os.controller.skills import ResolvedSkill, SkillManifest
 from foresight_os.domain.models import WorkBrief, WorkStage
+from foresight_os.domain.analysis_inputs import AnalysisInputContract
 from foresight_os.runtime.workflow import _stage_cache_key, _stage_fingerprints, run_recipe_async
 
 
@@ -28,6 +29,30 @@ def test_work_stage_specialist_ids_survive_recipe_compilation():
     assert recipe.stages[0].participants[0]["id"] == "market-analyst"
     assert recipe.stages[0].decision_question == "Should we proceed?"
     assert recipe.stages[0].horizon == "2030"
+
+
+def test_recipe_compiles_explicit_contract_domains_without_wire_field_drift():
+    brief = _brief([
+        WorkStage("portfolio", "assess portfolio", participants=["analyst"]),
+        WorkStage("supplier", "assess suppliers", participants=["analyst"]),
+    ])
+    brief = WorkBrief(
+        **{
+            **brief.__dict__,
+            "analysis_inputs": {
+                "portfolio_resilience": AnalysisInputContract(domain="portfolio_resilience", stage_id="portfolio").to_dict(),
+                "supplier_resilience": AnalysisInputContract(domain="supplier_resilience", stage_id="supplier").to_dict(),
+            },
+        }
+    )
+
+    recipe = select_recipe(brief)
+    restored = type(recipe).from_dict(recipe.to_dict())
+
+    assert recipe.stages[0].analysis_domains == ("portfolio_resilience",)
+    assert recipe.stages[1].analysis_domains == ("supplier_resilience",)
+    assert restored.stages[0].analysis_domains == ("portfolio_resilience",)
+    assert "analysis_domains" not in recipe.to_dict()["stages"][0]
 
 
 def test_stage_input_contains_only_declared_dependency_outputs(monkeypatch):
