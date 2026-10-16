@@ -1,0 +1,71 @@
+{
+  "boundary_probes": {
+    "budget": true,
+    "cancellation": true,
+    "timeout": true
+  },
+  "failures": [],
+  "leak_control_detected": true,
+  "memory_growth_bytes": 1244,
+  "memory_growth_exceeded": false,
+  "memory_max": 14713248,
+  "memory_min": 14712004,
+  "mode": "anomaly",
+  "monotonic_handle_accumulation": false,
+  "resource_leak_samples": [],
+  "runs": 3,
+  "samples": [
+    {
+      "after": {
+        "child_processes": 0,
+        "handles": 156,
+        "memory_bytes": 14712004,
+        "open_files": 1,
+        "unfinished_tasks": 1
+      },
+      "before": {
+        "child_processes": 0,
+        "handles": 156,
+        "memory_bytes": 14715179,
+        "open_files": 1,
+        "unfinished_tasks": 1
+      }
+    },
+    {
+      "after": {
+        "child_processes": 0,
+        "handles": 156,
+        "memory_bytes": 14712420,
+        "open_files": 1,
+        "unfinished_tasks": 1
+      },
+      "before": {
+        "child_processes": 0,
+        "handles": 156,
+        "memory_bytes": 14712416,
+        "open_files": 1,
+        "unfinished_tasks": 1
+      }
+    },
+    {
+      "after": {
+        "child_processes": 0,
+        "handles": 156,
+        "memory_bytes": 14713248,
+        "open_files": 1,
+        "unfinished_tasks": 1
+      },
+      "before": {
+        "child_processes": 0,
+        "handles": 156,
+        "memory_bytes": 14712800,
+        "open_files": 1,
+        "unfinished_tasks": 1
+      }
+    }
+  ],
+  "seed": "test-seed",
+  "state_hash_stable": true,
+  "status": "verified",
+  "warmup_runs": 10
+}

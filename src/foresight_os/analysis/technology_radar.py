@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import dataclass, replace
 from datetime import date
@@ -14,7 +13,7 @@ from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
 from foresight_os.persistence.analysis_store import AnalysisStore
-from foresight_os.runtime.local_toolbelt import SheetSelection, ToolbeltError, spreadsheet_read
+from foresight_os.runtime.local_toolbelt import SheetSelection, SourceSnapshot, ToolbeltError, spreadsheet_read
 
 
 @dataclass(frozen=True)
@@ -99,8 +98,9 @@ def _action(evidence_strength: float, deployment: int, relevance: float, impact:
 
 def analyze_technology_radar(source: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None) -> TechnologyAnalysis:
     source = Path(source)
-    digest = hashlib.sha256(source.read_bytes()).hexdigest()
-    workbook = spreadsheet_read(source, SheetSelection(sheet_names=("Brief", "Signals", "Company_Relevance", "Competitor_Actions", "Scenario_Signposts", "Priority_Scoring"), include_hidden=True, include_hidden_rows=True))
+    snapshot = SourceSnapshot.capture(source)
+    digest = snapshot.sha256
+    workbook = spreadsheet_read(source, SheetSelection(sheet_names=("Brief", "Signals", "Company_Relevance", "Competitor_Actions", "Scenario_Signposts", "Priority_Scoring"), include_hidden=True, include_hidden_rows=True), _snapshot=snapshot)
     brief, signal_table, relevance_table, competitor_table, signpost_table, priority_table = [_table(workbook, item) for item in ("Brief", "Signals", "Company_Relevance", "Competitor_Actions", "Scenario_Signposts", "Priority_Scoring")]
     contract = AnalysisInputContract.from_dict(input_contract) if input_contract is not None else AnalysisInputContract(
         domain="technology_radar",

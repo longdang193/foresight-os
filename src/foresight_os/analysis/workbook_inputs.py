@@ -38,7 +38,7 @@ def require_row_columns(rows: Iterable[dict[str, Any]], sheet: str, columns: Ite
     available = {str(column) for row in rows for column in row}
     missing = [str(column) for column in columns if str(column) not in available]
     if missing:
-        raise ToolbeltError(f"sheet {sheet} is missing required canonical column(s): {', '.join(missing)}")
+        raise ToolbeltError(f"MISSING_MAPPED_COLUMN: sheet {sheet} is missing required canonical column(s): {', '.join(missing)}")
 
 
 def require_columns(table: Any, columns: Iterable[str]) -> None:

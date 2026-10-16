@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any, Mapping
 
 
@@ -75,6 +77,11 @@ class AnalysisInputContract:
     assumptions: tuple[str, ...] = ()
     compatibility_assumption: str | None = None
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "column_mappings", MappingProxyType({str(key): str(value) for key, value in self.column_mappings.items()}))
+        object.__setattr__(self, "conversion_rates", MappingProxyType({str(key): float(value) for key, value in self.conversion_rates.items()}))
+        self.validate()
+
     @classmethod
     def from_dict(cls, value: Mapping[str, Any] | AnalysisInputContract) -> AnalysisInputContract:
         if isinstance(value, cls):
@@ -139,9 +146,26 @@ class AnalysisInputContract:
             raise ValueError(f"unsupported duplicate policy: {self.duplicate_policy}")
         if self.missing_value_policy not in {"preserve_as_issue", "exclude", "reject"}:
             raise ValueError(f"unsupported missing-value policy: {self.missing_value_policy}")
+        for period in (*self.periods, self.baseline_period, self.comparison_period):
+            if period is None:
+                continue
+            match = re.fullmatch(r"(\d{4})(?:-(\d{2}))?(?::(\d{4})(?:-(\d{2}))?)?", period)
+            if match is None:
+                raise ValueError(f"invalid period syntax: {period}")
+            for month in (match.group(2), match.group(4)):
+                if month is not None and not 1 <= int(month) <= 12:
+                    raise ValueError(f"invalid period month: {period}")
+        for field_name, value in (("units", self.units), ("reporting_currency", self.reporting_currency)):
+            if value and not value.strip():
+                raise ValueError(f"{field_name} must not be blank")
+        if self.reporting_currency and not re.fullmatch(r"[A-Za-z]{3}", self.reporting_currency):
+            raise ValueError("reporting currency must be a three-letter code")
         for currency, rate in self.conversion_rates.items():
             if not currency.strip() or not math.isfinite(rate) or rate <= 0:
                 raise ValueError(f"conversion rate for {currency!r} must be finite and positive")
+        for field_name, values in (("required_calculations", self.required_calculations), ("required_validation_checks", self.required_validation_checks)):
+            if any(not value.strip() for value in values):
+                raise ValueError(f"{field_name} must not contain blank values")
 
 
 @dataclass(frozen=True)

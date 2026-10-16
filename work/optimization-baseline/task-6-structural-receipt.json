@@ -1,0 +1,159 @@
+{
+  "analyst_to_validator": {
+    "after": {
+      "analysis_cache_hits": 0,
+      "cache_hits": 2,
+      "capture_count": 1,
+      "capture_hash_count": 1,
+      "currentness_hash_count": 0,
+      "openpyxl_load_count": 2,
+      "retained_analysis_result_bytes": 0,
+      "retained_authority_record_bytes": 1508,
+      "retained_read_result_bytes": 3185,
+      "snapshot_bytes": 4861,
+      "xlsx_parse_count": 1
+    },
+    "before": {
+      "analysis_cache_hits": 0,
+      "cache_hits": 1,
+      "capture_count": 1,
+      "capture_hash_count": 1,
+      "currentness_hash_count": 0,
+      "openpyxl_load_count": 2,
+      "retained_analysis_result_bytes": 0,
+      "retained_authority_record_bytes": 1508,
+      "retained_read_result_bytes": 3185,
+      "snapshot_bytes": 4861,
+      "xlsx_parse_count": 1
+    },
+    "delta": {
+      "analysis_cache_hits": 0,
+      "cache_hits": 1,
+      "capture_count": 0,
+      "capture_hash_count": 0,
+      "currentness_hash_count": 0,
+      "openpyxl_load_count": 0,
+      "retained_analysis_result_bytes": 0,
+      "retained_authority_record_bytes": 0,
+      "retained_read_result_bytes": 0,
+      "snapshot_bytes": 0,
+      "xlsx_parse_count": 0
+    },
+    "report_accepted": true
+  },
+  "currentness": {
+    "after": {
+      "analysis_cache_hits": 0,
+      "cache_hits": 2,
+      "capture_count": 1,
+      "capture_hash_count": 1,
+      "currentness_hash_count": 1,
+      "openpyxl_load_count": 4,
+      "retained_analysis_result_bytes": 0,
+      "retained_authority_record_bytes": 1508,
+      "retained_read_result_bytes": 6370,
+      "snapshot_bytes": 4861,
+      "xlsx_parse_count": 2
+    },
+    "delta": {
+      "analysis_cache_hits": 0,
+      "cache_hits": 0,
+      "capture_count": 0,
+      "capture_hash_count": 0,
+      "currentness_hash_count": 1,
+      "openpyxl_load_count": 0,
+      "retained_analysis_result_bytes": 0,
+      "retained_authority_record_bytes": 0,
+      "retained_read_result_bytes": 0,
+      "snapshot_bytes": 0,
+      "xlsx_parse_count": 0
+    },
+    "is_current": true
+  },
+  "different_level_1_view": {
+    "after": {
+      "analysis_cache_hits": 0,
+      "cache_hits": 2,
+      "capture_count": 1,
+      "capture_hash_count": 1,
+      "currentness_hash_count": 0,
+      "openpyxl_load_count": 4,
+      "retained_analysis_result_bytes": 0,
+      "retained_authority_record_bytes": 1508,
+      "retained_read_result_bytes": 6370,
+      "snapshot_bytes": 4861,
+      "xlsx_parse_count": 2
+    },
+    "delta": {
+      "analysis_cache_hits": 0,
+      "cache_hits": 0,
+      "capture_count": 0,
+      "capture_hash_count": 0,
+      "currentness_hash_count": 0,
+      "openpyxl_load_count": 2,
+      "retained_analysis_result_bytes": 0,
+      "retained_authority_record_bytes": 0,
+      "retained_read_result_bytes": 3185,
+      "snapshot_bytes": 0,
+      "xlsx_parse_count": 1
+    }
+  },
+  "latency": "not_measured",
+  "resource_soak": "not_measured",
+  "same_view": {
+    "delta": {
+      "analysis_cache_hits": 0,
+      "cache_hits": 1,
+      "capture_count": 0,
+      "capture_hash_count": 0,
+      "currentness_hash_count": 0,
+      "openpyxl_load_count": 0,
+      "retained_analysis_result_bytes": 0,
+      "retained_authority_record_bytes": 0,
+      "retained_read_result_bytes": 0,
+      "snapshot_bytes": 0,
+      "xlsx_parse_count": 0
+    },
+    "first": {
+      "analysis_cache_hits": 0,
+      "cache_hits": 0,
+      "capture_count": 1,
+      "capture_hash_count": 1,
+      "currentness_hash_count": 0,
+      "openpyxl_load_count": 2,
+      "retained_analysis_result_bytes": 0,
+      "retained_authority_record_bytes": 1508,
+      "retained_read_result_bytes": 3185,
+      "snapshot_bytes": 4861,
+      "xlsx_parse_count": 1
+    },
+    "second": {
+      "analysis_cache_hits": 0,
+      "cache_hits": 1,
+      "capture_count": 1,
+      "capture_hash_count": 1,
+      "currentness_hash_count": 0,
+      "openpyxl_load_count": 2,
+      "retained_analysis_result_bytes": 0,
+      "retained_authority_record_bytes": 1508,
+      "retained_read_result_bytes": 3185,
+      "snapshot_bytes": 4861,
+      "xlsx_parse_count": 1
+    }
+  },
+  "schema": "workbook-reuse-structural/v1",
+  "source_sha256": "fe2ed473b28b1cb4cdb9fbd15d4244b2a53445e42bbed34b69b720c3a7f780f3",
+  "structural_gates": {
+    "analyst_validator_cache_hit": true,
+    "analyst_validator_zero_new_capture_hashes": true,
+    "analyst_validator_zero_new_captures": true,
+    "analyst_validator_zero_new_xlsx_parses": true,
+    "currentness_one_intentional_hash": true,
+    "different_view_no_new_source_capture": true,
+    "different_view_reparsed_level_1": true,
+    "same_view_cache_hit": true,
+    "same_view_zero_new_capture_hashes": true,
+    "same_view_zero_new_captures": true,
+    "same_view_zero_new_xlsx_parses": true
+  }
+}
