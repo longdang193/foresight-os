@@ -82,7 +82,6 @@ class CapabilityScope:
     semaphores: dict[str, asyncio.Semaphore] = field(default_factory=dict)
     executor: ThreadPoolExecutor | None = None
     workbook_context: Any = None
-    workbook_cache: Any = None
     _closed: bool = field(default=False, init=False, repr=False)
 
     def ensure_open(self) -> None:
@@ -110,7 +109,7 @@ class CapabilityScope:
                 await asyncio.to_thread(executor.shutdown, wait=True, cancel_futures=False)
             except BaseException as error:
                 errors.append(error)
-        workbook_owner = self.workbook_context or self.workbook_cache
+        workbook_owner = self.workbook_context
         if workbook_owner is not None:
             clear = getattr(workbook_owner, "clear", None)
             if clear is not None:
@@ -119,7 +118,6 @@ class CapabilityScope:
                 except BaseException as error:
                     errors.append(error)
             self.workbook_context = None
-            self.workbook_cache = None
         for resource in reversed(self.resources):
             close = getattr(resource, "close", None)
             if close is None:
@@ -144,6 +142,51 @@ class CapabilityResolver:
         context = dict(run_context or {})
         scope = context.get("scope") or CapabilityScope()
         return {capability_id: self._resolve_one(capability_id, context, scope) for capability_id in required_capabilities}
+
+    def admit(
+        self,
+        required_capabilities: tuple[str, ...] | list[str],
+        run_context: Mapping[str, Any] | None = None,
+    ) -> dict[str, CapabilityResolution]:
+        """Validate capability definitions and bindings without activating resources."""
+        context = dict(run_context or {})
+        scope = context.get("scope") or CapabilityScope()
+        scope.ensure_open()
+        resolutions: dict[str, CapabilityResolution] = {}
+        for capability_id in required_capabilities:
+            definition = self.definitions.get(capability_id)
+            if definition is None:
+                resolutions[capability_id] = CapabilityResolution(
+                    CapabilityDefinition(capability_id, "unknown"),
+                    CapabilityDecision.UNSUPPORTED,
+                    False,
+                    "capability is not defined",
+                )
+                continue
+            candidate, decision, reason = self._candidate(capability_id, context)
+            if definition.capability_class == "unavailable" and candidate is None:
+                resolutions[capability_id] = CapabilityResolution(
+                    definition,
+                    CapabilityDecision.UNSUPPORTED,
+                    False,
+                    "capability is registered but its adapter is not activated",
+                )
+                continue
+            if definition.approval_policy == "HUMAN" and not context.get("human_approved", False):
+                resolutions[capability_id] = CapabilityResolution(definition, CapabilityDecision.UNSUPPORTED, False, "human approval required")
+                continue
+            denied = self._authorization_denial(definition, context)
+            if denied is not None:
+                resolutions[capability_id] = CapabilityResolution(definition, CapabilityDecision.UNSUPPORTED, False, denied)
+                continue
+            if candidate is None:
+                resolutions[capability_id] = CapabilityResolution(definition, decision, False, reason)
+                continue
+            binding = candidate if isinstance(candidate, CapabilityBinding) else CapabilityBinding(candidate, definition.binding_kind)
+            if binding.kind in (CapabilityBindingKind.FACTORY, CapabilityBindingKind.RESOURCE_FACTORY) and not callable(binding.value):
+                raise TypeError(f"{binding.kind.value} binding for {capability_id} must be callable")
+            resolutions[capability_id] = CapabilityResolution(definition, decision, True, "capability admitted; activation deferred")
+        return resolutions
 
     async def resolve_async(
         self,
@@ -344,6 +387,10 @@ def prepare_capability_context(
                 "web_crawl", bind_crawl4ai(context["crawl4ai"])
             )
 
+    admitted = context["capability_resolver"].admit(required, context)
+    unavailable = [f"{key}: {item.reason}" for key, item in admitted.items() if not item.available]
+    if unavailable:
+        raise CapabilityUnavailableError(f"capabilities unavailable: {'; '.join(unavailable)}")
     resolved = context["capability_resolver"].resolve(required, context)
     context["capability_resolutions"] = resolved
     unavailable = [f"{key}: {item.reason}" for key, item in resolved.items() if not item.available]
@@ -368,10 +415,9 @@ def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, cont
 
             if getattr(scope, "workbook_context", None) is None:
                 scope.workbook_context = WorkbookContext()
-                scope.workbook_cache = scope.workbook_context.cache
             workbook_context = scope.workbook_context
             if "_cache" in parameters:
-                effective_kwargs.setdefault("_cache", scope.workbook_cache)
+                effective_kwargs.setdefault("_cache", workbook_context.cache)
             if "_workbook_context" in parameters:
                 effective_kwargs.setdefault("_workbook_context", workbook_context)
             if "_authority_index" in parameters:
@@ -430,14 +476,13 @@ def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, cont
 
                         if getattr(scope, "workbook_context", None) is None:
                             scope.workbook_context = WorkbookContext()
-                            scope.workbook_cache = scope.workbook_context.cache
                         workbook_context = scope.workbook_context
                         try:
                             parameters = inspect.signature(dispatch).parameters
                         except (TypeError, ValueError):
                             parameters = {}
                         if "_cache" in parameters:
-                            effective_kwargs.setdefault("_cache", scope.workbook_cache)
+                            effective_kwargs.setdefault("_cache", workbook_context.cache)
                         if "_workbook_context" in parameters:
                             effective_kwargs.setdefault("_workbook_context", workbook_context)
                         if "_authority_index" in parameters:

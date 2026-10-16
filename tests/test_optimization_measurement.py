@@ -172,3 +172,25 @@ def test_repeat_comparator_requires_stable_group_chat_p95_and_metadata():
     )
     assert not same_commit_result["accepted"]
     assert "baseline/release revision is identical" in same_commit_result["stability"]["errors"]
+
+
+def test_comparator_reports_unavailable_dimensions_without_treating_them_as_passes():
+    baseline = _receipt()
+    release = deepcopy(baseline)
+    release["revision"]["commit"] = "release-commit"
+    release["evidence"] = {
+        "correctness": {"status": "VERIFIED", "limitation": None},
+        "latency": {"status": "NOT_MEASURED", "limitation": "timing was not run"},
+        "allocation": {"status": "DEFERRED", "limitation": "allocation remains deferred"},
+        "soak": {"status": "NOT_MEASURED", "limitation": "soak was not run"},
+    }
+    release["xlsx"]["p95_ms"] = None
+    release["xlsx"]["peak_allocation_bytes"] = None
+    release["soak"] = {}
+
+    result = compare(baseline, release)
+
+    assert result["accepted"] is False
+    assert result["gate"] == "NOT_MEASURED"
+    assert result["evidence"]["unavailable_dimensions"] == ["latency", "allocation", "soak"]
+    assert "xlsx.p95_ms>0" not in result.get("missing_required_evidence", {}).get("release", [])

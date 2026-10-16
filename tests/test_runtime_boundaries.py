@@ -9,8 +9,8 @@ from agent_framework import Agent, BaseChatClient, ChatResponse, ChatResponseUpd
 from agent_framework._middleware import ChatMiddlewareLayer
 from agent_framework._tools import FunctionInvocationLayer
 from foresight_os.controller.recipes import ExecutionPattern, RecipeName, ExecutionRecipe, RecipeStage, make_recipe
-from foresight_os.runtime.metrics import BudgetExceededError, FailureClass, RunMetrics
-from foresight_os.runtime.capabilities import CapabilityDefinition, CapabilityUnavailableError, ExecutionMode, ForesightFunctionMiddleware, ScopeOwnership, CapabilityScope, instrument_tool
+from foresight_os.runtime.metrics import BudgetExceededError, FailureClass, RunCanceledError, RunMetrics
+from foresight_os.runtime.capabilities import CapabilityBinding, CapabilityBindingKind, CapabilityDefinition, CapabilityOwnership, CapabilityResolver, CapabilityUnavailableError, ExecutionMode, ForesightFunctionMiddleware, ScopeOwnership, CapabilityScope, instrument_tool
 from foresight_os.controller.budgets import BudgetState
 from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
 from foresight_os.runtime.executors import AnalystExecutor, ReviewerExecutor, _toolless_retry_agent, run_agent_with_tool_fallback
@@ -168,6 +168,101 @@ def test_budget_failure_is_rejected_before_dispatch_and_keeps_metrics():
     assert caught.value.metrics.settled
     assert caught.value.metrics.model_calls == 0
     assert caught.value.metrics.runtime_status == "FAILED"
+
+
+def test_capability_setup_failure_closes_resources_created_before_primary_error():
+    base = make_recipe(RecipeName.DIRECT)
+    participants = ({"purpose": "participant", "capability_ids": ("first", "second")},)
+    stage = RecipeStage("setup", ExecutionPattern.DIRECT, participants, "prompt", "typed-result", {})
+    recipe = ExecutionRecipe(
+        base.name,
+        base.pattern,
+        base.roles,
+        base.max_agent_steps,
+        base.max_correction_rounds,
+        base.max_total_agent_calls,
+        base.completion,
+        base.escalation,
+        base.partial_result,
+        stages=(stage,),
+    )
+
+    class Closeable:
+        def __init__(self):
+            self.close_calls = 0
+
+        async def close(self):
+            self.close_calls += 1
+
+    resource = Closeable()
+
+    def fail(_context):
+        raise RuntimeError("activation failed")
+
+    resolver = CapabilityResolver(
+        {
+            "first": CapabilityDefinition("first", "local_deterministic"),
+            "second": CapabilityDefinition("second", "local_deterministic"),
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="activation failed") as caught:
+        asyncio.run(
+            run_recipe_async(
+                recipe,
+                "analyse",
+                None,
+                "setup-failure",
+                {
+                    "capability_resolver": resolver,
+                    "local_capabilities": {
+                        "first": CapabilityBinding(
+                            lambda _context: resource,
+                            CapabilityBindingKind.RESOURCE_FACTORY,
+                            CapabilityOwnership.OWNED,
+                        ),
+                        "second": CapabilityBinding(
+                            fail,
+                            CapabilityBindingKind.RESOURCE_FACTORY,
+                            CapabilityOwnership.OWNED,
+                        ),
+                    },
+                },
+            )
+        )
+
+    assert resource.close_calls == 1
+    assert caught.value.metrics.settled
+    assert caught.value.metrics.runtime_status == "FAILED"
+    assert caught.value.metrics.cleanup_complete
+
+
+def test_cleanup_failure_remains_secondary_to_primary_run_failure():
+    class FailingResource:
+        async def close(self):
+            raise RuntimeError("cleanup failed")
+
+    class RunControl:
+        async def before_stage(self):
+            raise RunCanceledError("cancelled before stage")
+
+    scope = CapabilityScope(ownership=ScopeOwnership.RUN)
+    scope.register(FailingResource())
+
+    with pytest.raises(RunCanceledError, match="cancelled before stage") as caught:
+        asyncio.run(
+            run_recipe_async(
+                make_recipe(RecipeName.DIRECT),
+                "analyse",
+                None,
+                "cleanup-secondary",
+                {"scope": scope, "run_control": RunControl()},
+            )
+        )
+
+    assert caught.value.metrics.primary_failure_class == FailureClass.CANCELLATION.value
+    assert caught.value.metrics.cleanup_failures == 1
+    assert caught.value.metrics.cleanup_complete is False
 
 
 @pytest.mark.parametrize(("limit", "expected_outputs", "expected_rounds"), ((1, 1, 1), (2, 2, 2), (4, 2, 2)))
@@ -626,7 +721,7 @@ def test_instrumented_workbook_tools_share_one_scope_context():
 
         await scope.close()
         assert scope.workbook_context is None
-        assert scope.workbook_cache is None
+        assert not any(name == "workbook" + "_cache" for name in vars(scope))
 
     asyncio.run(scenario())
 

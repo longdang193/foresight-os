@@ -69,6 +69,58 @@ def test_analysis_input_contract_freezes_mappings_and_validates_periods():
         AnalysisInputContract(domain="supplier_resilience", periods=("2026-13",))
 
 
+@pytest.mark.parametrize("period", ("2026-09:2026-03", "2026-03:2025-09"))
+def test_analysis_input_contract_rejects_reversed_period_ranges(period):
+    with pytest.raises(ValueError, match="period range"):
+        AnalysisInputContract(domain="supplier_resilience", periods=(period,))
+
+
+def test_period_spec_preserves_cross_year_range_meaning():
+    contract = AnalysisInputContract(domain="supplier_resilience", periods=("2025-10:2026-03",))
+
+    spec = contract.period_specs[0]
+
+    assert (spec.start_year, spec.start_month) == (2025, 10)
+    assert (spec.end_year, spec.end_month) == (2026, 3)
+    assert spec.granularity == "range"
+    assert spec.is_cross_year
+
+
+def test_normalized_intent_freezes_nested_policy_and_stage_values():
+    normalized = normalize_work_brief({
+        "decision_question": "Question",
+        "horizon": "2030",
+        "resource_limits": {"max_total_agent_calls": 4},
+        "stages": [{"stage_id": "stage-1", "objective": "Assess", "limits": {"max_timeout_seconds": 30}}],
+    })
+
+    with pytest.raises(TypeError):
+        normalized.resource_limits["max_total_agent_calls"] = 8
+    with pytest.raises(TypeError):
+        normalized.stages[0]["objective"] = "Changed"
+
+    assert normalized.resource_limits["max_timeout_seconds"] == 30
+
+
+def test_unsupported_domain_period_fails_before_workbook_capture(monkeypatch):
+    import foresight_os.analysis.ev_capacity_investment as ev_module
+
+    monkeypatch.setattr(ev_module.SourceSnapshot, "capture", lambda *_args, **_kwargs: pytest.fail("workbook capture should not run"))
+
+    with pytest.raises(ValueError, match="unsupported period granularity"):
+        ev_module.analyze_ev_capacity_investment(
+            Path("tests/fixtures/exercise/03_EV_Capacity_Investment.xlsx"),
+            AnalysisInputContract(domain="ev_capacity_investment", periods=("2030-01:2030-03",)),
+        )
+
+
+def test_explicit_column_mapping_to_missing_source_fails_before_row_defaults():
+    from foresight_os.analysis.workbook_inputs import apply_column_mappings
+
+    with pytest.raises(ToolbeltError, match="MISSING_MAPPED_COLUMN.*Missing"):
+        apply_column_mappings([{"Actual": 1}], {"Canonical": "Missing"})
+
+
 def test_explicit_incomplete_supplier_conversion_does_not_use_legacy_fx():
     source = Path("tests/fixtures/exercise/02_Supplier_Resilience.xlsx")
     analysis = analyze_supplier_resilience(

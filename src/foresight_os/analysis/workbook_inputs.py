@@ -6,7 +6,21 @@ from datetime import date
 from typing import Any, Iterable, Mapping
 
 from foresight_os.domain.models import Evidence, SourceLocator
-from foresight_os.runtime.local_toolbelt import ToolbeltError
+from foresight_os.runtime.local_toolbelt import SourceSnapshot, ToolbeltError, spreadsheet_read
+
+
+def read_workbook(
+    source: Any,
+    selection: Mapping[str, Any] | None = None,
+    limits: Mapping[str, Any] | None = None,
+    *,
+    workbook_context: Any | None = None,
+    cancel_check: Any | None = None,
+) -> Any:
+    if workbook_context is not None:
+        return workbook_context.read(source, selection, limits, cancel_check=cancel_check)
+    snapshot = SourceSnapshot.capture(source, cancel_check=cancel_check)
+    return spreadsheet_read(source, selection, limits, cancel_check=cancel_check, _snapshot=snapshot)
 
 
 def require_table(workbook: Any, sheet: str) -> Any:
@@ -21,9 +35,33 @@ def table_rows(table: Any) -> list[dict[str, Any]]:
     return [dict(zip(columns, row, strict=False)) for row in getattr(table, "rows", ())]
 
 
-def apply_column_mappings(rows: Iterable[dict[str, Any]], mappings: Mapping[str, str] | None) -> list[dict[str, Any]]:
+def validate_mapping_targets(headers: Iterable[str], mappings: Mapping[str, str] | None) -> None:
     if not mappings:
-        return [dict(row) for row in rows]
+        return
+    available = {str(header) for header in headers}
+    missing = [
+        (str(canonical), str(source))
+        for canonical, source in mappings.items()
+        if str(source) not in available and str(canonical) not in available
+    ]
+    if missing:
+        details = ", ".join(f"{source} for canonical column {canonical}" for canonical, source in missing)
+        raise ToolbeltError(f"MISSING_MAPPED_COLUMN: source column(s) {details} are absent")
+
+
+def apply_column_mappings(
+    rows: Iterable[dict[str, Any]],
+    mappings: Mapping[str, str] | None,
+    *,
+    available_headers: Iterable[str] | None = None,
+) -> list[dict[str, Any]]:
+    rows = [dict(row) for row in rows]
+    if not mappings:
+        return rows
+    validate_mapping_targets(
+        available_headers if available_headers is not None else (column for row in rows for column in row),
+        mappings,
+    )
     normalized: list[dict[str, Any]] = []
     for row in rows:
         item = dict(row)

@@ -12,7 +12,7 @@ from foresight_os.persistence.ids import canonical_json_hash
 from foresight_os.domain.validation import ValidationError
 from foresight_os.analysis.result_committer import ANALYSIS_STAGE_RESULT_CONTRACT, decode_stage_output
 from foresight_os.runtime.workflow import CanonicalStageResult, _canonical_result_hash, _close_agents, _dependency_stage_ids, _expand_dependency_records, _run_native_stage, _synthesize_stage_outputs, _workflow_output_value, run_recipe_async
-from foresight_os.runtime.metrics import BudgetExceededError, RunMetrics
+from foresight_os.runtime.metrics import BudgetExceededError, RunCanceledError, RunMetrics
 import foresight_os.runtime.workflow as workflow_module
 
 
@@ -197,6 +197,77 @@ def test_typed_participant_stage_contract_is_validated_before_merge():
 
     with pytest.raises(ValidationError, match="stage_id must be stage-1"):
         _synthesize_stage_outputs(stage, [_typed_stage_result("stage-1", "one", "ok"), _typed_stage_result("other-stage", "two", "bad")])
+
+
+def test_typed_synthesis_uses_one_bounded_normalization_pass(monkeypatch):
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "one"}, {"id": "two"}, {"id": "three"}),
+        "typed-result",
+        "typed-result",
+        {},
+        synthesis_policy="aggregate-typed-results",
+    )
+    calls = 0
+    original = workflow_module.normalize_stage_result
+
+    def counting_normalize(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(workflow_module, "normalize_stage_result", counting_normalize)
+
+    outputs = [_typed_stage_result("stage-1", f"provider-{index}", f"observation-{index}") for index in range(3)]
+    _synthesize_stage_outputs(stage, outputs)
+
+    assert calls <= len(outputs) + 1
+
+
+def test_typed_synthesis_preflights_payload_bytes_before_normalization():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "one"}, {"id": "two"}),
+        "typed-result",
+        "typed-result",
+        {"max_synthesis_payload_bytes": 32},
+        synthesis_policy="aggregate-typed-results",
+    )
+
+    with pytest.raises(ValidationError) as caught:
+        _synthesize_stage_outputs(
+            stage,
+            [
+                _typed_stage_result("stage-1", "provider-one", "large observation"),
+                _typed_stage_result("stage-1", "provider-two", "large observation"),
+            ],
+        )
+
+    assert caught.value.code == "BUDGET_EXHAUSTED"
+
+
+def test_typed_synthesis_honors_cancellation_checkpoint():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "one"}, {"id": "two"}),
+        "typed-result",
+        "typed-result",
+        {},
+        synthesis_policy="aggregate-typed-results",
+    )
+
+    with pytest.raises(RunCanceledError):
+        _synthesize_stage_outputs(
+            stage,
+            [
+                _typed_stage_result("stage-1", "provider-one", "observation"),
+                _typed_stage_result("stage-1", "provider-two", "observation"),
+            ],
+            cancel_check=lambda: True,
+        )
 
 
 def test_native_sequential_reviewer_retains_original_stage_context(monkeypatch):

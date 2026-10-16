@@ -9,12 +9,12 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
-from foresight_os.analysis.workbook_inputs import apply_column_mappings, require_row_columns, require_table, row_evidence, table_rows
+from foresight_os.analysis.workbook_inputs import apply_column_mappings, read_workbook, require_row_columns, require_table, row_evidence, table_rows, validate_mapping_targets
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
 from foresight_os.persistence.analysis_store import AnalysisStore
-from foresight_os.runtime.local_toolbelt import SheetSelection, SourceSnapshot, ToolbeltError, spreadsheet_read
+from foresight_os.runtime.local_toolbelt import SheetSelection, SourceSnapshot, ToolbeltError
 
 
 @dataclass(frozen=True)
@@ -97,13 +97,9 @@ def _record(record_id: str, statement: str, evidence_ids: list[str], assumptions
 def _capacity_dependency_ids(capacity_rows: list[tuple[int, dict[str, Any]]], by_row: dict[tuple[str, int], Evidence], year: int) -> tuple[str, ...]:
     return tuple(by_row[("Capacity", index)].id for index, row in capacity_rows if int(row.get("Year")) == year)
 
-def analyze_ev_capacity_investment(source: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None) -> EVAnalysis:
+def analyze_ev_capacity_investment(source: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None, *, workbook_context: Any | None = None) -> EVAnalysis:
     source = Path(source)
-    snapshot = SourceSnapshot.capture(source)
-    digest = snapshot.sha256
     sheets = ("Brief", "Demand_History", "Demand_Scenarios", "Capacity", "Infrastructure", "Policy_Signals", "Strategic_Options", "Reported_KPIs")
-    workbook = spreadsheet_read(source, SheetSelection(sheet_names=sheets, include_hidden=True, include_hidden_rows=True), _snapshot=snapshot)
-    tables = {name: _table(workbook, name) for name in sheets}
     contract = AnalysisInputContract.from_dict(input_contract) if input_contract is not None else AnalysisInputContract(
         domain="ev_capacity_investment",
         required_tables=sheets,
@@ -113,9 +109,20 @@ def analyze_ev_capacity_investment(source: Path, input_contract: AnalysisInputCo
         compatibility_assumption="legacy workbook scenario defaults",
     )
     contract.validate()
-    selected_year = int(contract.periods[-1] if contract.periods else "2030")
+    selected_period = contract.period_specs[-1] if contract.period_specs else None
+    if selected_period is None:
+        selected_year = 2030
+    else:
+        if selected_period.granularity != "year" or selected_period.is_cross_year:
+            raise ValueError("unsupported period granularity for ev_capacity_investment: year required")
+        selected_year = selected_period.start_year
+    workbook = read_workbook(source, SheetSelection(sheet_names=sheets, include_hidden=True, include_hidden_rows=True), workbook_context=workbook_context)
+    digest = workbook.workbook_sha256
+    tables = {name: _table(workbook, name) for name in sheets}
     selected_regions = set(contract.entity_scope)
-    rows = {name: apply_column_mappings(_rows(table), contract.column_mappings) for name, table in tables.items() if name != "Brief"}
+    mapping_headers = {column for table in tables.values() if table.sheet != "Brief" for column in getattr(table, "columns", ())}
+    validate_mapping_targets(mapping_headers, contract.column_mappings)
+    rows = {name: apply_column_mappings(_rows(table), contract.column_mappings, available_headers=mapping_headers) for name, table in tables.items() if name != "Brief"}
     for sheet, columns in {
         "Demand_History": ("Year", "Region", "Service_Demand_Units", "Basis"),
         "Demand_Scenarios": ("Scenario", "Year", "Region", "Demand_Units", "Annual_Growth", "Basis"),

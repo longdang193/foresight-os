@@ -105,6 +105,11 @@ immutable source snapshots, selection-aware derived results, authority records,
 and reuse statistics, then clears them with the scope. This keeps external
 clients and workbook state from leaking across investigations.
 
+Low-level `spreadsheet_read` and `calculation` calls that omit a
+`WorkbookContext` retain a bounded process-local compatibility authority for
+legacy callers. Orchestrated capability execution does not use that fallback:
+the middleware always supplies the run-owned context and authority index.
+
 ### 4. Execution admission, execution, and receipts
 
 User-facing execution paths reload the brief, exact recipe, and approval under

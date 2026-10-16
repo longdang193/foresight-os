@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 import json
 from typing import Any
@@ -122,6 +122,7 @@ class RecipeStage:
     adaptation_policy: tuple[str, ...] = ()
     result_contract: str = "analysis-stage-result/v1"
     synthesis_policy: str = "aggregate-typed-results"
+    analysis_domains: tuple[str, ...] = ()
 
     @property
     def typed_review_checks(self) -> tuple[str, ...]:
@@ -193,6 +194,7 @@ class RecipeStage:
             adaptation_policy=tuple(value.get("adaptation_policy", ())),
             result_contract=str(value.get("result_contract", "analysis-stage-result/v1")),
             synthesis_policy=str(value.get("synthesis_policy", "aggregate-typed-results")),
+            analysis_domains=tuple(str(item) for item in value.get("analysis_domains", ())),
         )
 
 
@@ -268,6 +270,16 @@ class ExecutionRecipe:
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "ExecutionRecipe":
+        metadata = dict(value.get("metadata", {}))
+        try:
+            analysis_domains = json.loads(metadata.get("analysis_contract_domains", "{}"))
+        except (TypeError, ValueError):
+            analysis_domains = {}
+        stages = tuple(RecipeStage.from_dict(stage) for stage in value.get("stages", ()))
+        stages = tuple(
+            replace(stage, analysis_domains=tuple(str(item) for item in analysis_domains.get(stage.stage_id, ())))
+            for stage in stages
+        )
         return cls(
             name=RecipeName(value["name"]),
             pattern=str(value["pattern"]),
@@ -278,9 +290,9 @@ class ExecutionRecipe:
             completion=str(value.get("completion", "")),
             escalation=str(value.get("escalation", "")),
             partial_result=str(value.get("partial_result", "")),
-            metadata=dict(value.get("metadata", {})),
+            metadata=metadata,
             purpose=str(value.get("purpose", "execute")),
-            stages=tuple(RecipeStage.from_dict(stage) for stage in value.get("stages", ())),
+            stages=stages,
             rationale=str(value.get("rationale", "")),
             review_policy=str(value.get("review_policy", "")),
             reuse_policy=str(value.get("reuse_policy", "")),

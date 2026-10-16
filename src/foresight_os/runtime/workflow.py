@@ -48,8 +48,26 @@ CanonicalResultCommitter = Callable[
 ]
 
 _NON_RETRYABLE_VALIDATION_CODES = frozenset(
-    {"MATERIAL_CONFLICT", "SOURCE_STALE", "PROVIDER_INTERRUPTION", "BUDGET_EXHAUSTED"}
+    {"MATERIAL_CONFLICT", "SOURCE_STALE", "PROVIDER_INTERRUPTION", "BUDGET_EXHAUSTED", "UNSUPPORTED_RECOVERY"}
 )
+
+
+def _failure_class(error: BaseException) -> FailureClass:
+    if isinstance(error, BudgetExceededError):
+        return FailureClass.BUDGET
+    if isinstance(error, CleanupError):
+        return FailureClass.CLEANUP
+    if isinstance(error, asyncio.TimeoutError):
+        return FailureClass.TIMEOUT
+    if isinstance(error, asyncio.CancelledError):
+        return FailureClass.CANCELLATION
+    if isinstance(error, RunCanceledError):
+        return FailureClass.CANCELLATION
+    if isinstance(error, ValidationError):
+        return FailureClass.DOMAIN_VALIDATION
+    if "tool" in type(error).__name__.lower():
+        return FailureClass.TOOL
+    return FailureClass.PROVIDER
 
 
 def _synthesis_error(code: str, message: str) -> ValidationError:
@@ -369,7 +387,13 @@ def _synthesize_stage_outputs(
     existing_records: Mapping[str, object] | None = None,
     tolerate_invalid_relationships: bool = False,
     tolerate_conflicting_records: bool = False,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> object:
+    def checkpoint() -> None:
+        if cancel_check is not None and cancel_check():
+            raise RunCanceledError("run canceled during stage synthesis")
+
+    checkpoint()
     if len(outputs) == 1 and not failures:
         return outputs[0]
     if str(getattr(stage, "synthesis_policy", "")) != "aggregate-typed-results":
@@ -385,9 +409,31 @@ def _synthesize_stage_outputs(
     limits = dict(getattr(stage, "limits", {}) or {})
     max_records = _positive_limit(limits.get("max_synthesis_records"), default=10_000, label="max_synthesis_records")
     max_relationships = _positive_limit(limits.get("max_synthesis_relationships"), default=10_000, label="max_synthesis_relationships")
-    normalized_outputs: list[Mapping[str, Any]] = []
-    alias_records: dict[str, object] = {}
-    alias_kinds: dict[str, RecordKind] = {}
+    max_participants = _positive_limit(
+        limits.get("max_synthesis_participants"),
+        default=max(1, len(outputs)),
+        label="max_synthesis_participants",
+    )
+    max_payload_bytes = _positive_limit(
+        limits.get("max_synthesis_payload_bytes"),
+        default=10_000_000,
+        label="max_synthesis_payload_bytes",
+    )
+    max_aliases = _positive_limit(
+        limits.get("max_synthesis_aliases"),
+        default=50_000,
+        label="max_synthesis_aliases",
+    )
+    max_dependency_depth = _positive_limit(
+        limits.get("max_synthesis_dependency_depth"),
+        default=64,
+        label="max_synthesis_dependency_depth",
+    )
+    max_normalization_operations = _positive_limit(
+        limits.get("max_synthesis_normalization_operations"),
+        default=max(1, len(outputs) + 1),
+        label="max_synthesis_normalization_operations",
+    )
     collections = ("evidence", "calculations", "claims", "implications", "recommendations", "artifacts", "relationships")
     collection_kinds = {
         "evidence": RecordKind.EVIDENCE,
@@ -396,65 +442,136 @@ def _synthesize_stage_outputs(
         "recommendations": RecordKind.RECOMMENDATION,
         "artifacts": RecordKind.ARTIFACT,
     }
+    if len(outputs) > max_participants:
+        raise _synthesis_error("BUDGET_EXHAUSTED", f"typed stage synthesis exceeded {max_participants} participants")
+    try:
+        payload_bytes = len(json.dumps(outputs, default=str, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+    except (TypeError, ValueError) as error:
+        raise _synthesis_error("MALFORMED_OUTPUT", "typed stage synthesis payload is not serializable") from error
+    if payload_bytes > max_payload_bytes:
+        raise _synthesis_error("BUDGET_EXHAUSTED", f"typed stage synthesis exceeded {max_payload_bytes} payload bytes")
+
+    preflight_records = 0
+    preflight_calculations = 0
+    preflight_relationships = 0
+    preflight_aliases = 0
+    raw_record_ids: set[str] = set()
+    raw_dependencies: dict[str, set[str]] = {}
+    for output in outputs:
+        checkpoint()
+        for key in collections:
+            entries = output.get(key, [])
+            if entries is None:
+                continue
+            if not isinstance(entries, (list, tuple)):
+                raise _synthesis_error("MALFORMED_OUTPUT", f"typed stage synthesis requires a list for {key}")
+            if key == "relationships":
+                preflight_relationships += len(entries)
+            else:
+                preflight_records += len(entries)
+            if key == "calculations":
+                preflight_calculations += len(entries)
+            for entry in entries:
+                checkpoint()
+                if not isinstance(entry, Mapping):
+                    continue
+                record_id = entry.get("id")
+                if isinstance(record_id, str) and record_id:
+                    preflight_aliases += 1
+                    raw_record_ids.add(record_id)
+                    dependencies = raw_dependencies.setdefault(record_id, set())
+                    for field_name in ("evidence_ids", "relationship_ids", "input_ids", "from_id", "to_id"):
+                        value = entry.get(field_name)
+                        if isinstance(value, str):
+                            dependencies.add(value)
+                        elif isinstance(value, (list, tuple)):
+                            dependencies.update(item for item in value if isinstance(item, str))
+    if preflight_records > max_records * len(collections):
+        raise _synthesis_error("BUDGET_EXHAUSTED", "typed stage synthesis exceeded the record budget")
+    if preflight_relationships > max_relationships:
+        raise _synthesis_error("BUDGET_EXHAUSTED", f"typed stage synthesis exceeded {max_relationships} relationships")
+    if preflight_aliases > max_aliases:
+        raise _synthesis_error("BUDGET_EXHAUSTED", f"typed stage synthesis exceeded {max_aliases} aliases")
+    if preflight_calculations > max_records:
+        raise _synthesis_error("BUDGET_EXHAUSTED", f"typed stage synthesis exceeded {max_records} calculations")
+    if max_normalization_operations < len(outputs) + 1:
+        raise _synthesis_error("BUDGET_EXHAUSTED", "typed stage synthesis exceeded the normalization operation budget")
+    dependency_depth = 0
+    for root in raw_record_ids:
+        checkpoint()
+        frontier = [(root, 0)]
+        seen: set[str] = set()
+        while frontier:
+            record_id, depth = frontier.pop()
+            if record_id in seen:
+                continue
+            seen.add(record_id)
+            dependency_depth = max(dependency_depth, depth)
+            if dependency_depth > max_dependency_depth:
+                raise _synthesis_error("BUDGET_EXHAUSTED", f"typed stage synthesis exceeded {max_dependency_depth} dependency levels")
+            frontier.extend((dependency, depth + 1) for dependency in raw_dependencies.get(record_id, ()) if dependency in raw_record_ids)
+    normalized_outputs: list[Mapping[str, Any]] = []
+    alias_records: dict[str, object] = {}
+    alias_kinds: dict[str, RecordKind] = {}
+    hash_cache: dict[int, str] = {}
+
+    def record_hash(record: object) -> str:
+        key = id(record)
+        if key not in hash_cache:
+            hash_cache[key] = _canonical_result_hash(record)
+        return hash_cache[key]
 
     if typed_outputs:
         seed_outputs: list[Mapping[str, Any]] = list(outputs)
-        total_entries = sum(len(output.get(key, [])) for output in seed_outputs for key in collections)
-        for _ in range(max(3, total_entries + 2)):
-            peer_candidates: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
-            for output in seed_outputs:
+        peer_candidates: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
+        for output in seed_outputs:
+            checkpoint()
+            for key in collections:
+                for entry in output.get(key, []):
+                    checkpoint()
+                    if isinstance(entry, Mapping) and entry.get("id"):
+                        peer_candidates.setdefault((key, str(entry["id"])), []).append(entry)
+
+        peer_records: list[dict[str, object]] = []
+        peer_record_kinds: list[dict[str, RecordKind]] = []
+        for index, _output in enumerate(seed_outputs):
+            checkpoint()
+            records: dict[str, object] = {}
+            kinds: dict[str, RecordKind] = {}
+            for peer_index, peer_output in enumerate(seed_outputs):
+                if peer_index == index:
+                    continue
                 for key in collections:
-                    for entry in output.get(key, []):
-                        if isinstance(entry, Mapping) and entry.get("id"):
-                            peer_candidates.setdefault((key, str(entry["id"])), []).append(entry)
-
-            def peer_records_for(index: int) -> dict[str, object]:
-                records: dict[str, object] = {}
-                for peer_index, output in enumerate(seed_outputs):
-                    if peer_index == index:
-                        continue
-                    for key in collections:
-                        for entry in output.get(key, []):
-                            if not isinstance(entry, Mapping) or not entry.get("id"):
-                                continue
-                            record_id = str(entry["id"])
-                            candidates = peer_candidates.get((key, record_id), [])
-                            if candidates and all(_canonical_result_hash(candidate) == _canonical_result_hash(candidates[0]) for candidate in candidates):
-                                records.setdefault(record_id, entry)
-                return records
-
-            def peer_record_kinds_for(index: int) -> dict[str, RecordKind]:
-                kinds: dict[str, RecordKind] = {}
-                for peer_index, output in enumerate(seed_outputs):
-                    if peer_index == index:
-                        continue
-                    for key, kind in collection_kinds.items():
-                        for entry in output.get(key, []):
-                            if not isinstance(entry, Mapping) or not entry.get("id"):
-                                continue
-                            record_id = str(entry["id"])
-                            candidates = peer_candidates.get((key, record_id), [])
-                            if not candidates or not all(_canonical_result_hash(candidate) == _canonical_result_hash(candidates[0]) for candidate in candidates):
-                                continue
+                    for entry in peer_output.get(key, []):
+                        checkpoint()
+                        if not isinstance(entry, Mapping) or not entry.get("id"):
+                            continue
+                        record_id = str(entry["id"])
+                        candidates = peer_candidates.get((key, record_id), [])
+                        if not candidates or not all(record_hash(candidate) == record_hash(candidates[0]) for candidate in candidates):
+                            continue
+                        records.setdefault(record_id, entry)
+                        kind = collection_kinds.get(key)
+                        if kind is not None:
                             previous = kinds.get(record_id)
                             if previous is None or previous == kind:
                                 kinds[record_id] = kind
                             else:
                                 kinds.pop(record_id, None)
-                return kinds
+            peer_records.append(records)
+            peer_record_kinds.append(kinds)
 
-            next_outputs: list[Mapping[str, Any]] = []
-            next_alias_targets: dict[str, set[str]] = {}
-            next_alias_records: dict[str, object] = {}
-            next_alias_kinds: dict[str, set[RecordKind]] = {}
-            for index, output in enumerate(seed_outputs):
-                dependency_records = dict(alias_records)
-                for record_id, record in (existing_records or {}).items():
-                    dependency_records.setdefault(record_id, record)
-                for record_id, record in peer_records_for(index).items():
-                    dependency_records.setdefault(record_id, record)
-                dependency_record_kinds = dict(alias_kinds)
-                dependency_record_kinds.update(peer_record_kinds_for(index))
+        next_outputs: list[Mapping[str, Any]] = []
+        next_alias_targets: dict[str, set[str]] = {}
+        next_alias_records: dict[str, object] = {}
+        next_alias_kinds: dict[str, set[RecordKind]] = {}
+        participant_alias_maps: list[dict[str, str]] = []
+        for index, output in enumerate(seed_outputs):
+            checkpoint()
+            dependency_records = dict(existing_records or {})
+            dependency_records.update(peer_records[index])
+            dependency_record_kinds = dict(peer_record_kinds[index])
+            try:
                 normalized, output_aliases, output_kinds = normalize_stage_result(
                     output,
                     expected_stage_id=str(getattr(stage, "stage_id", "stage")),
@@ -465,37 +582,79 @@ def _synthesize_stage_outputs(
                     trusted_existing_records=existing_records or {},
                     return_aliases=True,
                 )
-                next_outputs.append(normalized.to_contract_payload())
-                canonical_records = normalized.canonical_records()
-                for alias, canonical_id in output_aliases.items():
-                    record = canonical_records.get(canonical_id)
-                    if record is None:
+            except ValidationError as error:
+                if getattr(error, "participant_index", None) is not None:
+                    raise
+                raise ValidationError(str(error), code=getattr(error, "code", None) or "MALFORMED_OUTPUT", participant_index=index) from error
+            next_outputs.append(normalized.to_contract_payload())
+            participant_alias_maps.append(dict(output_aliases))
+            canonical_records = normalized.canonical_records()
+            for alias, canonical_id in output_aliases.items():
+                record = canonical_records.get(canonical_id)
+                if record is None:
+                    continue
+                next_alias_targets.setdefault(alias, set()).add(canonical_id)
+                next_alias_records.setdefault(alias, record)
+                kind = output_kinds.get(alias) or output_kinds.get(canonical_id)
+                if kind is not None:
+                    next_alias_kinds.setdefault(alias, set()).add(kind)
+                    next_alias_kinds.setdefault(canonical_id, set()).add(kind)
+
+        alias_records = {
+            alias: record
+            for alias, record in next_alias_records.items()
+            if len(next_alias_targets.get(alias, ())) == 1
+        }
+        alias_kinds = {
+            alias: next(iter(kinds))
+            for alias, kinds in next_alias_kinds.items()
+            if len(kinds) == 1
+        }
+        global_aliases = {
+            alias: next(iter(targets))
+            for alias, targets in next_alias_targets.items()
+            if len(targets) == 1
+        }
+
+        def rewrite_participant_aliases(payload: Mapping[str, Any], local_aliases: Mapping[str, str]) -> dict[str, Any]:
+            rewritten = dict(payload)
+            aliases = {**global_aliases, **dict(local_aliases)}
+            trusted_aliases = {
+                str(record_id): str(getattr(record, "id", record_id))
+                for record_id, record in dict(existing_records or {}).items()
+            }
+
+            def resolve_alias(value: object) -> object:
+                if not isinstance(value, str):
+                    return value
+                return trusted_aliases.get(value, aliases.get(value, value))
+            for key in collections:
+                entries = rewritten.get(key, [])
+                if not isinstance(entries, (list, tuple)):
+                    continue
+                rewritten_entries: list[object] = []
+                for entry in entries:
+                    checkpoint()
+                    if not isinstance(entry, Mapping):
+                        rewritten_entries.append(entry)
                         continue
-                    next_alias_targets.setdefault(alias, set()).add(canonical_id)
-                    next_alias_records.setdefault(alias, record)
-                    kind = output_kinds.get(alias) or output_kinds.get(canonical_id)
-                    if kind is not None:
-                        next_alias_kinds.setdefault(alias, set()).add(kind)
-                        next_alias_kinds.setdefault(canonical_id, set()).add(kind)
+                    item = dict(entry)
+                    for field_name in ("evidence_ids", "relationship_ids", "input_ids"):
+                        values = item.get(field_name)
+                        if isinstance(values, (list, tuple)):
+                            item[field_name] = [resolve_alias(value) for value in values]
+                    for field_name in ("from_id", "to_id"):
+                        value = item.get(field_name)
+                        if isinstance(value, str):
+                            item[field_name] = resolve_alias(value)
+                    rewritten_entries.append(item)
+                rewritten[key] = rewritten_entries
+            return rewritten
 
-            filtered_alias_records: dict[str, object] = {}
-            filtered_alias_kinds: dict[str, RecordKind] = {}
-            for alias, record in next_alias_records.items():
-                if len(next_alias_targets.get(alias, ())) == 1:
-                    filtered_alias_records[alias] = record
-                kinds = next_alias_kinds.get(alias, set())
-                if len(kinds) == 1:
-                    filtered_alias_kinds[alias] = next(iter(kinds))
-
-            if next_outputs == seed_outputs:
-                alias_records = filtered_alias_records
-                alias_kinds = filtered_alias_kinds
-                seed_outputs = next_outputs
-                break
-            seed_outputs = next_outputs
-            alias_records = filtered_alias_records
-            alias_kinds = filtered_alias_kinds
-        normalized_outputs = seed_outputs
+        normalized_outputs = [
+            rewrite_participant_aliases(output, local_aliases)
+            for output, local_aliases in zip(next_outputs, participant_alias_maps, strict=False)
+        ]
     else:
         normalized_outputs = list(outputs)
 
@@ -509,13 +668,15 @@ def _synthesize_stage_outputs(
     def merge_records(key: str) -> list[object]:
         merged: list[object] = []
         by_id: dict[str, object] = {}
-        for output in outputs:
+        for participant_index, output in enumerate(outputs):
+            checkpoint()
             entries = output.get(key, [])
             if entries is None:
                 continue
             if not isinstance(entries, (list, tuple)):
                 raise _synthesis_error("MALFORMED_OUTPUT", f"typed stage synthesis requires a list for {key}")
             for entry in entries:
+                checkpoint()
                 if len(merged) >= max_records:
                     raise _synthesis_error("BUDGET_EXHAUSTED", f"typed stage synthesis exceeded {max_records} records")
                 record_id = entry.get("id") if isinstance(entry, Mapping) else None
@@ -527,13 +688,18 @@ def _synthesize_stage_outputs(
                     by_id[str(record_id)] = entry
                     merged.append(entry)
                     continue
-                if _canonical_result_hash(existing) != _canonical_result_hash(entry):
+                if record_hash(existing) != record_hash(entry):
                     if tolerate_conflicting_records:
                         continue
-                    raise _synthesis_error("MATERIAL_CONFLICT", f"conflicting canonical record for {key}:{record_id}")
+                    raise ValidationError(
+                        f"conflicting canonical record for {key}:{record_id}",
+                        code="MATERIAL_CONFLICT",
+                        participant_index=participant_index,
+                    )
         return merged
 
     for key in collections:
+        checkpoint()
         first[key] = merge_records(key)
     if len(first["relationships"]) > max_relationships:
         raise _synthesis_error("BUDGET_EXHAUSTED", f"typed stage synthesis exceeded {max_relationships} relationships")
@@ -543,15 +709,21 @@ def _synthesize_stage_outputs(
     if failures:
         first["uncertainty"].extend(f"participant failure: {type(error).__name__}" for error in failures)
     if typed_outputs:
-        return normalize_stage_result(
-            first,
-            expected_stage_id=str(getattr(stage, "stage_id", "stage")),
-            existing_records=merge_alias_records,
-            existing_record_kinds=merge_alias_kinds,
-            tolerate_invalid_relationships=tolerate_invalid_relationships,
-            prefer_current_aliases=True,
-            trusted_existing_records=existing_records or {},
-        ).to_contract_payload()
+        checkpoint()
+        try:
+            return normalize_stage_result(
+                first,
+                expected_stage_id=str(getattr(stage, "stage_id", "stage")),
+                existing_records=merge_alias_records,
+                existing_record_kinds=merge_alias_kinds,
+                tolerate_invalid_relationships=tolerate_invalid_relationships,
+                prefer_current_aliases=True,
+                trusted_existing_records=existing_records or {},
+            ).to_contract_payload()
+        except ValidationError as error:
+            if getattr(error, "participant_index", None) is not None or len(outputs) != 1:
+                raise
+            raise ValidationError(str(error), code=getattr(error, "code", None) or "MALFORMED_OUTPUT", participant_index=0) from error
     return first
 
 
@@ -826,32 +998,35 @@ async def run_recipe_async(
         for participant in recipe.roles:
             required_capabilities.update(ParticipantConfig.from_mapping(participant).capability_ids)
     context["selected_skills_by_stage"] = selected_skills_by_stage
-    context = prepare_capability_context(tuple(sorted(required_capabilities)), context, scope=scope)
+    try:
+        context = prepare_capability_context(tuple(sorted(required_capabilities)), context, scope=scope)
+    except BaseException as error:
+        metrics.record_failure(_failure_class(error), error)
+        metrics.settled = True
+        metrics.runtime_status = "FAILED"
+        metrics.wall_time_ms = round((time.perf_counter() - started) * 1000)
+        _record_workbook_metrics(scope, metrics)
+        if owns_scope:
+            metrics.cleanup_complete = False
+            try:
+                await scope.close()
+            except BaseException as cleanup_error:
+                metrics.record_failure(FailureClass.CLEANUP, cleanup_error)
+            else:
+                metrics.cleanup_complete = True
+        try:
+            setattr(error, "run_metrics", metrics)
+            setattr(error, "metrics", metrics)
+        except BaseException:
+            pass
+        raise
     stages_by_id = {
         str(getattr(stage, "stage_id", "")): stage
         for stage in recipe.stages or ()
     }
 
-    def classify(error: BaseException) -> FailureClass:
-        if isinstance(error, BudgetExceededError):
-            return FailureClass.BUDGET
-        if isinstance(error, CleanupError):
-            return FailureClass.CLEANUP
-        if isinstance(error, asyncio.TimeoutError):
-            return FailureClass.TIMEOUT
-        if isinstance(error, asyncio.CancelledError):
-            return FailureClass.CANCELLATION
-        if isinstance(error, RunCanceledError):
-            return FailureClass.CANCELLATION
-        if isinstance(error, ValidationError):
-            return FailureClass.DOMAIN_VALIDATION
-        name = type(error).__name__.lower()
-        if "tool" in name:
-            return FailureClass.TOOL
-        return FailureClass.PROVIDER
-
     def settle_failure(error: BaseException) -> None:
-        metrics.record_failure(classify(error), error)
+        metrics.record_failure(_failure_class(error), error)
         metrics.settled = True
         metrics.runtime_status = "PARTIAL" if (context.get("canonical_records") or outputs) else "FAILED"
         _refresh_execution_status(context, metrics)
@@ -918,6 +1093,11 @@ async def run_recipe_async(
         )
         cache_key = semantic_fingerprint
         stage_context["stage_fingerprints"] = (semantic_fingerprint, execution_policy_fingerprint)
+        stage_context["stage_fingerprint_bundle"] = {
+            "semantic": semantic_fingerprint,
+            "execution_policy": execution_policy_fingerprint,
+            "analysis_contracts": tuple(stage_input.analysis_contract_fingerprints),
+        }
         stage_context["result_contract"] = str(getattr(stage, "result_contract", ANALYSIS_STAGE_RESULT_CONTRACT))
         stage_context["require_structured_output"] = bool(context.get("require_structured_output", False))
         stage_context["structured_output_schema"] = analysis_stage_result_schema()
@@ -999,6 +1179,8 @@ async def run_recipe_async(
                 raise BudgetExceededError("maximum concurrent branches exceeded before dispatch")
         async def invoke(stage_prompt: str | None = None) -> tuple[list[object], object]:
             prompt_value = stage_prompt or str(stage_input)
+            if stage_context.get("correction_participant_indices") and client is not None and pattern != ExecutionPattern.DIRECT:
+                raise _synthesis_error("UNSUPPORTED_RECOVERY", "native orchestration cannot expose participant-local correction state")
             if client is not None and pattern != ExecutionPattern.DIRECT:
                 native_outputs = await _run_native_stage(pattern, prompt_value, client, participants, metrics, stage_context)
                 if pattern == ExecutionPattern.CONCURRENT:
@@ -1015,15 +1197,36 @@ async def run_recipe_async(
             if pattern == ExecutionPattern.DIRECT:
                 stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(prompt_value)]
             elif pattern == ExecutionPattern.CONCURRENT:
-                branch_count = len(participants) or 2
+                participant_roles = tuple(participants or ({"purpose": "participant"},) * 2)
+                branch_count = len(participant_roles)
                 metrics.branches = branch_count
                 metrics.parallelism = branch_count
-                branch_results = await asyncio.gather(
-                    *[AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participant, f"participant-{index}"), stage_context).execute(prompt_value) for index, participant in enumerate(participants or ({"purpose": "participant"},) * branch_count, 1)],
+                correction_indices = tuple(int(index) for index in stage_context.pop("correction_participant_indices", ()))
+                if correction_indices and not stage_context.get("participant_outputs"):
+                    raise _synthesis_error("UNSUPPORTED_RECOVERY", "participant-local correction state is unavailable")
+                selected_indices = correction_indices or tuple(range(branch_count))
+                branch_results = list(stage_context.get("participant_outputs", [None] * branch_count))
+                if len(branch_results) != branch_count:
+                    raise _synthesis_error("UNSUPPORTED_RECOVERY", "participant-local correction state is incomplete")
+                selected_results = await asyncio.gather(
+                    *[
+                        AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participant_roles[index], f"participant-{index + 1}"), stage_context).execute(prompt_value)
+                        for index in selected_indices
+                    ],
                     return_exceptions=True,
                 )
+                failed_indices: list[int] = []
+                for index, item in zip(selected_indices, selected_results, strict=False):
+                    branch_results[index] = item
+                    if isinstance(item, BaseException):
+                        failed_indices.append(index)
+                stage_context["participant_outputs"] = list(branch_results)
+                if any(isinstance(item, (asyncio.CancelledError, RunCanceledError)) for item in branch_results):
+                    cancellation = next(item for item in branch_results if isinstance(item, (asyncio.CancelledError, RunCanceledError)))
+                    raise cancellation
                 results = tuple(item for item in branch_results if not isinstance(item, BaseException))
                 failures = tuple(item for item in branch_results if isinstance(item, BaseException))
+                stage_context["failed_participant_indices"] = tuple(failed_indices)
                 return list(results), _synthesize_stage_outputs(
                     stage,
                     list(results),
@@ -1067,6 +1270,20 @@ async def run_recipe_async(
                     stage_outputs, current = await asyncio.wait_for(invoke(correction_prompt), float(max_timeout))
                 else:
                     stage_outputs, current = await invoke(correction_prompt)
+                failed_participant_indices = tuple(stage_context.pop("failed_participant_indices", ()))
+                if failed_participant_indices and correction_prompt is None:
+                    if not budget.correct():
+                        raise _synthesis_error("BUDGET_EXHAUSTED", "participant correction budget exhausted")
+                    if pattern not in {ExecutionPattern.CONCURRENT, ExecutionPattern.DIRECT}:
+                        raise _synthesis_error("UNSUPPORTED_RECOVERY", "participant-local correction is unsupported for this execution pattern")
+                    metrics.correction_rounds += 1
+                    stage_context["correction_participant_indices"] = failed_participant_indices
+                    correction_prompt = (
+                        f"{json.dumps(_stage_input_payload(stage_input), default=str, ensure_ascii=False, sort_keys=True)}\n\n"
+                        "The previous participant result failed during execution. Correct only your participant result, "
+                        "return the complete structured result, and do not repeat successful participants or source reads."
+                    )
+                    continue
                 if committer is None:
                     break
                 canonical = committer(
@@ -1080,18 +1297,42 @@ async def run_recipe_async(
             except ValidationError as error:
                 recovery_code = getattr(error, "code", None)
                 stage_context["last_recovery_code"] = recovery_code
-                if recovery_code in _NON_RETRYABLE_VALIDATION_CODES or not budget.correct():
+                if recovery_code in _NON_RETRYABLE_VALIDATION_CODES:
                     raise
+                if recovery_code is None:
+                    if not budget.correct():
+                        raise
+                    metrics.correction_rounds += 1
+                    correction_prompt = (
+                        f"{json.dumps(_stage_input_payload(stage_input), default=str, ensure_ascii=False, sort_keys=True)}\n\n"
+                        "The previous structured result was rejected by canonical validation. "
+                        "Correct only the validation issue and return the complete result again. "
+                        "For relationships, remove any invalid relationship and its ID from every "
+                        "relationship_ids list rather than returning a guessed or dangling edge. "
+                        "For dependency outputs, reference an existing canonical dependency ID only "
+                        "after you validate its hash and invalidation state, dependency closure, and "
+                        "participant authorization. "
+                        f"Validation issue: {error}"
+                    )
+                    continue
+                if not budget.correct():
+                    raise
+                participant_index = getattr(error, "participant_index", None)
+                if participant_index is None and len(participants) > 1:
+                    raise _synthesis_error(
+                        "UNSUPPORTED_RECOVERY",
+                        "validation failure does not identify a safe participant-local correction target",
+                    ) from error
+                if pattern not in {ExecutionPattern.CONCURRENT, ExecutionPattern.DIRECT}:
+                    raise _synthesis_error(
+                        "UNSUPPORTED_RECOVERY",
+                        f"participant-local correction is unsupported for {pattern.value}",
+                    ) from error
                 metrics.correction_rounds += 1
-                if (
-                    "invalid endpoints for relationship" in str(error)
-                    or "relationship endpoints must have known record kinds" in str(error)
-                    or "unknown reference: relationships[" in str(error)
-                    or ("unknown reference:" in str(error) and ".relationship_ids" in str(error))
-                ):
+                if recovery_code == "INVALID_RELATIONSHIP":
                     stage_context["tolerate_invalid_relationships"] = True
-                if "conflicting canonical record" in str(error):
-                    stage_context["tolerate_conflicting_records"] = True
+                if participant_index is not None:
+                    stage_context["correction_participant_indices"] = (int(participant_index),)
                 correction_prompt = (
                     f"{json.dumps(_stage_input_payload(stage_input), default=str, ensure_ascii=False, sort_keys=True)}\n\n"
                     "The previous structured result was rejected by canonical validation. "
@@ -1105,11 +1346,10 @@ async def run_recipe_async(
                      "from_id, and to_id value against an ID declared in this payload; remove any "
                      "reference without a matching local record, and do not reuse IDs from another "
                      "stage or prior run. "
-                     "For unknown references to dependency outputs, copy the exact referenced "
-                     "evidence, calculation, claim, implication, recommendation, artifact, or "
-                     "relationship record into the matching current collection before using its "
-                     "ID; preserve the record ID and fields verbatim and never reference a record "
-                     "that exists only under dependency_outputs. "
+                     "For dependency outputs, reference an existing canonical dependency ID only "
+                     "after you validate its hash and invalidation state, dependency closure, and "
+                     "participant authorization; do not copy dependency records into this result "
+                     "unless the canonical contract explicitly requires materialization. "
                     "For same-ID/different-content conflicts, preserve the exact canonical record "
                     "content and do not rewrite an existing record under the same ID; when two "
                     "participants conflict, preserve the first participant's record verbatim. "
@@ -1206,6 +1446,16 @@ async def run_recipe_async(
             missing = tuple(dependency for dependency in dependencies if dependency not in outputs_by_stage)
             if missing:
                 raise ValidationError(f"stage {getattr(stage, 'stage_id', 'stage')} has unavailable dependency outputs: {', '.join(missing)}")
+            all_contract_fingerprints = {
+                str(domain): str(fingerprint)
+                for domain, fingerprint in dict(context.get("analysis_contract_fingerprints", {})).items()
+            }
+            declared_domains = tuple(str(item) for item in getattr(stage, "analysis_domains", ()))
+            relevant_contract_fingerprints = (
+                {domain: all_contract_fingerprints[domain] for domain in declared_domains if domain in all_contract_fingerprints}
+                if declared_domains
+                else all_contract_fingerprints
+            )
             stage_input = StageInput(
                 decision_question=str(getattr(stage, "decision_question", "") or context.get("decision_question") or recipe.metadata.get("decision_question") or prompt),
                 horizon=str(getattr(stage, "horizon", "") or context.get("horizon") or recipe.metadata.get("horizon", "unspecified")),
@@ -1222,7 +1472,7 @@ async def run_recipe_async(
                 dependency_outputs=tuple((dependency, outputs_by_stage[dependency]) for dependency in dependencies),
                 research_needs=tuple(getattr(stage, "research_needs", ()) or ()),
                 analysis_contract_fingerprints=tuple(
-                    sorted((str(domain), str(fingerprint)) for domain, fingerprint in dict(context.get("analysis_contract_fingerprints", {})).items())
+                    sorted(relevant_contract_fingerprints.items())
                 ),
             )
             stage_outputs, current = await dispatch_stage(stage, stage_input)

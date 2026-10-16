@@ -8,12 +8,12 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
-from foresight_os.analysis.workbook_inputs import apply_column_mappings, require_row_columns, require_table, row_evidence, table_rows
+from foresight_os.analysis.workbook_inputs import apply_column_mappings, read_workbook, require_row_columns, require_table, row_evidence, table_rows, validate_mapping_targets
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
 from foresight_os.persistence.analysis_store import AnalysisStore
-from foresight_os.runtime.local_toolbelt import SheetSelection, SourceSnapshot, ToolbeltError, spreadsheet_read
+from foresight_os.runtime.local_toolbelt import SheetSelection, ToolbeltError
 
 
 @dataclass(frozen=True)
@@ -96,12 +96,8 @@ def _action(evidence_strength: float, deployment: int, relevance: float, impact:
         return "Experiment"
     return "Monitor"
 
-def analyze_technology_radar(source: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None) -> TechnologyAnalysis:
+def analyze_technology_radar(source: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None, *, workbook_context: Any | None = None) -> TechnologyAnalysis:
     source = Path(source)
-    snapshot = SourceSnapshot.capture(source)
-    digest = snapshot.sha256
-    workbook = spreadsheet_read(source, SheetSelection(sheet_names=("Brief", "Signals", "Company_Relevance", "Competitor_Actions", "Scenario_Signposts", "Priority_Scoring"), include_hidden=True, include_hidden_rows=True), _snapshot=snapshot)
-    brief, signal_table, relevance_table, competitor_table, signpost_table, priority_table = [_table(workbook, item) for item in ("Brief", "Signals", "Company_Relevance", "Competitor_Actions", "Scenario_Signposts", "Priority_Scoring")]
     contract = AnalysisInputContract.from_dict(input_contract) if input_contract is not None else AnalysisInputContract(
         domain="technology_radar",
         required_tables=("Brief", "Signals", "Company_Relevance", "Competitor_Actions", "Scenario_Signposts", "Priority_Scoring"),
@@ -109,8 +105,20 @@ def analyze_technology_radar(source: Path, input_contract: AnalysisInputContract
         compatibility_assumption="legacy technology radar scope",
     )
     contract.validate()
+    workbook = read_workbook(source, SheetSelection(sheet_names=("Brief", "Signals", "Company_Relevance", "Competitor_Actions", "Scenario_Signposts", "Priority_Scoring"), include_hidden=True, include_hidden_rows=True), workbook_context=workbook_context)
+    digest = workbook.workbook_sha256
+    brief, signal_table, relevance_table, competitor_table, signpost_table, priority_table = [_table(workbook, item) for item in ("Brief", "Signals", "Company_Relevance", "Competitor_Actions", "Scenario_Signposts", "Priority_Scoring")]
     selected_technologies = set(contract.entity_scope)
-    signals, relevances, competitors, signposts, priorities = [apply_column_mappings(_rows(table), contract.column_mappings) for table in (signal_table, relevance_table, competitor_table, signpost_table, priority_table)]
+    mapping_headers = {
+        column
+        for table in (signal_table, relevance_table, competitor_table, signpost_table, priority_table)
+        for column in getattr(table, "columns", ())
+    }
+    validate_mapping_targets(mapping_headers, contract.column_mappings)
+    signals, relevances, competitors, signposts, priorities = [
+        apply_column_mappings(_rows(table), contract.column_mappings, available_headers=mapping_headers)
+        for table in (signal_table, relevance_table, competitor_table, signpost_table, priority_table)
+    ]
     for sheet, rows, columns in (
         (signal_table.sheet, signals, ("Signal_ID", "Technology", "Metric", "Source_Family", "Source_Quality_1_5", "Notes")),
         (relevance_table.sheet, relevances, ("Technology", "Company_Relevance_1_5", "Potential_Impact_1_5", "Urgency_1_5")),
