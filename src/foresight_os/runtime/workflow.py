@@ -23,6 +23,7 @@ from foresight_os.controller.budgets import BudgetState
 from foresight_os.domain.validation import ValidationError
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import RevisionStatus
+from foresight_os.domain.relationships import RecordKind
 from foresight_os.runtime.metrics import (
     BudgetExceededError,
     CleanupError,
@@ -372,6 +373,13 @@ def _synthesize_stage_outputs(
     typed_outputs = all("contract" in output and "stage_id" in output for output in outputs)
     normalized_outputs: list[Mapping[str, Any]] = []
     collections = ("evidence", "calculations", "claims", "implications", "recommendations", "artifacts", "relationships")
+    collection_kinds = {
+        "evidence": RecordKind.EVIDENCE,
+        "claims": RecordKind.CLAIM,
+        "implications": RecordKind.IMPLICATION,
+        "recommendations": RecordKind.RECOMMENDATION,
+        "artifacts": RecordKind.ARTIFACT,
+    }
 
     peer_candidates: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
     if typed_outputs:
@@ -399,18 +407,41 @@ def _synthesize_stage_outputs(
                         records.setdefault(record_id, entry)
         return records
 
+    def peer_record_kinds_for(index: int) -> dict[str, RecordKind]:
+        kinds: dict[str, RecordKind] = {}
+        for peer_index, output in enumerate(outputs):
+            if peer_index == index:
+                continue
+            for key, kind in collection_kinds.items():
+                for entry in output.get(key, []):
+                    if not isinstance(entry, Mapping) or not entry.get("id"):
+                        continue
+                    record_id = str(entry["id"])
+                    candidates = peer_candidates.get((key, record_id), [])
+                    if not candidates or not all(_canonical_result_hash(candidate) == _canonical_result_hash(candidates[0]) for candidate in candidates):
+                        continue
+                    previous = kinds.get(record_id)
+                    if previous is None or previous == kind:
+                        kinds[record_id] = kind
+                    else:
+                        kinds.pop(record_id, None)
+        return kinds
+
     preliminary_outputs: list[Mapping[str, Any]] = []
     for index, output in enumerate(outputs):
         if "contract" in output and "stage_id" in output:
             dependency_records = dict(existing_records or {})
             for record_id, record in peer_records_for(index).items():
                 dependency_records.setdefault(record_id, record)
+            dependency_record_kinds = peer_record_kinds_for(index)
             preliminary_outputs.append(
                 normalize_stage_result(
                     output,
                     expected_stage_id=str(getattr(stage, "stage_id", "stage")),
                     existing_records=dependency_records,
+                    existing_record_kinds=dependency_record_kinds,
                     tolerate_invalid_relationships=tolerate_invalid_relationships,
+                    prefer_current_aliases=True,
                 ).to_contract_payload()
             )
         else:
@@ -418,6 +449,7 @@ def _synthesize_stage_outputs(
 
     normalized_alias_targets: dict[str, set[str]] = {}
     normalized_alias_records: dict[str, object] = {}
+    normalized_alias_kinds: dict[str, set[RecordKind]] = {}
     for raw_output, normalized in zip(outputs, preliminary_outputs):
         if "contract" in raw_output and "stage_id" in raw_output:
             for key in collections:
@@ -431,10 +463,21 @@ def _synthesize_stage_outputs(
                     if raw_id and canonical_id:
                         normalized_alias_targets.setdefault(str(raw_id), set()).add(str(canonical_id))
                         normalized_alias_records.setdefault(str(raw_id), normalized_entry)
+                        kind = collection_kinds.get(key)
+                        if kind is not None:
+                            normalized_alias_kinds.setdefault(str(raw_id), set()).add(kind)
+                            normalized_alias_kinds.setdefault(str(canonical_id), set()).add(kind)
     canonical_alias_records = dict(existing_records or {})
+    canonical_alias_kinds: dict[str, RecordKind] = {}
     for record_id, record in normalized_alias_records.items():
         if len(normalized_alias_targets.get(record_id, ())) == 1:
             canonical_alias_records.setdefault(record_id, record)
+        kinds = normalized_alias_kinds.get(record_id, set())
+        if len(kinds) == 1:
+            canonical_alias_kinds[record_id] = next(iter(kinds))
+    for record_id, kinds in normalized_alias_kinds.items():
+        if len(kinds) == 1:
+            canonical_alias_kinds[record_id] = next(iter(kinds))
 
     for output in preliminary_outputs:
         if "contract" in output and "stage_id" in output:
@@ -443,11 +486,55 @@ def _synthesize_stage_outputs(
                     output,
                     expected_stage_id=str(getattr(stage, "stage_id", "stage")),
                     existing_records=canonical_alias_records,
+                    existing_record_kinds=canonical_alias_kinds,
                     tolerate_invalid_relationships=tolerate_invalid_relationships,
+                    prefer_current_aliases=True,
                 ).to_contract_payload()
             )
         else:
             normalized_outputs.append(output)
+
+    final_alias_targets: dict[str, set[str]] = {}
+    final_alias_records: dict[str, object] = {}
+    final_alias_kinds: dict[str, set[RecordKind]] = {}
+    for raw_output, preliminary, normalized in zip(outputs, preliminary_outputs, normalized_outputs):
+        if "contract" not in raw_output or "stage_id" not in raw_output:
+            continue
+        for key in collections:
+            raw_entries = raw_output.get(key, [])
+            preliminary_entries = preliminary.get(key, [])
+            normalized_entries = normalized.get(key, [])
+            kind = collection_kinds.get(key)
+            for raw_entry, preliminary_entry, normalized_entry in zip(raw_entries, preliminary_entries, normalized_entries):
+                if not isinstance(normalized_entry, Mapping):
+                    continue
+                final_id = normalized_entry.get("id")
+                if not final_id:
+                    continue
+                aliases = {
+                    str(alias)
+                    for alias in (
+                        raw_entry.get("id") if isinstance(raw_entry, Mapping) else None,
+                        preliminary_entry.get("id") if isinstance(preliminary_entry, Mapping) else None,
+                    )
+                    if alias
+                }
+                for alias in aliases:
+                    final_alias_targets.setdefault(alias, set()).add(str(final_id))
+                    final_alias_records.setdefault(alias, normalized_entry)
+                    if kind is not None:
+                        final_alias_kinds.setdefault(alias, set()).add(kind)
+                if kind is not None:
+                    final_alias_kinds.setdefault(str(final_id), set()).add(kind)
+
+    merge_alias_records = dict(existing_records or {})
+    merge_alias_kinds = dict(canonical_alias_kinds)
+    for alias, record in final_alias_records.items():
+        if len(final_alias_targets.get(alias, ())) == 1:
+            merge_alias_records.setdefault(alias, record)
+        kinds = final_alias_kinds.get(alias, set())
+        if len(kinds) == 1:
+            merge_alias_kinds[alias] = next(iter(kinds))
     outputs = normalized_outputs
     first = dict(outputs[0])
 
@@ -487,8 +574,10 @@ def _synthesize_stage_outputs(
         return normalize_stage_result(
             first,
             expected_stage_id=str(getattr(stage, "stage_id", "stage")),
-            existing_records=canonical_alias_records,
+            existing_records=merge_alias_records,
+            existing_record_kinds=merge_alias_kinds,
             tolerate_invalid_relationships=tolerate_invalid_relationships,
+            prefer_current_aliases=True,
         ).to_contract_payload()
     return first
 

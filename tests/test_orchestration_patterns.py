@@ -74,7 +74,7 @@ def _typed_stage_result(stage_id: str, evidence_id: str, statement: str, *, cont
             "assessment": "UNASSESSED",
             "lifecycle": "CURRENT",
             "evidence_ids": [evidence_id],
-            "relationship_ids": [],
+            "relationship_ids": ["support-placeholder"],
             "assumptions": [],
             "uncertainty": [],
             "confidence_rationale": "",
@@ -84,9 +84,31 @@ def _typed_stage_result(stage_id: str, evidence_id: str, statement: str, *, cont
         "implications": [],
         "recommendations": [],
         "artifacts": [],
-        "relationships": [],
+        "relationships": [{
+            "id": "support-placeholder",
+            "from_id": evidence_id,
+            "to_id": "claim-placeholder",
+            "relation_type": "supports",
+        }],
         "assumptions": [],
         "uncertainty": [],
+        "monitoring_indicators": [],
+    }
+
+
+def _analytical_record(record_id: str, statement: str, *, evidence_ids: list[str] | None = None, relationship_ids: list[str] | None = None) -> dict:
+    return {
+        "id": record_id,
+        "statement": statement,
+        "basis": "DERIVED",
+        "assessment": "UNASSESSED",
+        "lifecycle": "CURRENT",
+        "evidence_ids": evidence_ids or [],
+        "relationship_ids": relationship_ids or [],
+        "assumptions": [],
+        "uncertainty": [],
+        "confidence_rationale": "",
+        "disconfirmation_conditions": [],
         "monitoring_indicators": [],
     }
 
@@ -547,6 +569,48 @@ def test_multi_participant_typed_synthesis_allows_cross_participant_relationship
 
     assert len(result["relationships"]) == 1
     assert result["claims"][0]["relationship_ids"] == [result["relationships"][0]["id"]]
+
+
+def test_typed_participant_peer_kinds_preserve_implication_and_recommendation_relationships():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "one"}, {"id": "two"}, {"id": "three"}),
+        "typed-result",
+        "typed-result",
+        {},
+        synthesis_policy="aggregate-typed-results",
+    )
+    evidence = _typed_stage_result("stage-1", "evidence-one", "Observed evidence")
+    implication = _typed_stage_result("stage-1", "evidence-placeholder", "Implication placeholder")
+    implication["evidence"] = []
+    implication["claims"] = []
+    implication["relationships"] = [{
+        "id": "supports-implication",
+        "from_id": "evidence-one",
+        "to_id": "implication-two",
+        "relation_type": "supports",
+    }]
+    implication["implications"] = [_analytical_record("implication-two", "The evidence supports an implication.", evidence_ids=["evidence-one"], relationship_ids=["supports-implication"])]
+    recommendation = _typed_stage_result("stage-1", "evidence-placeholder-2", "Recommendation placeholder")
+    recommendation["evidence"] = []
+    recommendation["claims"] = []
+    recommendation["relationships"] = [{
+        "id": "informs-recommendation",
+        "from_id": "implication-two",
+        "to_id": "recommendation-three",
+        "relation_type": "informs",
+    }]
+    recommendation["recommendations"] = [_analytical_record("recommendation-three", "The implication informs a recommendation.", relationship_ids=["informs-recommendation"])]
+
+    result = _synthesize_stage_outputs(stage, [evidence, implication, recommendation])
+
+    assert {item["relation_type"] for item in result["relationships"]} == {"supports", "informs"}
+    assert {item["to_id"] for item in result["relationships"]} == {
+        result["claims"][0]["id"],
+        result["implications"][0]["id"],
+        result["recommendations"][0]["id"],
+    }
 
 
 def test_admitted_native_execution_validates_the_approved_recipe_snapshot():

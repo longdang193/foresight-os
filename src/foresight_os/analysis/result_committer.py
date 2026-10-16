@@ -559,6 +559,7 @@ def normalize_stage_result(
     existing_records: Mapping[str, object] | None = None,
     existing_record_kinds: Mapping[str, RecordKind] | None = None,
     tolerate_invalid_relationships: bool = False,
+    prefer_current_aliases: bool = False,
 ) -> StageAnalyticalResult:
     """Normalize provider output and assign system-owned canonical identities."""
 
@@ -649,7 +650,9 @@ def normalize_stage_result(
         input_ids = [
             _resolve(
                 entry,
-                {**evidence_aliases, **calculation_aliases, **known_evidence_aliases, **known_calculation_aliases},
+                ({**known_evidence_aliases, **known_calculation_aliases, **evidence_aliases, **calculation_aliases}
+                 if prefer_current_aliases else
+                 {**evidence_aliases, **calculation_aliases, **known_evidence_aliases, **known_calculation_aliases}),
                 f"calculations[{index}].input_ids",
             )
             for entry in _reference_list(item.get("input_ids"), f"calculations[{index}].input_ids")
@@ -690,7 +693,9 @@ def normalize_stage_result(
             evidence_ids = [
                 _resolve(
                     entry,
-                    {**evidence_aliases, **known_evidence_aliases},
+                    ({**known_evidence_aliases, **evidence_aliases}
+                     if prefer_current_aliases else
+                     {**evidence_aliases, **known_evidence_aliases}),
                     f"{collection}[{index}].evidence_ids",
                 )
                 for entry in _reference_list(item.get("evidence_ids", ()), f"{collection}[{index}].evidence_ids")
@@ -759,12 +764,16 @@ def normalize_stage_result(
         try:
             from_id = _resolve(
                 item.get("from_id"),
-                {**record_aliases, **known_evidence_aliases, **known_record_aliases},
+                ({**known_evidence_aliases, **known_record_aliases, **record_aliases}
+                 if prefer_current_aliases else
+                 {**record_aliases, **known_evidence_aliases, **known_record_aliases}),
                 f"relationships[{index}].from_id",
             )
             to_id = _resolve(
                 item.get("to_id"),
-                {**record_aliases, **known_evidence_aliases, **known_record_aliases},
+                ({**known_evidence_aliases, **known_record_aliases, **record_aliases}
+                 if prefer_current_aliases else
+                 {**record_aliases, **known_evidence_aliases, **known_record_aliases}),
                 f"relationships[{index}].to_id",
             )
         except ValidationError:
@@ -815,7 +824,11 @@ def normalize_stage_result(
         for reference in record_inputs[record_id]["relationship_ids"]:
             if reference in rejected_relationship_aliases:
                 continue
-            relationship_id = known_relationship_aliases.get(reference) or relationship_aliases.get(reference)
+            relationship_id = (
+                relationship_aliases.get(reference) or known_relationship_aliases.get(reference)
+                if prefer_current_aliases else
+                known_relationship_aliases.get(reference) or relationship_aliases.get(reference)
+            )
             if relationship_id is None:
                 if tolerate_invalid_relationships:
                     continue
