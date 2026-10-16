@@ -150,6 +150,24 @@ def test_workbook_context_warm_hit_skips_cache_and_authority_transactions(workbo
     assert context.stats.cache_hits == 1
 
 
+def test_workbook_context_warm_hit_restores_evicted_authority(workbook_path: Path):
+    context = WorkbookContext()
+    selection = SheetSelection(sheet_names=("Demand",), include_hidden=True, include_hidden_rows=True)
+    context.read(workbook_path, selection)
+    context.authority_index.measurements.clear()
+    context.authority_index._measurement_bytes.clear()
+    context.authority_index._bytes = 0
+
+    result = context.read(workbook_path, selection)
+
+    assert context.stats.cache_hits == 1
+    assert context.authority_index.size > 0
+    assert all(
+        (item.provenance.workbook_sha256, item.id, item.provenance.range) in context.authority_index.measurements
+        for item in result.measurements
+    )
+
+
 def test_workbook_context_currentness_and_cleanup_are_explicit(tmp_path: Path):
     source = tmp_path / "context.csv"
     source.write_text("Region,Value\nNorth,10\n", encoding="utf-8")

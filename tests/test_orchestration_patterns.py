@@ -248,6 +248,22 @@ def test_typed_synthesis_preflights_payload_bytes_before_normalization():
     assert caught.value.code == "BUDGET_EXHAUSTED"
 
 
+def test_direct_synthesis_preflights_payload_bytes_before_returning_single_output():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.DIRECT,
+        ({"id": "one"},),
+        "typed-result",
+        "typed-result",
+        {"max_synthesis_payload_bytes": 32},
+    )
+
+    with pytest.raises(ValidationError) as caught:
+        _synthesize_stage_outputs(stage, [{"stage_id": "stage-1", "value": "large observation"}])
+
+    assert caught.value.code == "BUDGET_EXHAUSTED"
+
+
 def test_typed_synthesis_honors_cancellation_checkpoint():
     stage = RecipeStage(
         "stage-1",
@@ -291,6 +307,68 @@ def test_typed_synthesis_counts_material_work_against_operation_budget():
         )
 
     assert caught.value.code == "BUDGET_EXHAUSTED"
+
+
+def test_typed_synthesis_rejects_computational_dependency_cycles():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "one"}, {"id": "two"}),
+        "typed-result",
+        "typed-result",
+        {},
+        synthesis_policy="aggregate-typed-results",
+    )
+    first = _analytical_record("one", "first")
+    second = _analytical_record("two", "second")
+    first["input_ids"] = ["two"]
+    second["input_ids"] = ["one"]
+
+    with pytest.raises(ValidationError) as caught:
+        _synthesize_stage_outputs(
+            stage,
+            [
+                {"stage_id": "stage-1", "contract": "analysis-stage-result/v1", "claims": [first]},
+                {"stage_id": "stage-1", "contract": "analysis-stage-result/v1", "claims": [second]},
+            ],
+        )
+
+    assert caught.value.code == "DEPENDENCY_CYCLE"
+
+
+def test_relationship_edges_do_not_count_as_computational_dependency_cycles():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.CONCURRENT,
+        ({"id": "one"}, {"id": "two"}),
+        "typed-result",
+        "typed-result",
+        {},
+        synthesis_policy="aggregate-typed-results",
+    )
+    first = _analytical_record("claim-one", "first observation", relationship_ids=["r1"])
+    second = _analytical_record("claim-two", "second observation", relationship_ids=["r2"])
+    output = {
+        "contract": "analysis-stage-result/v1",
+        "stage_id": "stage-1",
+        "evidence": [],
+        "calculations": [],
+        "claims": [first, second],
+        "implications": [],
+        "recommendations": [],
+        "artifacts": [],
+        "relationships": [
+            {"id": "r1", "from_id": "claim-one", "to_id": "claim-two", "relation_type": "supports"},
+            {"id": "r2", "from_id": "claim-two", "to_id": "claim-one", "relation_type": "supports"},
+        ],
+        "assumptions": [],
+        "uncertainty": [],
+        "monitoring_indicators": [],
+    }
+
+    result = _synthesize_stage_outputs(stage, [output], failures=(RuntimeError("unused peer"),))
+
+    assert len(result["relationships"]) == 2
 
 
 def test_native_sequential_reviewer_retains_original_stage_context(monkeypatch):

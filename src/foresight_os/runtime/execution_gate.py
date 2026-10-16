@@ -12,7 +12,7 @@ from foresight_os.analysis.result_committer import ANALYSIS_STAGE_RESULT_CONTRAC
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.domain.analysis_inputs import GLOBAL_SCOPE, normalize_work_brief
 from foresight_os.persistence.ids import canonical_json_hash
-from foresight_os.runtime.capabilities import CapabilityUnavailableError, prepare_capability_context
+from foresight_os.runtime.capabilities import CapabilityUnavailableError, admit_capability_context
 from foresight_os.runtime.workflow import run_recipe_async
 
 
@@ -68,7 +68,7 @@ def _preflight_recipe(store: AnalysisStore, recipe: ExecutionRecipe, run_context
     required = _required_capability_ids(recipe)
     if required:
         try:
-            prepare_capability_context(
+            admit_capability_context(
                 required,
                 run_context,
                 human_approved=True,

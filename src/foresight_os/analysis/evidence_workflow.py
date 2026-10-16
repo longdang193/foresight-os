@@ -33,6 +33,7 @@ from foresight_os.runtime.local_toolbelt import (
     SheetSelection,
     SourceSnapshot,
     ToolbeltError,
+    WorkbookContext,
     data_analysis,
     spreadsheet_read,
 )
@@ -249,12 +250,20 @@ def run_xlsx_finding_workflow(
     investigation_id: str = "xlsx-evidence-workflow",
     human_decision: str = "REJECT",
     snapshot: SourceSnapshot | None = None,
+    workbook_context: WorkbookContext | None = None,
 ) -> EvidenceWorkflowResult:
     """Promote a deterministic workbook analysis into reviewable domain state."""
     try:
-        snapshot = snapshot or SourceSnapshot.capture(source)
-        workbook = spreadsheet_read(Path(source), selection, _snapshot=snapshot)
-        if not snapshot.is_current():
+        if snapshot is not None and workbook_context is not None:
+            raise ValueError("snapshot and workbook_context are mutually exclusive")
+        if workbook_context is not None:
+            workbook = workbook_context.read(Path(source), selection)
+            current = workbook_context.currentness(Path(source))
+        else:
+            snapshot = snapshot or SourceSnapshot.capture(source)
+            workbook = spreadsheet_read(Path(source), selection, _snapshot=snapshot)
+            current = snapshot.is_current()
+        if not current:
             raise ToolbeltError("source workbook changed during read")
         if not workbook.tables:
             raise ToolbeltError("workbook selection produced no table")
@@ -269,7 +278,14 @@ def run_xlsx_finding_workflow(
             table = next((candidate for candidate in workbook.tables if (candidate.sheet, candidate.source_range) in requested), None)
             if table is None:
                 raise ToolbeltError("selected range was not found in workbook")
-        result = data_analysis(table, operation)
+        analysis_kwargs = {}
+        if workbook_context is not None:
+            analysis_kwargs = {
+                "_cache": workbook_context.cache,
+                "_authority_index": workbook_context.authority_index,
+                "_stats": workbook_context.stats,
+            }
+        result = data_analysis(table, operation, **analysis_kwargs)
         measurements = {(item.provenance.sheet, item.provenance.coordinate): item for item in workbook.measurements}
         evidence: list[Evidence] = []
         selected_columns = {table.columns.index(operation.value_column)} if operation.value_column in table.columns else set(range(len(table.columns)))

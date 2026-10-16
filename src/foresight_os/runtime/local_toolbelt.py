@@ -701,6 +701,7 @@ class WorkbookContext:
         max_bytes: int | None = None,
     ) -> SourceSnapshot:
         self.ensure_open()
+        _check_cancel(cancel_check)
         key = str(Path(source).resolve())
         snapshot = self.snapshots.get(key)
         if snapshot is not None:
@@ -727,6 +728,7 @@ class WorkbookContext:
         cancel_check: Callable[[], bool] | None = None,
     ) -> WorkbookReadResult:
         self.ensure_open()
+        _check_cancel(cancel_check)
         read_limits = _coerce_toolbelt_limits(limits)
         source = Path(source)
         source_key = str(Path(source).resolve())
@@ -735,6 +737,21 @@ class WorkbookContext:
             cached_key = self.cache.key(source, selection, read_limits, snapshot=cached_snapshot)
             cached_result = self.cache.get(cached_key)
             if cached_result is not None:
+                _check_cancel(cancel_check)
+                authority_keys = {
+                    (item.provenance.workbook_sha256, item.id, item.provenance.range)
+                    for item in cached_result.measurements
+                }
+                if not authority_keys.issubset(self.authority_index.measurements):
+                    authority_transaction = self.authority_index.begin_transaction()
+                    try:
+                        _remember_authoritative_measurements(cached_result.measurements, self.authority_index)
+                        self._refresh_retained_stats()
+                        self._enforce_budget()
+                        self.authority_index.commit_transaction(authority_transaction)
+                    except BaseException:
+                        self.authority_index.rollback_transaction(authority_transaction)
+                        raise
                 self.stats.cache_hits += 1
                 return replace(cached_result, source=str(source))
         had_snapshot = source_key in self.snapshots
@@ -1313,6 +1330,7 @@ def data_analysis(
     analysis_cache_key = None
     if _cache is not None and hasattr(_cache, "analysis_key"):
         analysis_cache_key = _cache.analysis_key(table, operation, limits)
+        _check_cancel(cancel_check)
         cached_result = _cache.get_analysis(analysis_cache_key)
         if cached_result is not None:
             if _stats is not None:

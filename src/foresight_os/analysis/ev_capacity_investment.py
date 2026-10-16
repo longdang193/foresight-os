@@ -9,7 +9,7 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
-from foresight_os.analysis.workbook_inputs import apply_column_mappings, read_workbook, require_row_columns, require_table, row_evidence, table_rows, validate_mapping_targets
+from foresight_os.analysis.workbook_inputs import apply_table_column_mappings, read_workbook, require_row_columns, require_table, row_evidence, table_rows
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
@@ -120,10 +120,7 @@ def analyze_ev_capacity_investment(source: Path, input_contract: AnalysisInputCo
     digest = workbook.workbook_sha256
     tables = {name: _table(workbook, name) for name in sheets}
     selected_regions = set(contract.entity_scope)
-    mapping_headers = {column for table in tables.values() if table.sheet != "Brief" for column in getattr(table, "columns", ())}
-    validate_mapping_targets(mapping_headers, contract.column_mappings)
-    rows = {name: apply_column_mappings(_rows(table), contract.column_mappings, available_headers=mapping_headers) for name, table in tables.items() if name != "Brief"}
-    for sheet, columns in {
+    required_columns = {
         "Demand_History": ("Year", "Region", "Service_Demand_Units", "Basis"),
         "Demand_Scenarios": ("Scenario", "Year", "Region", "Demand_Units", "Annual_Growth", "Basis"),
         "Capacity": ("Region", "Year", "Nominal_Capacity", "Practical_Availability"),
@@ -131,7 +128,13 @@ def analyze_ev_capacity_investment(source: Path, input_contract: AnalysisInputCo
         "Policy_Signals": ("Region", "Policy", "Current_End_Year", "Direction", "Demand_Relevance"),
         "Strategic_Options": ("Option", "Investment_EUR", "Lead_Time_Months", "Added_Capacity", "Operating_Cost_Premium", "Reversibility"),
         "Reported_KPIs": ("KPI", "Reported_Value", "Unit", "Scenario_Year"),
-    }.items():
+    }
+    rows = {
+        name: apply_table_column_mappings(table, _rows(table), contract.column_mappings, required_columns[name])
+        for name, table in tables.items()
+        if name != "Brief"
+    }
+    for sheet, columns in required_columns.items():
         require_row_columns(rows[sheet], sheet, columns)
     evidence: list[Evidence] = []
     by_row: dict[tuple[str, int], Evidence] = {}

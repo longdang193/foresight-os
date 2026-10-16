@@ -1,6 +1,7 @@
 from copy import deepcopy
 
 from evaluation.probes.compare_optimization_receipts import compare, compare_repeats, validate_stability
+from evaluation.probes.optimization_measurement import MANDATORY_XLSX_WORKLOADS
 from foresight_os.runtime.metrics import RunMetrics
 
 
@@ -58,8 +59,8 @@ def _receipt() -> dict:
             "peak_allocation_bytes": 100,
             "deterministic_key": "same",
             "workloads": {
-                "base_workload": {"executed": True, "status": "VERIFIED", "limitation": None},
-                "final_only_workload": {"executed": True, "status": "FINAL_ONLY", "limitation": "no base counterpart"},
+                name: {"executed": True, "status": "VERIFIED", "correctness": "VERIFIED", "limitation": None}
+                for name in MANDATORY_XLSX_WORKLOADS
             },
         },
         "workload": {"fixture_sha256": "same", "warmups": 2, "measured_runs": 10, "patterns": list(PATTERNS)},
@@ -86,6 +87,10 @@ def _receipt() -> dict:
             "latency": {"status": "VERIFIED", "limitation": None},
             "allocation": {"status": "VERIFIED", "limitation": None},
             "soak": {"status": "VERIFIED", "limitation": None},
+        },
+        "acceptance_matrix": {
+            name: {"status": "VERIFIED", "correctness": "VERIFIED", "limitation": None}
+            for name in MANDATORY_XLSX_WORKLOADS
         },
     }
 
@@ -129,16 +134,16 @@ def test_comparator_rejects_missing_evidence_statuses():
     assert "evidence.latency.status" in result["missing_required_evidence"]["release"]
 
 
-def test_comparator_accepts_final_only_workloads_but_rejects_failed_workloads():
+def test_comparator_rejects_unverified_mandatory_workloads():
     baseline = _receipt()
     release = deepcopy(baseline)
     release["revision"]["commit"] = "release-commit"
     assert compare(baseline, release)["accepted"]
 
-    release["xlsx"]["workloads"]["final_only_workload"]["status"] = "FAILED"
+    release["xlsx"]["workloads"]["blocking_cancellation"]["status"] = "FINAL_ONLY"
     result = compare(baseline, release)
     assert not result["accepted"]
-    assert "xlsx.workloads.final_only_workload.status=not_failed" in result["missing_required_evidence"]["release"]
+    assert "xlsx.workloads.blocking_cancellation.status=VERIFIED" in result["missing_required_evidence"]["release"]
 
 
 def test_comparator_rejects_workload_pattern_and_resource_regressions():

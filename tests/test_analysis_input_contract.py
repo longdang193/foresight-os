@@ -361,3 +361,19 @@ def test_powerbi_changed_period_narrative_follows_computed_direction():
 
     assert analysis.yoy_revenue_growth < 0
     assert "growth is negative" in analysis.state.implications[0].statement
+
+
+def test_powerbi_same_year_period_specs_remain_distinct():
+    analysis = analyze_powerbi_strategic_portfolio(
+        Path("tests/fixtures/exercise/05_PowerBI_Strategic_Portfolio.xlsx"),
+        AnalysisInputContract(
+            domain="powerbi_strategic_portfolio",
+            baseline_period="2025-01:2025-03",
+            comparison_period="2025-04:2025-06",
+            periods=("2025-01:2025-03", "2025-04:2025-06"),
+        ),
+    )
+
+    assert analysis.baseline_period_label == "2025-01:2025-03"
+    assert analysis.comparison_period_label == "2025-04:2025-06"
+    assert analysis.revenue_2025_jan_sep != analysis.revenue_2026_jan_sep

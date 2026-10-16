@@ -12,6 +12,7 @@ from foresight_os.domain.analysis_inputs import AnalysisInputContract
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.persistence.ids import canonical_json_hash
 from foresight_os.runtime.execution_gate import ExecutionAdmissionError, ExecutionGate
+from foresight_os.runtime.capabilities import CapabilityBinding, CapabilityBindingKind, CapabilityOwnership
 from foresight_os.wayfinding import create_work_brief
 
 
@@ -194,3 +195,41 @@ def test_gate_admits_local_document_and_artifact_capabilities_with_workspace_sco
     admitted = ExecutionGate(store).admit(prompt="Question")
 
     assert admitted.recipe.stages[0].capabilities == ("document_read", "artifact_generation")
+
+
+def test_gate_admission_does_not_activate_resource_factories(tmp_path):
+    store = prepared_store(tmp_path)
+    recipe = store.load_recipe()
+    store.save_recipe(replace(
+        recipe,
+        max_total_agent_calls=6,
+        stages=tuple(
+            replace(
+                stage,
+                capabilities=("spreadsheet_read",),
+                limits={**stage.limits, "max_total_agent_calls": 6},
+            )
+            for stage in recipe.stages
+        ),
+    ))
+    approve_recipe(store, store.load_recipe())
+    calls = []
+
+    def factory(_context):
+        calls.append(True)
+        return object()
+
+    ExecutionGate(store).admit(
+        prompt="Question",
+        run_context={
+            "local_capabilities": {
+                "spreadsheet_read": CapabilityBinding(
+                    factory,
+                    CapabilityBindingKind.RESOURCE_FACTORY,
+                    CapabilityOwnership.OWNED,
+                ),
+            },
+        },
+    )
+
+    assert calls == []

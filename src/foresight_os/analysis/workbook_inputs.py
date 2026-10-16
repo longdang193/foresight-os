@@ -77,6 +77,25 @@ def apply_column_mappings(
     return normalized
 
 
+def apply_table_column_mappings(
+    table: Any,
+    rows: Iterable[dict[str, Any]],
+    mappings: Mapping[str, str] | None,
+    consumed_canonical_columns: Iterable[str],
+) -> list[dict[str, Any]]:
+    consumed = {str(column) for column in consumed_canonical_columns}
+    table_mappings = {
+        str(canonical): str(source)
+        for canonical, source in (mappings or {}).items()
+        if str(canonical) in consumed
+    }
+    return apply_column_mappings(
+        rows,
+        table_mappings,
+        available_headers=getattr(table, "columns", ()),
+    )
+
+
 def require_row_columns(rows: Iterable[dict[str, Any]], sheet: str, columns: Iterable[str]) -> None:
     available = {str(column) for row in rows for column in row}
     missing = [str(column) for column in columns if str(column) not in available]

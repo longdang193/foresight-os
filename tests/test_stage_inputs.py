@@ -1,5 +1,7 @@
 import asyncio
 
+import foresight_os.runtime.workflow as workflow_module
+
 from foresight_os.controller.policy import select_recipe
 from foresight_os.controller.recipes import ExecutionPattern, RecipeStage, StageInput
 from foresight_os.controller.skills import ResolvedSkill, SkillManifest
@@ -53,6 +55,31 @@ def test_recipe_compiles_explicit_contract_domains_without_wire_field_drift():
     assert recipe.stages[1].analysis_domains == ("supplier_resilience",)
     assert restored.stages[0].analysis_domains == ("portfolio_resilience",)
     assert recipe.to_dict()["stages"][0]["analysis_domains"] == ["portfolio_resilience"]
+    assert "analysis_contract_domains" not in recipe.metadata
+
+
+def test_recipe_includes_global_contracts_and_stage_overrides_per_stage():
+    brief = _brief([
+        WorkStage("portfolio", "assess portfolio", participants=["analyst"]),
+        WorkStage("supplier", "assess suppliers", participants=["analyst"]),
+    ])
+    brief = WorkBrief(
+        **{
+            **brief.__dict__,
+            "analysis_inputs": {
+                "portfolio_resilience": [
+                    AnalysisInputContract(domain="portfolio_resilience").to_dict(),
+                    AnalysisInputContract(domain="portfolio_resilience", stage_id="portfolio", assumptions=("override",)).to_dict(),
+                ],
+                "supplier_resilience": AnalysisInputContract(domain="supplier_resilience", stage_id="supplier").to_dict(),
+            },
+        }
+    )
+
+    recipe = select_recipe(brief)
+
+    assert recipe.stages[0].analysis_domains == ("portfolio_resilience",)
+    assert recipe.stages[1].analysis_domains == ("portfolio_resilience", "supplier_resilience")
 
 
 def test_stage_input_contains_only_declared_dependency_outputs(monkeypatch):
@@ -78,6 +105,27 @@ def test_stage_input_contains_only_declared_dependency_outputs(monkeypatch):
     assert any('"dependency_outputs":{}' in item for item in observed if isinstance(item, str))
     assert any('"first"' in item for item in observed if isinstance(item, str))
     assert all("outer prompt" not in item for item in observed if isinstance(item, str) and '"dependency_outputs"' in item)
+
+
+def test_recipe_execution_computes_stage_fingerprints_once(monkeypatch):
+    recipe = select_recipe(_brief([WorkStage("only", "collect", participants=["collector"])]))
+    original = workflow_module._stage_fingerprints
+    calls = 0
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    async def fake_native_stage(pattern, prompt, client, roles, metrics=None, run_context=None):
+        return [prompt]
+
+    monkeypatch.setattr(workflow_module, "_stage_fingerprints", counted)
+    monkeypatch.setattr(workflow_module, "_run_native_stage", fake_native_stage)
+
+    asyncio.run(run_recipe_async(recipe, "outer prompt", object()))
+
+    assert calls == len(recipe.stages)
 
 
 def test_stage_input_carries_research_needs_into_provider_payload():

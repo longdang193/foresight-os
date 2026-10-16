@@ -50,6 +50,7 @@ CanonicalResultCommitter = Callable[
 _NON_RETRYABLE_VALIDATION_CODES = frozenset(
     {"MATERIAL_CONFLICT", "SOURCE_STALE", "PROVIDER_INTERRUPTION", "BUDGET_EXHAUSTED", "UNSUPPORTED_RECOVERY"}
 )
+_COMPUTATIONAL_REFERENCE_FIELDS = ("evidence_ids", "input_ids")
 
 
 def _failure_class(error: BaseException) -> FailureClass:
@@ -126,7 +127,7 @@ def _expand_dependency_records(
     while pending:
         record = pending.pop()
         references: list[str] = []
-        for field_name in ("evidence_ids", "relationship_ids", "input_ids", "from_id", "to_id"):
+        for field_name in _COMPUTATIONAL_REFERENCE_FIELDS:
             value = record.get(field_name) if isinstance(record, Mapping) else getattr(record, field_name, None)
             if isinstance(value, str):
                 references.append(value)
@@ -400,7 +401,26 @@ def _synthesize_stage_outputs(
             if operation_count > operation_limit:
                 raise _synthesis_error("BUDGET_EXHAUSTED", "typed stage synthesis exceeded the normalization operation budget")
 
+    limits = dict(getattr(stage, "limits", {}) or {})
+    max_participants = _positive_limit(
+        limits.get("max_synthesis_participants"),
+        default=max(1, len(outputs)),
+        label="max_synthesis_participants",
+    )
+    max_payload_bytes = _positive_limit(
+        limits.get("max_synthesis_payload_bytes"),
+        default=10_000_000,
+        label="max_synthesis_payload_bytes",
+    )
     checkpoint()
+    if len(outputs) > max_participants:
+        raise _synthesis_error("BUDGET_EXHAUSTED", f"typed stage synthesis exceeded {max_participants} participants")
+    try:
+        payload_bytes = len(json.dumps(outputs, default=str, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+    except (TypeError, ValueError) as error:
+        raise _synthesis_error("MALFORMED_OUTPUT", "typed stage synthesis payload is not serializable") from error
+    if payload_bytes > max_payload_bytes:
+        raise _synthesis_error("BUDGET_EXHAUSTED", f"typed stage synthesis exceeded {max_payload_bytes} payload bytes")
     if len(outputs) == 1 and not failures:
         return outputs[0]
     if str(getattr(stage, "synthesis_policy", "")) != "aggregate-typed-results":
@@ -413,19 +433,8 @@ def _synthesize_stage_outputs(
             return outputs[-1] if outputs else None
         raise _synthesis_error("MALFORMED_OUTPUT", "typed stage synthesis requires mapping outputs")
     typed_outputs = all("contract" in output and "stage_id" in output for output in outputs)
-    limits = dict(getattr(stage, "limits", {}) or {})
     max_records = _positive_limit(limits.get("max_synthesis_records"), default=10_000, label="max_synthesis_records")
     max_relationships = _positive_limit(limits.get("max_synthesis_relationships"), default=10_000, label="max_synthesis_relationships")
-    max_participants = _positive_limit(
-        limits.get("max_synthesis_participants"),
-        default=max(1, len(outputs)),
-        label="max_synthesis_participants",
-    )
-    max_payload_bytes = _positive_limit(
-        limits.get("max_synthesis_payload_bytes"),
-        default=10_000_000,
-        label="max_synthesis_payload_bytes",
-    )
     max_aliases = _positive_limit(
         limits.get("max_synthesis_aliases"),
         default=50_000,
@@ -450,15 +459,6 @@ def _synthesize_stage_outputs(
         "recommendations": RecordKind.RECOMMENDATION,
         "artifacts": RecordKind.ARTIFACT,
     }
-    if len(outputs) > max_participants:
-        raise _synthesis_error("BUDGET_EXHAUSTED", f"typed stage synthesis exceeded {max_participants} participants")
-    try:
-        payload_bytes = len(json.dumps(outputs, default=str, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"))
-    except (TypeError, ValueError) as error:
-        raise _synthesis_error("MALFORMED_OUTPUT", "typed stage synthesis payload is not serializable") from error
-    if payload_bytes > max_payload_bytes:
-        raise _synthesis_error("BUDGET_EXHAUSTED", f"typed stage synthesis exceeded {max_payload_bytes} payload bytes")
-
     preflight_records = 0
     preflight_calculations = 0
     preflight_relationships = 0
@@ -488,7 +488,7 @@ def _synthesize_stage_outputs(
                     preflight_aliases += 1
                     raw_record_ids.add(record_id)
                     dependencies = raw_dependencies.setdefault(record_id, set())
-                    for field_name in ("evidence_ids", "relationship_ids", "input_ids", "from_id", "to_id"):
+                    for field_name in _COMPUTATIONAL_REFERENCE_FIELDS:
                         value = entry.get(field_name)
                         if isinstance(value, str):
                             dependencies.add(value)
@@ -502,20 +502,28 @@ def _synthesize_stage_outputs(
         raise _synthesis_error("BUDGET_EXHAUSTED", f"typed stage synthesis exceeded {max_aliases} aliases")
     if preflight_calculations > max_records:
         raise _synthesis_error("BUDGET_EXHAUSTED", f"typed stage synthesis exceeded {max_records} calculations")
-    dependency_depth = 0
-    for root in raw_record_ids:
+    dependency_state: dict[str, str] = {}
+
+    def visit_dependency(record_id: str, depth: int, path: tuple[str, ...]) -> None:
         checkpoint()
-        frontier = [(root, 0)]
-        seen: set[str] = set()
-        while frontier:
-            record_id, depth = frontier.pop()
-            if record_id in seen:
-                continue
-            seen.add(record_id)
-            dependency_depth = max(dependency_depth, depth)
-            if dependency_depth > max_dependency_depth:
-                raise _synthesis_error("BUDGET_EXHAUSTED", f"typed stage synthesis exceeded {max_dependency_depth} dependency levels")
-            frontier.extend((dependency, depth + 1) for dependency in raw_dependencies.get(record_id, ()) if dependency in raw_record_ids)
+        if depth > max_dependency_depth:
+            raise _synthesis_error("BUDGET_EXHAUSTED", f"typed stage synthesis exceeded {max_dependency_depth} dependency levels")
+        state = dependency_state.get(record_id, "UNSEEN")
+        if state == "VISITING":
+            cycle_start = path.index(record_id) if record_id in path else 0
+            cycle = " -> ".join((*path[cycle_start:], record_id))
+            raise _synthesis_error("DEPENDENCY_CYCLE", f"typed stage synthesis contains a dependency cycle: {cycle}")
+        if state == "DONE":
+            return
+        dependency_state[record_id] = "VISITING"
+        for dependency in sorted(raw_dependencies.get(record_id, ())):
+            checkpoint()
+            if dependency in raw_record_ids:
+                visit_dependency(dependency, depth + 1, (*path, record_id))
+        dependency_state[record_id] = "DONE"
+
+    for root in sorted(raw_record_ids):
+        visit_dependency(root, 0, ())
     normalized_outputs: list[Mapping[str, Any]] = []
     alias_records: dict[str, object] = {}
     alias_kinds: dict[str, RecordKind] = {}
@@ -1097,7 +1105,6 @@ async def run_recipe_async(
             dependency_records,
             context.get("canonical_records", {}),
         )
-        cache_key = _stage_cache_key(stage, stage_input, stage_skill_ids, selected_skills_by_participant)
         semantic_fingerprint, execution_policy_fingerprint = _stage_fingerprints(
             stage,
             stage_input,

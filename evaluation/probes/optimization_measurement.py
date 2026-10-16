@@ -20,6 +20,16 @@ from foresight_os.runtime.local_toolbelt import AnalysisOperation, SheetSelectio
 
 SCHEMA_VERSION = 2
 MEASUREMENT_STATUSES = {"VERIFIED", "FAILED", "NOT_MEASURED", "DEFERRED", "FINAL_ONLY"}
+MANDATORY_XLSX_WORKLOADS = (
+    "cold_workbook",
+    "same_view_repeat",
+    "different_selection",
+    "analyst_validator_reuse",
+    "repeated_investigation",
+    "large_retained_context",
+    "multi_workbook",
+    "blocking_cancellation",
+)
 
 
 def _revision_metadata() -> dict[str, str]:
@@ -161,10 +171,10 @@ def _summarize_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
     for field in fields:
         values = [float(item[field]) for item in samples]
         summary[f"{field}_p50"] = _percentile(values, 0.50)
+        summary[f"{field}_p90"] = _percentile(values, 0.90)
         summary[f"{field}_p95"] = _percentile(values, 0.95)
         summary[f"{field}_min"] = round(min(values), 3) if values else 0.0
         summary[f"{field}_max"] = round(max(values), 3) if values else 0.0
-        summary[f"{field}_p95_max"] = summary[f"{field}_p95"]
     for field in (
         "model_calls",
         "tool_calls_total",
@@ -266,5 +276,13 @@ def build_receipt(
             "latency": measurement_evidence("VERIFIED", limitation=None),
             "allocation": measurement_evidence("VERIFIED", limitation=None),
             "soak": measurement_evidence("VERIFIED", limitation=None),
+        },
+        "acceptance_matrix": {
+            name: {
+                "status": workbook.get("workloads", {}).get(name, {}).get("status", "MISSING"),
+                "correctness": workbook.get("workloads", {}).get(name, {}).get("correctness", "MISSING"),
+                "limitation": workbook.get("workloads", {}).get(name, {}).get("limitation"),
+            }
+            for name in MANDATORY_XLSX_WORKLOADS
         },
     }

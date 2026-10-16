@@ -2,6 +2,11 @@ import argparse
 import json
 from pathlib import Path
 
+try:
+    from .optimization_measurement import MANDATORY_XLSX_WORKLOADS
+except ImportError:
+    from optimization_measurement import MANDATORY_XLSX_WORKLOADS
+
 
 SCHEMA_VERSION = 2
 REQUIRED_PATTERNS = {"DIRECT", "ANALYZE", "CONCURRENT", "HANDOFF", "CHALLENGE_RECOMMENDATION"}
@@ -48,6 +53,7 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
         "native_mcp",
         "workload",
         "acceptance",
+        "acceptance_matrix",
     )
     missing.extend(key for key in required if key not in receipt)
     if receipt.get("schema_version") != SCHEMA_VERSION:
@@ -128,7 +134,19 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
         missing.append("native_mcp.status=VERIFIED")
     if not receipt.get("workload", {}).get("patterns"):
         missing.append("workload.patterns")
-    for name, item in receipt.get("xlsx", {}).get("workloads", {}).items():
+    workloads = receipt.get("xlsx", {}).get("workloads", {})
+    for name in MANDATORY_XLSX_WORKLOADS:
+        item = workloads.get(name)
+        if not isinstance(item, dict):
+            missing.append(f"xlsx.workloads.{name}")
+            continue
+        if item.get("executed") is not True:
+            missing.append(f"xlsx.workloads.{name}.executed=true")
+        if item.get("status") != "VERIFIED":
+            missing.append(f"xlsx.workloads.{name}.status=VERIFIED")
+        if item.get("correctness") != "VERIFIED":
+            missing.append(f"xlsx.workloads.{name}.correctness=VERIFIED")
+    for name, item in workloads.items():
         status = item.get("status")
         if status not in MEASUREMENT_STATUSES:
             missing.append(f"xlsx.workloads.{name}.status")
@@ -136,6 +154,16 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
             missing.append(f"xlsx.workloads.{name}.status=not_failed")
         elif status != "VERIFIED" and not isinstance(item.get("limitation"), str):
             missing.append(f"xlsx.workloads.{name}.limitation")
+    matrix = receipt.get("acceptance_matrix", {})
+    for name in MANDATORY_XLSX_WORKLOADS:
+        entry = matrix.get(name)
+        if not isinstance(entry, dict):
+            missing.append(f"acceptance_matrix.{name}")
+            continue
+        if entry.get("status") != "VERIFIED":
+            missing.append(f"acceptance_matrix.{name}.status=VERIFIED")
+        if entry.get("correctness") != "VERIFIED":
+            missing.append(f"acceptance_matrix.{name}.correctness=VERIFIED")
     return sorted(set(missing))
 
 

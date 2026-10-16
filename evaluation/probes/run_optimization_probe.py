@@ -13,7 +13,6 @@ import tempfile
 import time
 import tracemalloc
 from pathlib import Path
-from statistics import median
 
 # Direct probe execution must measure the checked-out worktree, not an
 # unrelated editable installation from another checkout.
@@ -32,7 +31,7 @@ from foresight_os.runtime.capabilities import (
 from foresight_os.runtime.local_toolbelt import AnalysisOperation, SheetSelection, WorkbookContext, data_analysis, spreadsheet_read
 from foresight_os.analysis.independent_validation import run_independent_validation
 from foresight_os.runtime.workflow import run_recipe_async
-from optimization_measurement import measurement_evidence, _metric_snapshot, build_receipt, observed_xlsx_state, process_rss_bytes, stage_metric
+from optimization_measurement import MANDATORY_XLSX_WORKLOADS, _metric_snapshot, _percentile, build_receipt, measurement_evidence, observed_xlsx_state, process_rss_bytes, stage_metric
 
 
 class _ProbeClient:
@@ -389,11 +388,13 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
     warm_started = time.perf_counter()
     warm_result = context.read(path, context_selection)
     warm_read_ms = (time.perf_counter() - warm_started) * 1000
+    validator_started = time.perf_counter()
     validator_report = run_independent_validation(path, selection=context_selection, workbook_context=context)
+    validator_ms = (time.perf_counter() - validator_started) * 1000
     context.currentness(path)
     sheet_names = tuple(sheet.name for sheet in result.sheets)
     workloads: dict[str, dict[str, object]] = {
-        "cold_read": {"executed": True, "status": "VERIFIED", "correctness": "VERIFIED", "wall_time_ms": round(cold_read_ms, 3)},
+        "cold_workbook": {"executed": True, "status": "VERIFIED", "correctness": "VERIFIED", "wall_time_ms": round(cold_read_ms, 3)},
         "same_view_repeat": {
             "executed": True,
             "status": "VERIFIED" if context.stats.capture_count == 1 and context.stats.xlsx_parse_count == 1 else "FAILED",
@@ -402,20 +403,13 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
             "capture_count": context.stats.capture_count,
             "xlsx_parse_count": context.stats.xlsx_parse_count,
         },
-        "bounded_multi_sheet": {
-            "executed": True,
-            "status": "VERIFIED" if len(sheet_names) > 1 else "NOT_MEASURED",
-            "correctness": "VERIFIED" if len(sheet_names) > 1 else "NOT_MEASURED",
-            "limitation": None if len(sheet_names) > 1 else "fixture contains one sheet",
-            "sheet_count": len(sheet_names),
-        },
-        "analyst_to_validator_reuse": {
+        "analyst_validator_reuse": {
             "executed": True,
             "status": "VERIFIED" if validator_report.accepted else "FAILED",
             "correctness": "VERIFIED" if validator_report.accepted else "FAILED",
             "validator_accepted": validator_report.accepted,
+            "wall_time_ms": round(validator_ms, 3),
         },
-        "changed_selection": {"executed": False, "status": "NOT_MEASURED", "correctness": "NOT_MEASURED", "limitation": "alternate selection is populated below"},
     }
     with tempfile.TemporaryDirectory(prefix="foresight-optimization-") as temporary_dir:
         changed_path = Path(temporary_dir) / path.name
@@ -440,7 +434,7 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
         alternate = alternate_context.read(path, alternate_selection)
         alternate_value = _analysis_value(alternate.tables[0]) if alternate.tables else None
         primary_value = _analysis_value(result.tables[0])
-        workloads["changed_selection"] = {
+        workloads["different_selection"] = {
             "executed": True,
             "status": "VERIFIED" if alternate.workbook_sha256 == result.workbook_sha256 and alternate_value != primary_value and alternate_context.stats.capture_count == 1 else "FAILED",
             "correctness": "VERIFIED" if alternate.workbook_sha256 == result.workbook_sha256 and alternate_value != primary_value else "FAILED",
@@ -451,29 +445,18 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
             "alternate_value": alternate_value,
             "limitation": None,
         }
-    workloads["repeated_run"] = _repeated_workflow(path)
-    if mode == "release":
-        cancellation = await _cancelled_read_workload(path)
-        workloads["cancelled_read"] = {
-            **cancellation,
-            "status": "FINAL_ONLY" if cancellation["status"] == "VERIFIED" else "FAILED",
-            "limitation": "new final-only blocking cancellation workload; no base counterpart",
-        }
-        sizes = _retained_context_workloads()
-        large = sizes["large"]
-        workloads["large_context_warm_hit"] = {
-            "executed": True,
-            "status": "FINAL_ONLY" if large["status"] == "VERIFIED" else "FAILED",
-            "correctness": large["correctness"],
-            "sizes": sizes,
-            "limitation": "new final-only retained-context workload; no base counterpart",
-        }
-        multi = await _multi_workbook_soak()
-        workloads["multi_workbook_run"] = {
-            **multi,
-            "status": "FINAL_ONLY" if multi["status"] == "VERIFIED" else "FAILED",
-            "limitation": "new final-only multi-workbook soak; no base counterpart",
-        }
+    workloads["repeated_investigation"] = _repeated_workflow(path)
+    workloads["blocking_cancellation"] = await _cancelled_read_workload(path)
+    sizes = _retained_context_workloads()
+    large = sizes["large"]
+    workloads["large_retained_context"] = {
+        "executed": True,
+        "status": large["status"],
+        "correctness": large["correctness"],
+        "sizes": sizes,
+        "limitation": large.get("limitation"),
+    }
+    workloads["multi_workbook"] = await _multi_workbook_soak()
     from foresight_os.runtime.metrics import RunMetrics
 
     local_metrics = RunMetrics("optimization-local", "DIRECT", "direct")
@@ -490,8 +473,21 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
         "sheet_count": len(result.sheets),
         "measurement_count": len(result.measurements),
         "table_count": len(result.tables),
-        "p50_ms": round(median(durations), 3) if durations else None,
-        "p95_ms": round(sorted(durations)[-1], 3) if durations else None,
+        "p50_ms": _percentile(durations, 0.50) if durations else None,
+        "p90_ms": _percentile(durations, 0.90) if durations else None,
+        "p95_ms": _percentile(durations, 0.95) if durations else None,
+        "timing_paths": {
+            "direct_workbook": {
+                "p50_ms": _percentile(durations, 0.50) if durations else None,
+                "p90_ms": _percentile(durations, 0.90) if durations else None,
+                "p95_ms": _percentile(durations, 0.95) if durations else None,
+                "sample_count": len(durations),
+            },
+            "cold_workbook": {"wall_time_ms": workloads["cold_workbook"].get("wall_time_ms")},
+            "same_view_repeat": {"wall_time_ms": workloads["same_view_repeat"].get("wall_time_ms")},
+            "repeated_investigation": {"wall_time_ms": workloads["repeated_investigation"].get("wall_time_ms")},
+            "analyst_validator_reuse": {"wall_time_ms": workloads["analyst_validator_reuse"].get("wall_time_ms")},
+        },
         "peak_allocation_bytes": max(allocations) if allocations else None,
         "measurement_mode": measurement_mode,
         "latency": measurement_evidence("VERIFIED", limitation=None) if durations else measurement_evidence("NOT_MEASURED", limitation="timing mode was not selected"),
@@ -499,7 +495,7 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
         "workloads": workloads,
         "deterministic_key": analysis.deterministic_key,
         "source_hash": result.workbook_sha256,
-        "local_tool_calls": local_metrics.local_tool_calls + int(workloads["repeated_run"].get("local_tool_calls", 0) or 0),
+        "local_tool_calls": local_metrics.local_tool_calls + int(workloads["repeated_investigation"].get("local_tool_calls", 0) or 0),
         "run_owned_context": {
             "capture_count": context.stats.capture_count,
             "capture_hash_count": context.stats.capture_hash_count,
@@ -514,6 +510,7 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
             "retained_authority_record_bytes": context.stats.retained_authority_record_bytes,
             "validator_accepted": validator_report.accepted,
         },
+        "mandatory_workloads": [name for name in MANDATORY_XLSX_WORKLOADS if name in workloads],
     }
 
 
