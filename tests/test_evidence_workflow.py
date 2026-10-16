@@ -11,7 +11,7 @@ from foresight_os.domain.models import AnalysisState, Revision
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.runtime.page_retrieval import PageRetrievalCapability
 from foresight_os.runtime.web_search import WebSearchHit
-from foresight_os.runtime.local_toolbelt import AnalysisOperation, SheetSelection
+from foresight_os.runtime.local_toolbelt import AnalysisOperation, SheetSelection, SourceSnapshot, WorkbookContext
 import openpyxl
 
 
@@ -173,3 +173,67 @@ def test_xlsx_finding_workflow_uses_selected_table_when_workbook_has_multiple_ta
     assert result.selected_source == "Data"
     assert result.analysis is not None
     assert result.analysis.calculations[0].output == 30.0
+
+
+def test_xlsx_finding_workflow_reuses_run_workbook_context(tmp_path: Path):
+    from foresight_os.analysis.evidence_workflow import run_xlsx_finding_workflow
+
+    source = tmp_path / "warm-finding.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Demand"
+    sheet.append(["Region", "Value"])
+    sheet.append(["North", 10])
+    sheet.append(["South", 20])
+    sheet.tables.add(openpyxl.worksheet.table.Table(displayName="DemandTable", ref="A1:B3"))
+    workbook.save(source)
+    selection = SheetSelection(tables=(("Demand", "DemandTable"),))
+    context = WorkbookContext()
+
+    first = run_xlsx_finding_workflow(
+        AnalysisStore(tmp_path / "warm-one"),
+        source,
+        AnalysisOperation("sum", value_column="Value"),
+        selection=selection,
+        workbook_context=context,
+        human_decision="PENDING",
+    )
+    second = run_xlsx_finding_workflow(
+        AnalysisStore(tmp_path / "warm-two"),
+        source,
+        AnalysisOperation("sum", value_column="Value"),
+        selection=selection,
+        workbook_context=context,
+        human_decision="PENDING",
+    )
+
+    assert first.status == second.status == "pending"
+    assert context.stats.capture_count == 1
+    assert context.stats.capture_hash_count == 1
+    assert context.stats.xlsx_parse_count == 1
+    assert context.stats.cache_hits == 1
+    assert context.stats.analysis_cache_hits == 1
+
+
+def test_xlsx_finding_workflow_rejects_snapshot_and_context_together(tmp_path: Path):
+    from foresight_os.analysis.evidence_workflow import run_xlsx_finding_workflow
+
+    source = tmp_path / "ambiguous-finding.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Demand"
+    sheet.append(["Value"])
+    sheet.append([10])
+    sheet.tables.add(openpyxl.worksheet.table.Table(displayName="DemandTable", ref="A1:A2"))
+    workbook.save(source)
+
+    result = run_xlsx_finding_workflow(
+        AnalysisStore(tmp_path / "ambiguous-case"),
+        source,
+        AnalysisOperation("sum", value_column="Value"),
+        snapshot=SourceSnapshot.capture(source),
+        workbook_context=WorkbookContext(),
+    )
+
+    assert result.status == "failed"
+    assert result.failure == "ValueError"

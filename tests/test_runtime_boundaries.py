@@ -1,5 +1,6 @@
 import asyncio
 import inspect
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -595,6 +596,26 @@ def test_instrumented_callable_adapters_use_capability_names():
     assert document.__name__ != artifact.__name__
 
 
+def test_inline_adapter_reuses_binding_signature_metadata(monkeypatch):
+    import foresight_os.runtime.capabilities as capabilities
+
+    def adapter(value: str) -> str:
+        return value
+
+    wrapped = instrument_tool(
+        adapter,
+        CapabilityDefinition("inline_adapter", "local_deterministic", execution_mode=ExecutionMode.INLINE),
+        {},
+    )
+
+    def unexpected_signature(_value):
+        raise AssertionError("inline dispatch reflected after binding")
+
+    monkeypatch.setattr(capabilities.inspect, "signature", unexpected_signature)
+
+    assert asyncio.run(wrapped("ok")) == "ok"
+
+
 def test_tool_semaphore_enforces_declared_parallelism():
     active = 0
     peak = 0
@@ -724,6 +745,35 @@ def test_instrumented_workbook_tools_share_one_scope_context():
         assert not any(name == "workbook" + "_cache" for name in vars(scope))
 
     asyncio.run(scenario())
+
+
+def test_blocking_cancellation_preserves_caller_cancel_when_worker_fails_after_repeated_cancel():
+    async def scenario():
+        scope = CapabilityScope(ownership=ScopeOwnership.RUN)
+        metrics = RunMetrics("blocking-failure", "DIRECT", "direct")
+        started = threading.Event()
+
+        def blocking(cancel_check=None):
+            started.set()
+            while not cancel_check or not cancel_check():
+                time.sleep(0.001)
+            raise RuntimeError("worker failed during cancellation settlement")
+
+        wrapped = instrument_tool(
+            blocking,
+            CapabilityDefinition("spreadsheet_read", "local_deterministic", execution_mode=ExecutionMode.BLOCKING),
+            {"scope": scope, "metrics": metrics},
+        )
+        task = asyncio.create_task(wrapped())
+        assert await asyncio.to_thread(started.wait, 1)
+        task.cancel()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert metrics.cancellation_settlements == 1
+        assert metrics.tool_failures == 1
+        await scope.close()
 
     asyncio.run(scenario())
 

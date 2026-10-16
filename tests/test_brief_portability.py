@@ -56,3 +56,31 @@ def test_portfolio_analyzer_reuses_run_workbook_context(tmp_path):
     assert context.stats.capture_hash_count == 1
     assert context.stats.xlsx_parse_count == 1
     assert context.stats.cache_hits == 1
+
+
+def test_portfolio_analyzer_reuses_material_view_across_changed_briefs():
+    source = Path("tests/fixtures/exercise/01_Portfolio_Resilience.xlsx")
+    context = WorkbookContext()
+
+    default = analyze_portfolio_resilience(source, workbook_context=context)
+    changed = analyze_portfolio_resilience(
+        source,
+        AnalysisInputContract(
+            domain="portfolio_resilience",
+            baseline_period="2025",
+            comparison_period="2024",
+            periods=("2025",),
+            entity_scope=("DACH",),
+            scenarios=("Base",),
+            units="EUR",
+            reporting_currency="EUR",
+        ),
+        workbook_context=context,
+    )
+
+    assert default.source_sha256 == changed.source_sha256
+    assert default.contract_fingerprint != changed.contract_fingerprint
+    assert context.stats.capture_count == 1
+    assert context.stats.xlsx_parse_count == 1
+    assert context.stats.cache_hits == 1
+    assert sum(item.revenue for item in default.segment_baselines) != sum(item.revenue for item in changed.segment_baselines)

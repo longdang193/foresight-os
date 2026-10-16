@@ -8,8 +8,8 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
-from foresight_os.analysis.workbook_inputs import apply_column_mappings, read_workbook, require_row_columns, require_table, row_evidence, table_rows, validate_mapping_targets
-from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
+from foresight_os.analysis.workbook_inputs import apply_table_column_mappings, read_workbook, require_row_columns, require_table, row_evidence, table_rows, validate_mapping_targets
+from foresight_os.domain.analysis_inputs import AnalysisInputContract, _PeriodSpec, _parse_period, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
 from foresight_os.persistence.analysis_store import AnalysisStore
@@ -105,21 +105,36 @@ def _source_quality(value: str) -> float:
     return {"High": 3.0, "Medium": 2.0, "Low": 1.0}.get(value, 1.0)
 
 
-def _period_window(contract: AnalysisInputContract, year: int) -> tuple[int, int]:
-    for spec in contract.period_specs:
-        if spec.start_year != year:
-            continue
-        if spec.is_cross_year:
-            raise ValueError("unsupported cross-year period for powerbi_strategic_portfolio")
-        if spec.granularity == "range":
-            return spec.start_month or 1, spec.end_month or 12
-        if spec.granularity == "month":
-            return spec.start_month or 1, spec.start_month or 1
-    return 1, 9
+def _period_window(spec: _PeriodSpec) -> tuple[int, int]:
+    if spec.is_cross_year:
+        raise ValueError("unsupported cross-year period for powerbi_strategic_portfolio")
+    if spec.granularity == "range":
+        return spec.start_month or 1, spec.end_month or 12
+    if spec.granularity == "month":
+        return spec.start_month or 1, spec.start_month or 1
+    return 1, 12
 
 
-def _period_label(year: int, window: tuple[int, int]) -> str:
-    return f"{year}-{window[0]:02d}:{year}-{window[1]:02d}"
+def _period_label(spec: _PeriodSpec, window: tuple[int, int]) -> str:
+    return f"{spec.start_year}-{window[0]:02d}:{spec.end_year}-{window[1]:02d}"
+
+
+def _select_period_spec(contract: AnalysisInputContract, raw: str | None, default_year: int) -> _PeriodSpec:
+    configured_specs = tuple(_parse_period(period) for period in contract.periods)
+    requested_year = int(raw) if raw and raw.isdigit() and len(raw) == 4 else default_year
+    specs = contract.period_specs
+    if raw:
+        exact = next((spec for spec in configured_specs if spec.raw == raw), None)
+        if exact is None and not (raw.isdigit() and len(raw) == 4):
+            exact = next((spec for spec in specs if spec.raw == raw), None)
+        if exact is not None:
+            return exact
+    candidates = [spec for spec in configured_specs if spec.start_year == requested_year]
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1:
+        raise ValueError(f"ambiguous period selection for {requested_year}; use an explicit baseline or comparison period")
+    return _PeriodSpec(str(requested_year), requested_year, None, requested_year, None, "year")
 
 
 def _forward_signal_index(signal_rows: list[dict[str, Any]], segment: str | None = None) -> float:
@@ -137,30 +152,26 @@ def analyze_powerbi_strategic_portfolio(source: Path, input_contract: AnalysisIn
     contract = AnalysisInputContract.from_dict(input_contract) if input_contract is not None else AnalysisInputContract(
         domain="powerbi_strategic_portfolio",
         required_tables=sheets,
-        baseline_period="2025",
-        comparison_period="2026",
+        baseline_period="2025-01:2025-09",
+        comparison_period="2026-01:2026-09",
         units="EUR",
         periods=("2025-01:2025-09", "2026-01:2026-09"),
         compatibility_assumption="legacy Power BI comparable-period defaults",
     )
     contract.validate()
-    period_by_raw = {spec.raw: spec for spec in contract.period_specs}
-    baseline_spec = period_by_raw.get(contract.baseline_period or "")
-    comparison_spec = period_by_raw.get(contract.comparison_period or "")
-    baseline_year = baseline_spec.start_year if baseline_spec is not None else 2025
-    comparison_year = comparison_spec.start_year if comparison_spec is not None else 2026
-    baseline_window = _period_window(contract, baseline_year)
-    comparison_window = _period_window(contract, comparison_year)
-    baseline_label = _period_label(baseline_year, baseline_window)
-    comparison_label = _period_label(comparison_year, comparison_window)
+    baseline_spec = _select_period_spec(contract, contract.baseline_period, 2025)
+    comparison_spec = _select_period_spec(contract, contract.comparison_period, 2026)
+    baseline_year = baseline_spec.start_year
+    comparison_year = comparison_spec.start_year
+    baseline_window = _period_window(baseline_spec)
+    comparison_window = _period_window(comparison_spec)
+    baseline_label = _period_label(baseline_spec, baseline_window)
+    comparison_label = _period_label(comparison_spec, comparison_window)
     workbook = read_workbook(source, SheetSelection(sheet_names=sheets, include_hidden=True, include_hidden_rows=True), workbook_context=workbook_context)
     digest = workbook.workbook_sha256
     tables = {name: _table(workbook, name) for name in sheets}
     selected_segments = set(contract.entity_scope)
-    mapping_headers = {column for table in tables.values() if table.sheet != "Brief" for column in getattr(table, "columns", ())}
-    validate_mapping_targets(mapping_headers, contract.column_mappings)
-    rows = {name: apply_column_mappings(_rows(table), contract.column_mappings, available_headers=mapping_headers) for name, table in tables.items() if name != "Brief"}
-    for sheet, columns in {
+    required_columns = {
         "Dim_Region": ("Region_ID", "Region"),
         "Dim_Segment": ("Segment_ID", "Segment"),
         "Fact_Performance": ("Year", "Month", "Region", "Segment", "Revenue_EUR", "Gross_Profit_EUR"),
@@ -170,7 +181,29 @@ def analyze_powerbi_strategic_portfolio(source: Path, input_contract: AnalysisIn
         "Dashboard_Snapshot": ("Page", "KPI", "Displayed_Value", "Refresh_Timestamp"),
         "Strategic_Options": ("Option_ID", "Option", "Investment_EUR", "Reversibility", "Strategic_Hypothesis"),
         "Change_One_Input": ("Change_ID", "Expected_Reassessment", "Replacement"),
-    }.items():
+    }
+    consumed_columns = {
+        **required_columns,
+        "Fact_Performance": (*required_columns["Fact_Performance"], "Refresh_Timestamp"),
+    }
+    validate_mapping_targets(
+        (header for table in tables.values() for header in getattr(table, "columns", ())),
+        contract.column_mappings,
+    )
+    table_mappings = {
+        name: {
+            str(canonical): str(source)
+            for canonical, source in contract.column_mappings.items()
+            if str(source) in {str(header) for header in getattr(table, "columns", ())}
+        }
+        for name, table in tables.items()
+    }
+    rows = {
+        name: apply_table_column_mappings(table, _rows(table), table_mappings[name], consumed_columns[name])
+        for name, table in tables.items()
+        if name != "Brief"
+    }
+    for sheet, columns in required_columns.items():
         require_row_columns(rows[sheet], sheet, columns)
     evidence: list[Evidence] = []
     by_row: dict[tuple[str, int], Evidence] = {}

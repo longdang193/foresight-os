@@ -9,7 +9,7 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
-from foresight_os.analysis.workbook_inputs import apply_column_mappings, read_workbook, require_row_columns, require_table, row_evidence, table_rows, validate_mapping_targets
+from foresight_os.analysis.workbook_inputs import apply_table_column_mappings, read_workbook, require_row_columns, require_table, row_evidence, table_rows
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import (
@@ -223,25 +223,26 @@ def analyze_portfolio_resilience(source: Path, input_contract: AnalysisInputCont
     scenario_table = _table(workbook, "Scenario_Assumptions")
     options_table = _table(workbook, "Strategic_Options")
     kpi_table = _table(workbook, "Reported_KPIs")
-    mapping_headers = {
-        column
-        for table in (sales_table, fixed_table, scenario_table, options_table, kpi_table)
-        for column in getattr(table, "columns", ())
-    }
-    validate_mapping_targets(mapping_headers, contract.column_mappings)
-    sales_rows = apply_column_mappings(_rows(sales_table), contract.column_mappings, available_headers=mapping_headers)
-    fixed_rows = apply_column_mappings(_rows(fixed_table), contract.column_mappings, available_headers=mapping_headers)
-    scenario_rows = apply_column_mappings(_rows(scenario_table), contract.column_mappings, available_headers=mapping_headers)
-    option_rows = apply_column_mappings(_rows(options_table), contract.column_mappings, available_headers=mapping_headers)
-    kpi_rows = apply_column_mappings(_rows(kpi_table), contract.column_mappings, available_headers=mapping_headers)
-    for sheet, rows, columns in (
-        (sales_table.sheet, sales_rows, ("Quarter", "Region", "Segment", "Units", "List_Price", "Discount_pct", "Variable_Cost_per_Unit", "Revenue", "Gross_Profit")),
-        (fixed_table.sheet, fixed_rows, ("Segment", "Annual_Fixed_Cost_EUR")),
-        (scenario_table.sheet, scenario_rows, ("Scenario", "Demand_Growth", "Cost_Inflation", "Discount_Shift", "Fixed_Cost_Change")),
-        (options_table.sheet, option_rows, ("Option_ID", "Option", "Investment_EUR", "Time_to_Impact_Months", "Reversibility")),
-        (kpi_table.sheet, kpi_rows, ("KPI", "Reported_Value", "Unit")),
+    required_columns = (
+        (sales_table, ("Quarter", "Region", "Segment", "Units", "List_Price", "Discount_pct", "Variable_Cost_per_Unit", "Revenue", "Gross_Profit")),
+        (fixed_table, ("Segment", "Annual_Fixed_Cost_EUR")),
+        (scenario_table, ("Scenario", "Demand_Growth", "Cost_Inflation", "Discount_Shift", "Fixed_Cost_Change")),
+        (options_table, ("Option_ID", "Option", "Investment_EUR", "Time_to_Impact_Months", "Reversibility")),
+        (kpi_table, ("KPI", "Reported_Value", "Unit")),
+    )
+    sales_rows = apply_table_column_mappings(sales_table, _rows(sales_table), contract.column_mappings, required_columns[0][1])
+    fixed_rows = apply_table_column_mappings(fixed_table, _rows(fixed_table), contract.column_mappings, required_columns[1][1])
+    scenario_rows = apply_table_column_mappings(scenario_table, _rows(scenario_table), contract.column_mappings, required_columns[2][1])
+    option_rows = apply_table_column_mappings(options_table, _rows(options_table), contract.column_mappings, required_columns[3][1])
+    kpi_rows = apply_table_column_mappings(kpi_table, _rows(kpi_table), contract.column_mappings, required_columns[4][1])
+    for table, rows, columns in (
+        (sales_table, sales_rows, required_columns[0][1]),
+        (fixed_table, fixed_rows, required_columns[1][1]),
+        (scenario_table, scenario_rows, required_columns[2][1]),
+        (options_table, option_rows, required_columns[3][1]),
+        (kpi_table, kpi_rows, required_columns[4][1]),
     ):
-        require_row_columns(rows, sheet, columns)
+        require_row_columns(rows, table.sheet, columns)
     reporting_unit = contract.reporting_currency or contract.units or "EUR"
     evidence: list[Evidence] = []
     evidence_by_table_row: dict[tuple[str, int], Evidence] = {}

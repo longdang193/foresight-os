@@ -8,7 +8,7 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
-from foresight_os.analysis.workbook_inputs import apply_column_mappings, read_workbook, require_row_columns, require_table, row_evidence, table_rows, validate_mapping_targets
+from foresight_os.analysis.workbook_inputs import apply_table_column_mappings, read_workbook, require_row_columns, require_table, row_evidence, table_rows
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
@@ -128,23 +128,18 @@ def analyze_supplier_resilience(source: Path, input_contract: AnalysisInputContr
     conversion_rates = contract.conversion_rates
     reporting_unit = contract.reporting_currency or contract.units or "EUR"
     legacy_conversion = input_contract is None
-    mapping_headers = {
-        column
-        for table in (supplier_table, incident_table, scenario_table, option_table)
-        for column in getattr(table, "columns", ())
-    }
-    validate_mapping_targets(mapping_headers, contract.column_mappings)
+    required_columns = (
+        (supplier_table, ("Line_ID", "Supplier", "Country", "Part_Family", "Annual_Spend", "Currency", "Criticality_1_5", "Lead_Time_Days", "Defect_PPM", "Qualified_Alternatives", "Geo_Risk_1_5", "Unit_Cost")),
+        (incident_table, ("Incident_ID", "Date", "Supplier", "Part_Family", "Disruption_Days", "Expedite_Premium_pct")),
+        (scenario_table, ("Scenario", "Outage_Days", "Expedite_Premium", "Demand_at_Risk_pct")),
+        (option_table, ("Action", "One_Time_Cost_EUR", "Lead_Time_Months", "Reversibility", "Description")),
+    )
     supplier_rows, incident_rows, scenario_rows, option_rows = [
-        apply_column_mappings(_rows(table), contract.column_mappings, available_headers=mapping_headers)
-        for table in (supplier_table, incident_table, scenario_table, option_table)
+        apply_table_column_mappings(table, _rows(table), contract.column_mappings, columns)
+        for table, columns in required_columns
     ]
-    for sheet, rows, columns in (
-        (supplier_table.sheet, supplier_rows, ("Line_ID", "Supplier", "Country", "Part_Family", "Annual_Spend", "Currency", "Criticality_1_5", "Lead_Time_Days", "Defect_PPM", "Qualified_Alternatives", "Geo_Risk_1_5", "Unit_Cost")),
-        (incident_table.sheet, incident_rows, ("Incident_ID", "Date", "Supplier", "Part_Family", "Disruption_Days", "Expedite_Premium_pct")),
-        (scenario_table.sheet, scenario_rows, ("Scenario", "Outage_Days", "Expedite_Premium", "Demand_at_Risk_pct")),
-        (option_table.sheet, option_rows, ("Action", "One_Time_Cost_EUR", "Lead_Time_Months", "Reversibility", "Description")),
-    ):
-        require_row_columns(rows, sheet, columns)
+    for (table, columns), rows in zip(required_columns, (supplier_rows, incident_rows, scenario_rows, option_rows), strict=True):
+        require_row_columns(rows, table.sheet, columns)
     supplier_rows = [dict(row, __source_index=index) for index, row in enumerate(supplier_rows)]
     selected_entities = set(contract.entity_scope)
     if selected_entities:

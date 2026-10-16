@@ -37,6 +37,8 @@ def read_validation_source(
     workbook_context: WorkbookContext | None = None,
     _cache: Any = None,
 ) -> WorkbookReadResult:
+    if snapshot is not None and workbook_context is not None:
+        raise ValueError("snapshot and workbook_context are mutually exclusive")
     if workbook_context is not None:
         return workbook_context.read(str(source), selection or SheetSelection(include_hidden=True, include_hidden_rows=True))
     return spreadsheet_read(

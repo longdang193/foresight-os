@@ -1,6 +1,7 @@
 import inspect
 import asyncio
 import functools
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -325,6 +326,7 @@ def prepare_capability_context(
     load_local: bool = True,
     load_hosted: bool = True,
     bind_adapters: bool = True,
+    activate: bool = True,
 ) -> dict[str, Any]:
     """Build and validate the capability context shared by admission and runtime."""
     context = dict(run_context or {})
@@ -404,12 +406,38 @@ def prepare_capability_context(
     unavailable = [f"{key}: {item.reason}" for key, item in admitted.items() if not item.available]
     if unavailable:
         raise CapabilityUnavailableError(f"capabilities unavailable: {'; '.join(unavailable)}")
+    if not activate:
+        context["capability_resolutions"] = admitted
+        return context
     resolved = context["capability_resolver"].resolve(required, context)
     context["capability_resolutions"] = resolved
     unavailable = [f"{key}: {item.reason}" for key, item in resolved.items() if not item.available]
     if unavailable:
         raise CapabilityUnavailableError(f"capabilities unavailable: {'; '.join(unavailable)}")
     return context
+
+
+def admit_capability_context(
+    required_capabilities: tuple[str, ...] | list[str],
+    run_context: Mapping[str, Any] | None = None,
+    *,
+    scope: CapabilityScope | None = None,
+    human_approved: bool | None = None,
+    load_local: bool = True,
+    load_hosted: bool = True,
+    bind_adapters: bool = True,
+) -> dict[str, Any]:
+    """Validate capability metadata without activating factories or resources."""
+    return prepare_capability_context(
+        required_capabilities,
+        run_context,
+        scope=scope,
+        human_approved=human_approved,
+        load_local=load_local,
+        load_hosted=load_hosted,
+        bind_adapters=bind_adapters,
+        activate=False,
+    )
 
 
 def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, context: Mapping[str, Any], adapter_parameters: frozenset[str] | None = None):
@@ -421,7 +449,7 @@ def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, cont
     mode = definition.execution_mode
     parameters = adapter_parameters
 
-    def blocking_call(args: tuple[Any, ...], kwargs: dict[str, Any], cancel_event: asyncio.Event | None) -> Any:
+    def blocking_call(args: tuple[Any, ...], kwargs: dict[str, Any], cancel_event: threading.Event | None) -> Any:
         effective_kwargs = dict(kwargs)
         if definition.id in {"spreadsheet_read", "data_analysis", "calculation"} and scope is not None:
             from foresight_os.runtime.local_toolbelt import WorkbookContext
@@ -453,7 +481,7 @@ def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, cont
         metrics = context.get("metrics")
         started = time.perf_counter()
         queue_started = time.perf_counter()
-        cancel_event = asyncio.Event() if mode == ExecutionMode.BLOCKING else None
+        cancel_event = threading.Event() if mode == ExecutionMode.BLOCKING else None
         try:
             if budget is not None and not budget.reserve(tool_calls=1):
                 raise BudgetExceededError(f"maximum tool calls exceeded before dispatch: {definition.id}")
@@ -472,13 +500,29 @@ def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, cont
                     future = loop.run_in_executor(executor, blocking_call, args, dict(kwargs), cancel_event)
                     try:
                         result = await asyncio.shield(future)
-                    except asyncio.CancelledError:
+                    except asyncio.CancelledError as cancellation:
                         if cancel_event is not None:
                             cancel_event.set()
                         if metrics is not None:
                             metrics.cancellation_settlements += 1
-                        await asyncio.shield(future)
-                        raise
+                        worker_error: BaseException | None = None
+                        while not future.done():
+                            try:
+                                await asyncio.shield(future)
+                            except asyncio.CancelledError:
+                                continue
+                            except BaseException as error:
+                                worker_error = error
+                                break
+                        if worker_error is None:
+                            try:
+                                future.result()
+                            except BaseException as error:
+                                worker_error = error
+                        if worker_error is not None:
+                            if metrics is not None:
+                                metrics.record_failure(FailureClass.TOOL, worker_error)
+                        raise cancellation
                     workbook_context = getattr(scope, "workbook_context", None) if scope is not None else None
                     if workbook_context is not None:
                         workbook_context._enforce_budget()
@@ -490,17 +534,14 @@ def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, cont
                         if getattr(scope, "workbook_context", None) is None:
                             scope.workbook_context = WorkbookContext()
                         workbook_context = scope.workbook_context
-                        try:
-                            parameters = inspect.signature(dispatch).parameters
-                        except (TypeError, ValueError):
-                            parameters = {}
-                        if "_cache" in parameters:
+                        effective_parameters = parameters or frozenset()
+                        if "_cache" in effective_parameters:
                             effective_kwargs.setdefault("_cache", workbook_context.cache)
-                        if "_workbook_context" in parameters:
+                        if "_workbook_context" in effective_parameters:
                             effective_kwargs.setdefault("_workbook_context", workbook_context)
-                        if "_authority_index" in parameters:
+                        if "_authority_index" in effective_parameters:
                             effective_kwargs.setdefault("_authority_index", workbook_context.authority_index)
-                        if "_stats" in parameters:
+                        if "_stats" in effective_parameters:
                             effective_kwargs.setdefault("_stats", workbook_context.stats)
                     result = dispatch(*args, **effective_kwargs)
                     if inspect.isawaitable(result):
@@ -512,6 +553,10 @@ def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, cont
         except BudgetExceededError as error:
             if metrics is not None:
                 metrics.record_failure(FailureClass.BUDGET, error)
+            raise
+        except asyncio.CancelledError as error:
+            if metrics is not None:
+                metrics.record_failure(FailureClass.CANCELLATION, error)
             raise
         except BaseException as error:
             if metrics is not None:

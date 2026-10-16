@@ -1,6 +1,7 @@
 from copy import deepcopy
 
 from evaluation.probes.compare_optimization_receipts import compare, compare_repeats, validate_stability
+from evaluation.probes.optimization_measurement import MANDATORY_XLSX_WORKLOADS
 from foresight_os.runtime.metrics import RunMetrics
 
 
@@ -57,9 +58,13 @@ def _receipt() -> dict:
             "p95_ms": 10,
             "peak_allocation_bytes": 100,
             "deterministic_key": "same",
+            "timing_paths": {
+                name: {"wall_time_ms": 10}
+                for name in ("cold_workbook", "same_view_repeat", "repeated_investigation", "analyst_validator_reuse")
+            },
             "workloads": {
-                "base_workload": {"executed": True, "status": "VERIFIED", "limitation": None},
-                "final_only_workload": {"executed": True, "status": "FINAL_ONLY", "limitation": "no base counterpart"},
+                name: {"executed": True, "status": "VERIFIED", "correctness": "VERIFIED", "limitation": None}
+                for name in MANDATORY_XLSX_WORKLOADS
             },
         },
         "workload": {"fixture_sha256": "same", "warmups": 2, "measured_runs": 10, "patterns": list(PATTERNS)},
@@ -86,6 +91,10 @@ def _receipt() -> dict:
             "latency": {"status": "VERIFIED", "limitation": None},
             "allocation": {"status": "VERIFIED", "limitation": None},
             "soak": {"status": "VERIFIED", "limitation": None},
+        },
+        "acceptance_matrix": {
+            name: {"status": "VERIFIED", "correctness": "VERIFIED", "limitation": None}
+            for name in MANDATORY_XLSX_WORKLOADS
         },
     }
 
@@ -129,16 +138,16 @@ def test_comparator_rejects_missing_evidence_statuses():
     assert "evidence.latency.status" in result["missing_required_evidence"]["release"]
 
 
-def test_comparator_accepts_final_only_workloads_but_rejects_failed_workloads():
+def test_comparator_rejects_unverified_mandatory_workloads():
     baseline = _receipt()
     release = deepcopy(baseline)
     release["revision"]["commit"] = "release-commit"
     assert compare(baseline, release)["accepted"]
 
-    release["xlsx"]["workloads"]["final_only_workload"]["status"] = "FAILED"
+    release["xlsx"]["workloads"]["blocking_cancellation"]["status"] = "FINAL_ONLY"
     result = compare(baseline, release)
     assert not result["accepted"]
-    assert "xlsx.workloads.final_only_workload.status=not_failed" in result["missing_required_evidence"]["release"]
+    assert "xlsx.workloads.blocking_cancellation.status=VERIFIED" in result["missing_required_evidence"]["release"]
 
 
 def test_comparator_rejects_workload_pattern_and_resource_regressions():
@@ -153,6 +162,19 @@ def test_comparator_rejects_workload_pattern_and_resource_regressions():
     result = compare(baseline, release)
     assert not result["accepted"]
     assert "soak.monotonic_growth=false" in result["missing_required_evidence"]["release"]
+
+
+def test_comparator_rejects_large_warm_and_repeated_timing_path_regressions():
+    baseline = _receipt()
+    release = deepcopy(baseline)
+    release["xlsx"]["timing_paths"]["same_view_repeat"]["wall_time_ms"] = 25
+    release["xlsx"]["timing_paths"]["repeated_investigation"]["wall_time_ms"] = 25
+
+    result = compare(baseline, release)
+
+    assert not result["accepted"]
+    assert result["regression"]["timing_paths_pct"]["same_view_repeat"] == 150.0
+    assert result["regression"]["timing_paths_pct"]["repeated_investigation"] == 150.0
 
 
 def test_comparator_rejects_new_calls_for_reused_stage():

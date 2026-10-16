@@ -8,7 +8,7 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
-from foresight_os.analysis.workbook_inputs import apply_column_mappings, read_workbook, require_row_columns, require_table, row_evidence, table_rows, validate_mapping_targets
+from foresight_os.analysis.workbook_inputs import apply_table_column_mappings, read_workbook, require_row_columns, require_table, row_evidence, table_rows
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
@@ -109,24 +109,19 @@ def analyze_technology_radar(source: Path, input_contract: AnalysisInputContract
     digest = workbook.workbook_sha256
     brief, signal_table, relevance_table, competitor_table, signpost_table, priority_table = [_table(workbook, item) for item in ("Brief", "Signals", "Company_Relevance", "Competitor_Actions", "Scenario_Signposts", "Priority_Scoring")]
     selected_technologies = set(contract.entity_scope)
-    mapping_headers = {
-        column
-        for table in (signal_table, relevance_table, competitor_table, signpost_table, priority_table)
-        for column in getattr(table, "columns", ())
-    }
-    validate_mapping_targets(mapping_headers, contract.column_mappings)
+    required_columns = (
+        (signal_table, ("Signal_ID", "Technology", "Metric", "Source_Family", "Source_Quality_1_5", "Notes")),
+        (relevance_table, ("Technology", "Company_Relevance_1_5", "Potential_Impact_1_5", "Urgency_1_5")),
+        (competitor_table, ("Competitor", "Technology", "Action", "Expected_Year", "Source_Family")),
+        (signpost_table, ("Technology", "Signpost", "Threshold", "Review_Window", "Decision_Rule")),
+        (priority_table, ("Technology", "Naive_Product", "Caution")),
+    )
     signals, relevances, competitors, signposts, priorities = [
-        apply_column_mappings(_rows(table), contract.column_mappings, available_headers=mapping_headers)
-        for table in (signal_table, relevance_table, competitor_table, signpost_table, priority_table)
+        apply_table_column_mappings(table, _rows(table), contract.column_mappings, columns)
+        for table, columns in required_columns
     ]
-    for sheet, rows, columns in (
-        (signal_table.sheet, signals, ("Signal_ID", "Technology", "Metric", "Source_Family", "Source_Quality_1_5", "Notes")),
-        (relevance_table.sheet, relevances, ("Technology", "Company_Relevance_1_5", "Potential_Impact_1_5", "Urgency_1_5")),
-        (competitor_table.sheet, competitors, ("Competitor", "Technology", "Action", "Expected_Year", "Source_Family")),
-        (signpost_table.sheet, signposts, ("Technology", "Signpost", "Threshold", "Review_Window", "Decision_Rule")),
-        (priority_table.sheet, priorities, ("Technology", "Naive_Product", "Caution")),
-    ):
-        require_row_columns(rows, sheet, columns)
+    for (table, columns), rows in zip(required_columns, (signals, relevances, competitors, signposts, priorities), strict=True):
+        require_row_columns(rows, table.sheet, columns)
     evidence: list[Evidence] = []
     by_row: dict[tuple[str, int], Evidence] = {}
     for table in (signal_table, relevance_table, competitor_table, signpost_table, priority_table):

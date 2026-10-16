@@ -2,9 +2,15 @@ import argparse
 import json
 from pathlib import Path
 
+try:
+    from .optimization_measurement import MANDATORY_XLSX_WORKLOADS
+except ImportError:
+    from optimization_measurement import MANDATORY_XLSX_WORKLOADS
+
 
 SCHEMA_VERSION = 2
 REQUIRED_PATTERNS = {"DIRECT", "ANALYZE", "CONCURRENT", "HANDOFF", "CHALLENGE_RECOMMENDATION"}
+REQUIRED_TIMING_PATHS = ("cold_workbook", "same_view_repeat", "repeated_investigation", "analyst_validator_reuse")
 ECONOMIC_FIELDS = (
     "model_calls",
     "tool_calls_total",
@@ -48,6 +54,7 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
         "native_mcp",
         "workload",
         "acceptance",
+        "acceptance_matrix",
     )
     missing.extend(key for key in required if key not in receipt)
     if receipt.get("schema_version") != SCHEMA_VERSION:
@@ -128,7 +135,19 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
         missing.append("native_mcp.status=VERIFIED")
     if not receipt.get("workload", {}).get("patterns"):
         missing.append("workload.patterns")
-    for name, item in receipt.get("xlsx", {}).get("workloads", {}).items():
+    workloads = receipt.get("xlsx", {}).get("workloads", {})
+    for name in MANDATORY_XLSX_WORKLOADS:
+        item = workloads.get(name)
+        if not isinstance(item, dict):
+            missing.append(f"xlsx.workloads.{name}")
+            continue
+        if item.get("executed") is not True:
+            missing.append(f"xlsx.workloads.{name}.executed=true")
+        if item.get("status") != "VERIFIED":
+            missing.append(f"xlsx.workloads.{name}.status=VERIFIED")
+        if item.get("correctness") != "VERIFIED":
+            missing.append(f"xlsx.workloads.{name}.correctness=VERIFIED")
+    for name, item in workloads.items():
         status = item.get("status")
         if status not in MEASUREMENT_STATUSES:
             missing.append(f"xlsx.workloads.{name}.status")
@@ -136,6 +155,26 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
             missing.append(f"xlsx.workloads.{name}.status=not_failed")
         elif status != "VERIFIED" and not isinstance(item.get("limitation"), str):
             missing.append(f"xlsx.workloads.{name}.limitation")
+    timing_paths = workbook.get("timing_paths")
+    if not isinstance(timing_paths, dict):
+        missing.append("xlsx.timing_paths")
+    else:
+        for name in REQUIRED_TIMING_PATHS:
+            item = timing_paths.get(name)
+            if not isinstance(item, dict):
+                missing.append(f"xlsx.timing_paths.{name}")
+            elif not _is_number(item.get("wall_time_ms")) or float(item["wall_time_ms"]) <= 0:
+                missing.append(f"xlsx.timing_paths.{name}.wall_time_ms>0")
+    matrix = receipt.get("acceptance_matrix", {})
+    for name in MANDATORY_XLSX_WORKLOADS:
+        entry = matrix.get(name)
+        if not isinstance(entry, dict):
+            missing.append(f"acceptance_matrix.{name}")
+            continue
+        if entry.get("status") != "VERIFIED":
+            missing.append(f"acceptance_matrix.{name}.status=VERIFIED")
+        if entry.get("correctness") != "VERIFIED":
+            missing.append(f"acceptance_matrix.{name}.correctness=VERIFIED")
     return sorted(set(missing))
 
 
@@ -255,10 +294,18 @@ def compare(baseline: dict, release: dict) -> dict:
     p95_regression = _pct(float(release["xlsx"]["p95_ms"]), float(baseline["xlsx"]["p95_ms"])) if latency_measured else None
     allocation_regression = _pct(float(release["xlsx"]["peak_allocation_bytes"]), float(baseline["xlsx"]["peak_allocation_bytes"])) if allocation_measured else None
     rss_regression = _pct(float(release["resource"]["rss_bytes"]), float(baseline["resource"]["rss_bytes"]))
+    timing_path_regressions = {}
+    timing_path_comparisons = {}
+    for name in REQUIRED_TIMING_PATHS:
+        baseline_timing = float(baseline["xlsx"]["timing_paths"][name]["wall_time_ms"])
+        release_timing = float(release["xlsx"]["timing_paths"][name]["wall_time_ms"])
+        timing_path_regressions[name] = _pct(release_timing, baseline_timing)
+        timing_path_comparisons[name] = _comparison_metric(baseline_timing, release_timing)
     absolute = {
         "xlsx": {
             "p95_ms": _comparison_metric(float(baseline["xlsx"]["p95_ms"]), float(release["xlsx"]["p95_ms"])) if latency_measured else None,
             "peak_allocation_bytes": _comparison_metric(float(baseline["xlsx"]["peak_allocation_bytes"]), float(release["xlsx"]["peak_allocation_bytes"])) if allocation_measured else None,
+            "timing_paths": timing_path_comparisons,
         },
         "resource": {
             "rss_bytes": _comparison_metric(float(baseline["resource"]["rss_bytes"]), float(release["resource"]["rss_bytes"])),
@@ -286,16 +333,17 @@ def compare(baseline: dict, release: dict) -> dict:
         and (allocation_regression is None or allocation_regression <= 15)
         and rss_regression <= 15
         and all(value <= 20 for value in pattern_regressions.values())
+        and all(value <= 20 for value in timing_path_regressions.values())
         and non_regressive_economics
         and not reused_stage_new_calls
         and not unavailable_dimensions
     )
     return {
         "accepted": accepted,
-        "baseline": {"p95_ms": baseline["xlsx"]["p95_ms"], "peak_allocation_bytes": baseline["xlsx"]["peak_allocation_bytes"], "economics_per_accepted_finding": baseline_economics["per_accepted_finding"]},
-        "release": {"p95_ms": release["xlsx"]["p95_ms"], "peak_allocation_bytes": release["xlsx"]["peak_allocation_bytes"], "economics_per_accepted_finding": release_economics["per_accepted_finding"]},
+        "baseline": {"p95_ms": baseline["xlsx"]["p95_ms"], "peak_allocation_bytes": baseline["xlsx"]["peak_allocation_bytes"], "timing_paths": baseline["xlsx"]["timing_paths"], "economics_per_accepted_finding": baseline_economics["per_accepted_finding"]},
+        "release": {"p95_ms": release["xlsx"]["p95_ms"], "peak_allocation_bytes": release["xlsx"]["peak_allocation_bytes"], "timing_paths": release["xlsx"]["timing_paths"], "economics_per_accepted_finding": release_economics["per_accepted_finding"]},
         "absolute": absolute,
-        "regression": {"p95_pct": p95_regression, "peak_allocation_pct": allocation_regression, "rss_pct": rss_regression, "pattern_p95_pct": pattern_regressions, "economics_per_accepted_finding_delta": economic_regressions},
+        "regression": {"p95_pct": p95_regression, "peak_allocation_pct": allocation_regression, "rss_pct": rss_regression, "pattern_p95_pct": pattern_regressions, "timing_paths_pct": timing_path_regressions, "economics_per_accepted_finding_delta": economic_regressions},
         "accepted_finding_count": {"baseline": baseline_count, "release": int(release["accepted_finding_count"])},
         "workload": baseline["workload"],
         "native_mcp": {"baseline": baseline["native_mcp"]["status"], "release": release["native_mcp"]["status"]},

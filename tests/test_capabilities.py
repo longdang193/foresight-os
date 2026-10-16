@@ -9,6 +9,7 @@ from foresight_os.runtime.capabilities import (
     CapabilityOwnership,
     CapabilityResolver,
     CapabilityScope,
+    instrument_tool,
     prepare_capability_context,
 )
 from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
@@ -205,6 +206,14 @@ def test_factory_guides_json_safe_spreadsheet_tool_arguments():
     )
 
     assert "omit limits" in captured["instructions"].lower()
+
+
+def test_inline_scoped_capability_dispatch_preserves_adapter_parameters():
+    scope = CapabilityScope()
+    definition = CapabilityDefinition("calculation", "local_deterministic")
+    wrapped = instrument_tool(lambda: "ok", definition, {"scope": scope})
+
+    assert asyncio.run(wrapped()) == "ok"
 
 
 def test_prepare_capability_context_is_shared_and_preserves_fingerprints():

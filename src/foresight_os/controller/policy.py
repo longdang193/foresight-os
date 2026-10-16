@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-import json
 
 from foresight_os.controller.recipes import (
     INDEPENDENT_VALIDATION_POLICY,
@@ -403,15 +402,13 @@ def _recipe_for_patterns(
         max_total_agent_calls = max(max_total_agent_calls, planned_agent_calls)
 
     contracts = tuple(normalized_intent.contracts) if normalized_intent is not None else ()
-    has_explicit_stage_contracts = any(contract.stage_id for contract in contracts)
-
     def stage_analysis_domains(stage: object, index: int) -> tuple[str, ...]:
         if not contracts:
             return ()
         stage_id = str(getattr(stage, "stage_id", f"stage-{index}"))
-        if has_explicit_stage_contracts:
-            return tuple(contract.domain for contract in contracts if contract.stage_id == stage_id)
-        return tuple(contract.domain for contract in contracts)
+        domains = [contract.domain for contract in contracts if contract.stage_id is None]
+        domains.extend(contract.domain for contract in contracts if contract.stage_id == stage_id)
+        return tuple(dict.fromkeys(domains))
 
     stages = tuple(
         RecipeStage(
@@ -510,15 +507,6 @@ def _recipe_for_patterns(
                 need
                 for stage in work_stages
                 for need in stage_capabilities(stage)[1]
-            ),
-            "analysis_contract_domains": json.dumps(
-                {
-                    stage.stage_id: list(stage.analysis_domains)
-                    for stage in stages
-                    if stage.analysis_domains
-                },
-                sort_keys=True,
-                separators=(",", ":"),
             ),
             "decision_question": getattr(brief, "decision_question", "") if brief is not None else "",
             "horizon": getattr(brief, "horizon", "unspecified") if brief is not None else "unspecified",
