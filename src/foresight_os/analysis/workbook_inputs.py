@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import date
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from foresight_os.domain.models import Evidence, SourceLocator
 from foresight_os.runtime.local_toolbelt import ToolbeltError
@@ -19,6 +19,19 @@ def require_table(workbook: Any, sheet: str) -> Any:
 def table_rows(table: Any) -> list[dict[str, Any]]:
     columns = tuple(getattr(table, "columns", ()))
     return [dict(zip(columns, row, strict=False)) for row in getattr(table, "rows", ())]
+
+
+def apply_column_mappings(rows: Iterable[dict[str, Any]], mappings: Mapping[str, str] | None) -> list[dict[str, Any]]:
+    if not mappings:
+        return [dict(row) for row in rows]
+    normalized: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        for canonical, source in mappings.items():
+            if source in row:
+                item[str(canonical)] = row[source]
+        normalized.append(item)
+    return normalized
 
 
 def require_columns(table: Any, columns: Iterable[str]) -> None:

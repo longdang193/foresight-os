@@ -10,7 +10,7 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
-from foresight_os.analysis.workbook_inputs import require_table, row_evidence, table_rows
+from foresight_os.analysis.workbook_inputs import apply_column_mappings, require_table, row_evidence, table_rows
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import (
@@ -215,11 +215,21 @@ def analyze_portfolio_resilience(source: Path, input_contract: AnalysisInputCont
     scenario_table = _table(workbook, "Scenario_Assumptions")
     options_table = _table(workbook, "Strategic_Options")
     kpi_table = _table(workbook, "Reported_KPIs")
-    sales_rows = _rows(sales_table)
-    fixed_rows = _rows(fixed_table)
-    scenario_rows = _rows(scenario_table)
-    option_rows = _rows(options_table)
-    kpi_rows = _rows(kpi_table)
+    sales_rows = apply_column_mappings(_rows(sales_table), contract.column_mappings)
+    fixed_rows = apply_column_mappings(_rows(fixed_table), contract.column_mappings)
+    scenario_rows = apply_column_mappings(_rows(scenario_table), contract.column_mappings)
+    option_rows = apply_column_mappings(_rows(options_table), contract.column_mappings)
+    kpi_rows = apply_column_mappings(_rows(kpi_table), contract.column_mappings)
+    reporting_unit = contract.reporting_currency or contract.units or "EUR"
+    for rows in (sales_rows, fixed_rows, option_rows, kpi_rows):
+        for row in rows:
+            source_currency = str(row.get("Currency", "EUR"))
+            factor = 1.0 if source_currency == reporting_unit or not contract.conversion_rates else contract.conversion_rates.get(source_currency)
+            if factor is None:
+                continue
+            for field in ("Revenue", "Gross_Profit", "Variable_Cost_per_Unit", "List_Price", "Annual_Fixed_Cost_EUR", "Investment_EUR"):
+                if isinstance(row.get(field), (int, float)) and not isinstance(row.get(field), bool):
+                    row[field] = float(row[field]) * factor
     evidence: list[Evidence] = []
     evidence_by_table_row: dict[tuple[str, int], Evidence] = {}
     for table in (sales_table, fixed_table, scenario_table, options_table, kpi_table):
@@ -495,11 +505,11 @@ def analyze_portfolio_resilience(source: Path, input_contract: AnalysisInputCont
         calculations.append(
             CalculationRecord(
                 f"portfolio-baseline-{baseline.segment.lower().replace(' ', '-')}",
-                MeasurementKey(baseline.segment, "contribution_after_fixed_cost", selected_period, contract.units or "EUR"),
+                MeasurementKey(baseline.segment, "contribution_after_fixed_cost", selected_period, reporting_unit),
                 "gross_profit - annual_fixed_cost",
                 list(baseline.evidence_ids),
                 baseline.contribution_after_fixed_cost,
-                "EUR",
+                reporting_unit,
                 [f"Sales_History:{item}" for item in baseline.evidence_ids],
             )
         )
@@ -507,11 +517,11 @@ def analyze_portfolio_resilience(source: Path, input_contract: AnalysisInputCont
         calculations.append(
             CalculationRecord(
                 f"portfolio-{projection.scenario.lower()}-{projection.segment.lower().replace(' ', '-')}",
-                MeasurementKey(projection.segment, "scenario_contribution", projection.scenario, "EUR", projection.scenario),
+                MeasurementKey(projection.segment, "scenario_contribution", projection.scenario, reporting_unit, projection.scenario),
                 "projected_gross_profit - projected_fixed_cost",
                 list(projection.evidence_ids),
                 projection.projected_contribution,
-                "EUR",
+                reporting_unit,
                 [f"Sales_History:{item}" for item in projection.evidence_ids],
             )
         )

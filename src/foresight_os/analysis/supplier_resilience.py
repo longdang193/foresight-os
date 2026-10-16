@@ -9,7 +9,7 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
-from foresight_os.analysis.workbook_inputs import require_table, row_evidence, table_rows
+from foresight_os.analysis.workbook_inputs import apply_column_mappings, require_table, row_evidence, table_rows
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
@@ -125,9 +125,16 @@ def analyze_supplier_resilience(source: Path, input_contract: AnalysisInputContr
         compatibility_assumption="legacy supplier workbook FX map: EUR=1.0, USD=0.92, CNY=0.13",
     )
     contract.validate()
-    conversion_rates = contract.conversion_rates or None
+    conversion_rates = contract.conversion_rates
     legacy_conversion = input_contract is None
     supplier_rows, incident_rows, scenario_rows, option_rows = [_rows(table) for table in (supplier_table, incident_table, scenario_table, option_table)]
+    supplier_rows = [dict(row, __source_index=index) for index, row in enumerate(apply_column_mappings(supplier_rows, contract.column_mappings))]
+    selected_entities = set(contract.entity_scope)
+    if selected_entities:
+        supplier_rows = [
+            row for row in supplier_rows
+            if any(str(row.get(field, "")) in selected_entities for field in ("Supplier", "Country", "Part_Family"))
+        ]
     evidence: list[Evidence] = []
     by_row: dict[tuple[str, int], Evidence] = {}
     for table in (supplier_table, incident_table, scenario_table, option_table):
@@ -135,23 +142,29 @@ def analyze_supplier_resilience(source: Path, input_contract: AnalysisInputContr
             by_row[(table.sheet, index)] = _row_evidence(table, index, digest)
             evidence.append(by_row[(table.sheet, index)])
     issues: list[SupplierDataQualityIssue] = []
+    if selected_entities and not supplier_rows:
+        issues.append(SupplierDataQualityIssue("EMPTY_ENTITY_SCOPE", f"No supplier rows match the declared entity scope: {sorted(selected_entities)}.", ()))
     duplicate_indexes: set[int] = set()
     seen: dict[tuple[Any, ...], int] = {}
     for index, row in enumerate(supplier_rows):
         key = (row.get("Line_ID"), row.get("Supplier"), row.get("Part_Family"))
         if key in seen:
             duplicate_indexes.add(index)
-            issues.append(SupplierDataQualityIssue("DUPLICATE_LINE", f"Duplicate supplier-part line for {key}.", (by_row[(supplier_table.sheet, seen[key])].id, by_row[(supplier_table.sheet, index)].id)))
+            issues.append(SupplierDataQualityIssue("DUPLICATE_LINE", f"Duplicate supplier-part line for {key}.", (by_row[(supplier_table.sheet, seen[key])].id, by_row[(supplier_table.sheet, row["__source_index"])].id)))
         else:
-            seen[key] = index
+            seen[key] = row["__source_index"]
         if row.get("Qualified_Alternatives") is None:
-            issues.append(SupplierDataQualityIssue("MISSING_ALTERNATIVES", f"Qualified alternatives are missing for {row.get('Line_ID')}.", (by_row[(supplier_table.sheet, index)].id,)))
+            issues.append(SupplierDataQualityIssue("MISSING_ALTERNATIVES", f"Qualified alternatives are missing for {row.get('Line_ID')}.", (by_row[(supplier_table.sheet, row["__source_index"])].id,)))
+    if contract.duplicate_policy == "reject" and any(issue.kind == "DUPLICATE_LINE" for issue in issues):
+        raise ValueError("duplicate policy reject: supplier duplicate rows are present")
+    if contract.missing_value_policy == "reject" and any(issue.kind == "MISSING_ALTERNATIVES" for issue in issues):
+        raise ValueError("missing-value policy reject: supplier alternatives are missing")
     valid_rows = [(index, row) for index, row in enumerate(supplier_rows) if index not in duplicate_indexes]
     family_values: dict[str, list[tuple[int, dict[str, Any], float]]] = {}
     for index, row in valid_rows:
         fx = _fx(str(row.get("Currency", "EUR")), conversion_rates, legacy=legacy_conversion)
         if fx is None:
-            issues.append(SupplierDataQualityIssue("UNSUPPORTED_CONVERSION", f"No declared conversion rate for {row.get('Currency')}.", (by_row[(supplier_table.sheet, index)].id,)))
+            issues.append(SupplierDataQualityIssue("UNSUPPORTED_CONVERSION", f"No declared conversion rate for {row.get('Currency')}.", (by_row[(supplier_table.sheet, row["__source_index"])].id,)))
             continue
         spend = (_number(row.get("Annual_Spend")) or 0.0) * fx
         family_values.setdefault(str(row.get("Part_Family")), []).append((index, row, spend))
@@ -163,7 +176,7 @@ def analyze_supplier_resilience(source: Path, input_contract: AnalysisInputContr
         for index, row, _ in items:
             unit_cost = _unit_cost_eur(row, conversion_rates, legacy=legacy_conversion)
             if unit_cost is not None and (_number(row.get("Geo_Risk_1_5")) or 0.0) >= 4 and unit_cost <= median * 0.8:
-                issues.append(SupplierDataQualityIssue("LOW_COST_HIGH_RISK", f"{row.get('Supplier')} is low-cost relative to {family} but has high geographic risk.", (by_row[(supplier_table.sheet, index)].id,)))
+                issues.append(SupplierDataQualityIssue("LOW_COST_HIGH_RISK", f"{row.get('Supplier')} is low-cost relative to {family} but has high geographic risk.", (by_row[(supplier_table.sheet, row["__source_index"])].id,)))
     metrics: list[SupplierConcentrationMetric] = []
     for family, items in sorted(family_values.items()):
         by_supplier: dict[str, float] = {}
@@ -173,7 +186,7 @@ def analyze_supplier_resilience(source: Path, input_contract: AnalysisInputContr
             by_country[str(row.get("Country"))] = by_country.get(str(row.get("Country")), 0.0) + spend
         total = sum(by_supplier.values())
         shares = [value / total for value in by_supplier.values()] if total else []
-        metrics.append(SupplierConcentrationMetric(family, total, max(by_supplier.values(), default=0.0) / total if total else 0.0, max(by_country.values(), default=0.0) / total if total else 0.0, sum(share * share for share in shares), _weighted([(_number(row.get("Criticality_1_5")) or 0.0, spend) for _, row, spend in items]), _weighted([(_number(row.get("Qualified_Alternatives")) or 0.0, spend) for _, row, spend in items]), _weighted([(_number(row.get("Lead_Time_Days")) or 0.0, spend) for _, row, spend in items]), _weighted([(_number(row.get("Defect_PPM")) or 0.0, spend) for _, row, spend in items]), _weighted([(_number(row.get("Geo_Risk_1_5")) or 0.0, spend) for _, row, spend in items]), tuple(by_row[(supplier_table.sheet, index)].id for index, _, _ in items)))
+        metrics.append(SupplierConcentrationMetric(family, total, max(by_supplier.values(), default=0.0) / total if total else 0.0, max(by_country.values(), default=0.0) / total if total else 0.0, sum(share * share for share in shares), _weighted([(_number(row.get("Criticality_1_5")) or 0.0, spend) for _, row, spend in items]), _weighted([(_number(row.get("Qualified_Alternatives")) or 0.0, spend) for _, row, spend in items]), _weighted([(_number(row.get("Lead_Time_Days")) or 0.0, spend) for _, row, spend in items]), _weighted([(_number(row.get("Defect_PPM")) or 0.0, spend) for _, row, spend in items]), _weighted([(_number(row.get("Geo_Risk_1_5")) or 0.0, spend) for _, row, spend in items]), tuple(by_row[(supplier_table.sheet, row["__source_index"])].id for _, row, _ in items)))
     scenarios: list[SupplierScenarioProjection] = []
     for scenario_index, row in enumerate(scenario_rows):
         name = str(row.get("Scenario"))

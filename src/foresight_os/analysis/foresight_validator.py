@@ -302,6 +302,10 @@ def validate_exercises(validator_source: Path, exercise_dir: Path, input_contrac
             return input_contract[aliases[exercise]]
         if isinstance(input_contract, dict) and exercise in input_contract:
             return input_contract[exercise]
+        if isinstance(input_contract, dict) and input_contract.get("domain"):
+            return input_contract
+        if isinstance(input_contract, dict):
+            return None
         return input_contract
 
     analyses: dict[str, Any] = {

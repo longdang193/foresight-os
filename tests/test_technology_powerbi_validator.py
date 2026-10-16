@@ -12,6 +12,7 @@ from foresight_os.analysis.powerbi_strategic_portfolio import (
 from foresight_os.analysis.portfolio_resilience import analyze_portfolio_resilience
 from foresight_os.analysis.technology_radar import analyze_technology_radar, run_technology_radar_workflow
 from foresight_os.domain.challenge import derive_finding_views
+from foresight_os.domain.models import WorkBrief
 from foresight_os.persistence.analysis_store import AnalysisStore
 
 
@@ -118,3 +119,28 @@ def test_validator_workflow_persists_reviewed_report(tmp_path: Path):
     assert result.status == "accepted"
     assert result.report_path is not None and result.report_path.exists()
     assert all(item.accepted for item in derive_finding_views(result.analysis))
+
+
+def test_validator_workflow_preserves_legacy_brief_defaults(tmp_path: Path):
+    store = AnalysisStore(tmp_path / "legacy")
+    store.save_brief(
+        WorkBrief(
+            "legacy-validator",
+            "Validate the exercise workbooks",
+            [],
+            ["validation report"],
+            [],
+            [],
+            "assess",
+            "execute",
+        )
+    )
+
+    result = run_validator_workflow(
+        store,
+        EXERCISE / "06_ForesightOS_Validator_Key.xlsx",
+        EXERCISE,
+        human_decision="PENDING",
+    )
+
+    assert result.status == "pending"
