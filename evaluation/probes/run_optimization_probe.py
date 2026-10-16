@@ -17,7 +17,8 @@ from agent_framework import Agent, ChatResponse, ChatResponseUpdate, Content, Fu
 
 from foresight_os.controller.recipes import ExecutionPattern, RecipeName, make_recipe
 from foresight_os.runtime.capabilities import CapabilityDefinition, CapabilityScope, instrument_tool
-from foresight_os.runtime.local_toolbelt import AnalysisOperation, SheetSelection, data_analysis, spreadsheet_read
+from foresight_os.runtime.local_toolbelt import AnalysisOperation, SheetSelection, WorkbookContext, data_analysis, spreadsheet_read
+from foresight_os.analysis.independent_validation import run_independent_validation
 from foresight_os.runtime.workflow import run_recipe_async
 from optimization_measurement import _metric_snapshot, build_receipt, observed_xlsx_state, process_rss_bytes, stage_metric
 
@@ -143,6 +144,12 @@ def _measure_workbook(path: Path) -> dict[str, object]:
     table = result.tables[0]
     value_column = "Value" if "Value" in table.columns else table.columns[-1]
     analysis = data_analysis(table, AnalysisOperation("aggregate", value_column=value_column))
+    context = WorkbookContext()
+    context_selection = SheetSelection(include_hidden=True, include_hidden_rows=True)
+    context.read(path, context_selection)
+    context.read(path, context_selection)
+    validator_report = run_independent_validation(path, selection=context_selection, workbook_context=context)
+    context.currentness(path)
     return {
         "source": "fixture",
         "sheet_count": len(result.sheets),
@@ -154,6 +161,20 @@ def _measure_workbook(path: Path) -> dict[str, object]:
         "deterministic_key": analysis.deterministic_key,
         "source_hash": result.workbook_sha256,
         "local_tool_calls": 13,
+        "run_owned_context": {
+            "capture_count": context.stats.capture_count,
+            "capture_hash_count": context.stats.capture_hash_count,
+            "currentness_hash_count": context.stats.currentness_hash_count,
+            "xlsx_parse_count": context.stats.xlsx_parse_count,
+            "openpyxl_load_count": context.stats.openpyxl_load_count,
+            "cache_hits": context.stats.cache_hits,
+            "analysis_cache_hits": context.stats.analysis_cache_hits,
+            "snapshot_bytes": context.stats.snapshot_bytes,
+            "retained_read_result_bytes": context.stats.retained_read_result_bytes,
+            "retained_analysis_result_bytes": context.stats.retained_analysis_result_bytes,
+            "retained_authority_record_bytes": context.stats.retained_authority_record_bytes,
+            "validator_accepted": validator_report.accepted,
+        },
     }
 
 

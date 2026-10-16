@@ -81,10 +81,16 @@ class CapabilityScope:
     cache: dict[tuple[str, str, str], Any] = field(default_factory=dict)
     semaphores: dict[str, asyncio.Semaphore] = field(default_factory=dict)
     executor: ThreadPoolExecutor | None = None
+    workbook_context: Any = None
     workbook_cache: Any = None
     _closed: bool = field(default=False, init=False, repr=False)
 
+    def ensure_open(self) -> None:
+        if self._closed:
+            raise RuntimeError("capability scope is closed")
+
     def register(self, resource: Any, ownership: CapabilityOwnership = CapabilityOwnership.OWNED) -> Any:
+        self.ensure_open()
         if ownership == CapabilityOwnership.OWNED and all(item is not resource for item in self.resources):
             self.resources.append(resource)
         return resource
@@ -104,13 +110,15 @@ class CapabilityScope:
                 await asyncio.to_thread(executor.shutdown, wait=True, cancel_futures=False)
             except BaseException as error:
                 errors.append(error)
-        if self.workbook_cache is not None:
-            clear = getattr(self.workbook_cache, "clear", None)
+        workbook_owner = self.workbook_context or self.workbook_cache
+        if workbook_owner is not None:
+            clear = getattr(workbook_owner, "clear", None)
             if clear is not None:
                 try:
                     clear()
                 except BaseException as error:
                     errors.append(error)
+            self.workbook_context = None
             self.workbook_cache = None
         for resource in reversed(self.resources):
             close = getattr(resource, "close", None)
@@ -171,6 +179,7 @@ class CapabilityResolver:
         return capability_id, binding.fingerprint, str(binding.share_scope or definition.share_scope)
 
     def _resolve_one(self, capability_id: str, context: Mapping[str, Any], scope: CapabilityScope) -> CapabilityResolution:
+        scope.ensure_open()
         definition = self.definitions.get(capability_id)
         if definition is None:
             return CapabilityResolution(CapabilityDefinition(capability_id, "unknown"), CapabilityDecision.UNSUPPORTED, False, "capability is not defined")
@@ -205,6 +214,7 @@ class CapabilityResolver:
         return CapabilityResolution(definition, decision, True, reason, value)
 
     async def _resolve_one_async(self, capability_id: str, context: Mapping[str, Any], scope: CapabilityScope) -> CapabilityResolution:
+        scope.ensure_open()
         definition = self.definitions.get(capability_id)
         if definition is None:
             return CapabilityResolution(CapabilityDefinition(capability_id, "unknown"), CapabilityDecision.UNSUPPORTED, False, "capability is not defined")
@@ -268,6 +278,7 @@ def prepare_capability_context(
         context["scope"] = scope
     else:
         context.setdefault("scope", CapabilityScope())
+    context["scope"].ensure_open()
     if human_approved is not None:
         context["human_approved"] = human_approved
     context.setdefault("capability_resolver", CapabilityResolver())
@@ -352,13 +363,21 @@ def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, cont
 
     def blocking_call(args: tuple[Any, ...], kwargs: dict[str, Any], cancel_event: asyncio.Event | None) -> Any:
         effective_kwargs = dict(kwargs)
-        if definition.id in {"spreadsheet_read", "data_analysis"} and scope is not None:
-            accepts_cache = "_cache" in parameters if parameters is not None else False
-            if accepts_cache:
-                if getattr(scope, "workbook_cache", None) is None:
-                    from foresight_os.runtime.local_toolbelt import WorkbookReadCache
-                    scope.workbook_cache = WorkbookReadCache()
+        if definition.id in {"spreadsheet_read", "data_analysis", "calculation"} and scope is not None:
+            from foresight_os.runtime.local_toolbelt import WorkbookContext
+
+            if getattr(scope, "workbook_context", None) is None:
+                scope.workbook_context = WorkbookContext()
+                scope.workbook_cache = scope.workbook_context.cache
+            workbook_context = scope.workbook_context
+            if "_cache" in parameters:
                 effective_kwargs.setdefault("_cache", scope.workbook_cache)
+            if "_workbook_context" in parameters:
+                effective_kwargs.setdefault("_workbook_context", workbook_context)
+            if "_authority_index" in parameters:
+                effective_kwargs.setdefault("_authority_index", workbook_context.authority_index)
+            if "_stats" in parameters:
+                effective_kwargs.setdefault("_stats", workbook_context.stats)
         if cancel_event is not None:
             accepts_cancel = "cancel_check" in parameters if parameters is not None else False
             if accepts_cancel:
@@ -401,16 +420,36 @@ def _instrumented_dispatch(dispatch: Any, definition: CapabilityDefinition, cont
                             metrics.cancellation_settlements += 1
                         await asyncio.shield(future)
                         raise
+                    workbook_context = getattr(scope, "workbook_context", None) if scope is not None else None
+                    if workbook_context is not None:
+                        workbook_context._enforce_budget()
                 else:
                     effective_kwargs = dict(kwargs)
-                    if definition.id in {"spreadsheet_read", "data_analysis"} and scope is not None:
-                        if getattr(scope, "workbook_cache", None) is None:
-                            from foresight_os.runtime.local_toolbelt import WorkbookReadCache
-                            scope.workbook_cache = WorkbookReadCache()
-                        effective_kwargs.setdefault("_cache", scope.workbook_cache)
+                    if definition.id in {"spreadsheet_read", "data_analysis", "calculation"} and scope is not None:
+                        from foresight_os.runtime.local_toolbelt import WorkbookContext
+
+                        if getattr(scope, "workbook_context", None) is None:
+                            scope.workbook_context = WorkbookContext()
+                            scope.workbook_cache = scope.workbook_context.cache
+                        workbook_context = scope.workbook_context
+                        try:
+                            parameters = inspect.signature(dispatch).parameters
+                        except (TypeError, ValueError):
+                            parameters = {}
+                        if "_cache" in parameters:
+                            effective_kwargs.setdefault("_cache", scope.workbook_cache)
+                        if "_workbook_context" in parameters:
+                            effective_kwargs.setdefault("_workbook_context", workbook_context)
+                        if "_authority_index" in parameters:
+                            effective_kwargs.setdefault("_authority_index", workbook_context.authority_index)
+                        if "_stats" in parameters:
+                            effective_kwargs.setdefault("_stats", workbook_context.stats)
                     result = dispatch(*args, **effective_kwargs)
                     if inspect.isawaitable(result):
                         result = await result
+                    workbook_context = getattr(scope, "workbook_context", None) if scope is not None else None
+                    if workbook_context is not None:
+                        workbook_context._enforce_budget()
                 return result
         except BudgetExceededError as error:
             if metrics is not None:
@@ -523,7 +562,7 @@ def instrument_tool(tool: Any, definition: CapabilityDefinition, context: Mappin
         parameters=[
             parameter
             for parameter in public_signature.parameters.values()
-            if parameter.name not in {"cancel_check", "_cache"}
+            if parameter.name not in {"cancel_check", "_cache", "_snapshot", "_workbook_context", "_authority_index", "_stats"}
         ]
     )
     setattr(invoke, "__foresight_instrumented__", True)

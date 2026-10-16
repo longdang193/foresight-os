@@ -111,6 +111,16 @@ def test_resolver_reports_unavailable_and_human_mutation_denial():
     assert "approval" in result["write"].reason
 
 
+def test_closed_scope_rejects_new_resources_and_capability_resolution():
+    scope = CapabilityScope()
+    asyncio.run(scope.close())
+
+    with pytest.raises(RuntimeError, match="scope is closed"):
+        scope.register(object())
+    with pytest.raises(RuntimeError, match="scope is closed"):
+        CapabilityResolver().resolve(("spreadsheet_read",), {"scope": scope})
+
+
 def test_factory_rejects_participant_capability_denial():
     class Client:
         def as_agent(self, **kwargs):

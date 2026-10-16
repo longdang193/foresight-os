@@ -14,7 +14,7 @@ from foresight_os.analysis.independent_validation import (
     run_independent_validation,
 )
 from foresight_os.domain.challenge import ReviewSlotStatus
-from foresight_os.runtime.local_toolbelt import SheetSelection
+from foresight_os.runtime.local_toolbelt import SheetSelection, SourceSnapshot
 
 
 def make_workbook(path: Path) -> None:
@@ -52,6 +52,33 @@ def test_source_and_scope_checks_capture_hash_sheet_and_range(tmp_path):
     assert report.workbook_sha256 == result.workbook_sha256
     assert [check.status for check in report.checks] == [ReviewSlotStatus.PASS, ReviewSlotStatus.PASS]
     assert {"Offline", "Ecommerce"}.issubset({item.name for item in result.sheets})
+
+
+def test_independent_validation_reuses_supplied_snapshot(tmp_path, monkeypatch):
+    workbook = tmp_path / "ncc-fixture.xlsx"
+    make_workbook(workbook)
+    selection = SheetSelection(ranges=(("Offline", "A1:C3"),), include_hidden=True, include_hidden_rows=True)
+    snapshot = SourceSnapshot.capture(workbook)
+    captures = 0
+    original_capture = SourceSnapshot.capture
+
+    def capture(*args, **kwargs):
+        nonlocal captures
+        captures += 1
+        return original_capture(*args, **kwargs)
+
+    monkeypatch.setattr(SourceSnapshot, "capture", capture)
+    report = run_independent_validation(
+        workbook,
+        selection=selection,
+        snapshot=snapshot,
+        expected_sha256=snapshot.sha256,
+        expected_ranges=(("Offline", "A1:C3"),),
+        expected_sheets=("Offline",),
+    )
+
+    assert report.accepted
+    assert captures == 0
 
 
 def test_changed_hash_and_range_fail_without_editing_source(tmp_path):

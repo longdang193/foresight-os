@@ -35,10 +35,23 @@ def _revision_metadata() -> dict[str, str]:
         capture_output=True,
         text=True,
     ).stdout.strip()
+    tracked_paths = subprocess.run(
+        ["git", "ls-files", "-z", "--", "src", "tests", "evaluation", ".github", "README.md", "pyproject.toml"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+    ).stdout.split(b"\0")
+    source_digest = hashlib.sha256()
+    for raw_path in sorted(item for item in tracked_paths if item):
+        path = repo_root / raw_path.decode()
+        source_digest.update(raw_path)
+        source_digest.update(b"\0")
+        source_digest.update(path.read_bytes())
     return {
         "commit": revision,
         "repo_root": str(repo_root),
         "package_path": str(package_path),
+        "source_tree_sha256": source_digest.hexdigest(),
     }
 
 

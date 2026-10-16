@@ -99,8 +99,11 @@ The capability resolver then maps requested capability IDs to native tools,
 boundary adapters, deferred capabilities, or explicit unsupported decisions.
 
 Capability resources are scoped to a run. Owned resources are closed at scope
-end; borrowed resources are not closed by ForesightOS. This keeps external
-clients and local caches from leaking across investigations.
+end; borrowed resources are not closed by ForesightOS. Local workbook reads use
+one run-owned `WorkbookContext` under the capability scope. It retains bounded
+immutable source snapshots, selection-aware derived results, authority records,
+and reuse statistics, then clears them with the scope. This keeps external
+clients and workbook state from leaking across investigations.
 
 ### 4. Execution admission, execution, and receipts
 

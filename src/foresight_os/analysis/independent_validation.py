@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from foresight_os.domain.challenge import ReviewCheckResult, ReviewSlotStatus
-from foresight_os.runtime.local_toolbelt import SheetSelection, WorkbookReadResult, spreadsheet_read
+from foresight_os.runtime.local_toolbelt import SourceSnapshot, SheetSelection, WorkbookContext, WorkbookReadResult, spreadsheet_read
 
 
 class ValidationStatus(StrEnum):
@@ -33,11 +33,16 @@ def read_validation_source(
     source: str | Path,
     selection: SheetSelection | Mapping[str, Any] | None = None,
     *,
+    snapshot: SourceSnapshot | None = None,
+    workbook_context: WorkbookContext | None = None,
     _cache: Any = None,
 ) -> WorkbookReadResult:
+    if workbook_context is not None:
+        return workbook_context.read(str(source), selection or SheetSelection(include_hidden=True, include_hidden_rows=True))
     return spreadsheet_read(
         str(source),
         selection or SheetSelection(include_hidden=True, include_hidden_rows=True),
+        _snapshot=snapshot,
         _cache=_cache,
     )
 
@@ -216,6 +221,8 @@ def run_independent_validation(
     source: str | Path,
     *,
     selection: SheetSelection | Mapping[str, Any] | None = None,
+    snapshot: SourceSnapshot | None = None,
+    workbook_context: WorkbookContext | None = None,
     expected_sha256: str | None = None,
     expected_ranges: Sequence[tuple[str, str]] = (),
     expected_sheets: Sequence[str] = (),
@@ -225,7 +232,13 @@ def run_independent_validation(
     required_check_ids: Sequence[str] | None = None,
     _cache: Any = None,
 ) -> IndependentValidationReport:
-    result = read_validation_source(source, selection, _cache=_cache)
+    result = read_validation_source(
+        source,
+        selection,
+        snapshot=snapshot,
+        workbook_context=workbook_context,
+        _cache=_cache,
+    )
     selected = tuple(dict.fromkeys(required_check_ids)) if required_check_ids is not None else (
         "source_fidelity",
         "scope_reconciliation",

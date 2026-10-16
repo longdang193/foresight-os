@@ -47,6 +47,14 @@ CanonicalResultCommitter = Callable[
     CanonicalStageResult | None | Awaitable[CanonicalStageResult | None],
 ]
 
+_NON_RETRYABLE_VALIDATION_CODES = frozenset(
+    {"MATERIAL_CONFLICT", "SOURCE_STALE", "PROVIDER_INTERRUPTION", "BUDGET_EXHAUSTED"}
+)
+
+
+def _synthesis_error(code: str, message: str) -> ValidationError:
+    return ValidationError(message, code=code)
+
 
 class StaleReuseError(RuntimeError):
     """Raised when approved execution refuses to refresh a stale stage receipt."""
@@ -365,12 +373,18 @@ def _synthesize_stage_outputs(
     if len(outputs) == 1 and not failures:
         return outputs[0]
     if str(getattr(stage, "synthesis_policy", "")) != "aggregate-typed-results":
-        raise ValidationError(f"stage {getattr(stage, 'stage_id', 'stage')} requires an explicit synthesis policy")
+        raise _synthesis_error(
+            "MALFORMED_OUTPUT",
+            f"stage {getattr(stage, 'stage_id', 'stage')} requires an explicit synthesis policy",
+        )
     if not outputs or not all(isinstance(item, Mapping) for item in outputs):
         if allow_legacy_fallback:
             return outputs[-1] if outputs else None
-        raise ValidationError("typed stage synthesis requires mapping outputs")
+        raise _synthesis_error("MALFORMED_OUTPUT", "typed stage synthesis requires mapping outputs")
     typed_outputs = all("contract" in output and "stage_id" in output for output in outputs)
+    limits = dict(getattr(stage, "limits", {}) or {})
+    max_records = _positive_limit(limits.get("max_synthesis_records"), default=10_000, label="max_synthesis_records")
+    max_relationships = _positive_limit(limits.get("max_synthesis_relationships"), default=10_000, label="max_synthesis_relationships")
     normalized_outputs: list[Mapping[str, Any]] = []
     alias_records: dict[str, object] = {}
     alias_kinds: dict[str, RecordKind] = {}
@@ -500,8 +514,10 @@ def _synthesize_stage_outputs(
             if entries is None:
                 continue
             if not isinstance(entries, (list, tuple)):
-                raise ValidationError(f"typed stage synthesis requires a list for {key}")
+                raise _synthesis_error("MALFORMED_OUTPUT", f"typed stage synthesis requires a list for {key}")
             for entry in entries:
+                if len(merged) >= max_records:
+                    raise _synthesis_error("BUDGET_EXHAUSTED", f"typed stage synthesis exceeded {max_records} records")
                 record_id = entry.get("id") if isinstance(entry, Mapping) else None
                 if not record_id:
                     merged.append(entry)
@@ -514,11 +530,13 @@ def _synthesize_stage_outputs(
                 if _canonical_result_hash(existing) != _canonical_result_hash(entry):
                     if tolerate_conflicting_records:
                         continue
-                    raise ValidationError(f"conflicting canonical record for {key}:{record_id}")
+                    raise _synthesis_error("MATERIAL_CONFLICT", f"conflicting canonical record for {key}:{record_id}")
         return merged
 
     for key in collections:
         first[key] = merge_records(key)
+    if len(first["relationships"]) > max_relationships:
+        raise _synthesis_error("BUDGET_EXHAUSTED", f"typed stage synthesis exceeded {max_relationships} relationships")
     first["assumptions"] = [entry for output in outputs for entry in list(output.get("assumptions", []))]
     first["uncertainty"] = [entry for output in outputs for entry in list(output.get("uncertainty", []))]
     first["monitoring_indicators"] = [entry for output in outputs for entry in list(output.get("monitoring_indicators", []))]
@@ -701,6 +719,28 @@ def run_sequential_steps(stage_names: list[str]) -> dict[str, Any]:
     return asyncio.run(run())
 
 
+def _record_workbook_metrics(scope: CapabilityScope, metrics: RunMetrics) -> None:
+    workbook_context = getattr(scope, "workbook_context", None)
+    stats = getattr(workbook_context, "stats", None)
+    if stats is None:
+        return
+    for field in (
+        "capture_count",
+        "capture_hash_count",
+        "currentness_hash_count",
+        "xlsx_parse_count",
+        "openpyxl_load_count",
+        "cache_hits",
+        "analysis_cache_hits",
+        "snapshot_bytes",
+        "retained_read_result_bytes",
+        "retained_analysis_result_bytes",
+        "retained_authority_record_bytes",
+    ):
+        metric_field = "workbook_cache_hits" if field == "cache_hits" else field
+        setattr(metrics, metric_field, int(getattr(stats, field, 0) or 0))
+
+
 async def run_recipe_async(
     recipe: ExecutionRecipe,
     prompt: str,
@@ -876,6 +916,7 @@ async def run_recipe_async(
             stage_skill_ids,
             selected_skills_by_participant,
         )
+        cache_key = semantic_fingerprint
         stage_context["stage_fingerprints"] = (semantic_fingerprint, execution_policy_fingerprint)
         stage_context["result_contract"] = str(getattr(stage, "result_contract", ANALYSIS_STAGE_RESULT_CONTRACT))
         stage_context["require_structured_output"] = bool(context.get("require_structured_output", False))
@@ -1037,7 +1078,9 @@ async def run_recipe_async(
                     canonical = await canonical
                 break
             except ValidationError as error:
-                if not budget.correct():
+                recovery_code = getattr(error, "code", None)
+                stage_context["last_recovery_code"] = recovery_code
+                if recovery_code in _NON_RETRYABLE_VALIDATION_CODES or not budget.correct():
                     raise
                 metrics.correction_rounds += 1
                 if (
@@ -1145,6 +1188,7 @@ async def run_recipe_async(
             for requested in brief.desired_deliverables
         }
 
+
     primary_error: BaseException | None = None
     try:
         stages = recipe.stages or ()
@@ -1194,6 +1238,7 @@ async def run_recipe_async(
         raise
     finally:
         metrics.wall_time_ms = round((time.perf_counter() - started) * 1000)
+        _record_workbook_metrics(scope, metrics)
         if owns_scope:
             metrics.cleanup_complete = False
             try:

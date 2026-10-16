@@ -64,6 +64,17 @@ class RunMetrics:
     cache_hits: int = 0
     reused_stages: int = 0
     reassessed_stages: int = 0
+    capture_count: int = 0
+    capture_hash_count: int = 0
+    currentness_hash_count: int = 0
+    xlsx_parse_count: int = 0
+    openpyxl_load_count: int = 0
+    workbook_cache_hits: int = 0
+    analysis_cache_hits: int = 0
+    snapshot_bytes: int = 0
+    retained_read_result_bytes: int = 0
+    retained_analysis_result_bytes: int = 0
+    retained_authority_record_bytes: int = 0
     human_correction: int = 0
     input_tokens: int | None = None
     output_tokens: int | None = None
