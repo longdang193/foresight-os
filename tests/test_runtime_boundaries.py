@@ -1,6 +1,7 @@
 import asyncio
 import inspect
 import time
+from pathlib import Path
 from types import SimpleNamespace
 import pytest
 
@@ -514,6 +515,32 @@ def test_blocking_capability_runs_off_event_loop_and_settles_cancellation():
         await scope.close()
         assert metrics.cancellation_settlements == 1
         assert scope.executor is None
+
+
+def test_instrumented_workbook_tools_share_one_scope_context():
+    async def scenario():
+        workbook_path = Path(__file__).parent / "fixtures" / "analyst_multisheet.xlsx"
+        scope = CapabilityScope(ownership=ScopeOwnership.RUN)
+        wrapped = instrument_tool(
+            spreadsheet_read,
+            CapabilityDefinition("spreadsheet_read", "local_deterministic", execution_mode=ExecutionMode.BLOCKING),
+            {"scope": scope},
+        )
+        first = await wrapped(str(workbook_path))
+        second = await wrapped(str(workbook_path))
+
+        assert first.workbook_sha256 == second.workbook_sha256
+        assert scope.workbook_context is not None
+        assert scope.workbook_context.stats.capture_count == 1
+        assert scope.workbook_context.stats.capture_hash_count == 1
+        assert scope.workbook_context.stats.xlsx_parse_count == 1
+        assert scope.workbook_context.stats.cache_hits == 1
+
+        await scope.close()
+        assert scope.workbook_context is None
+        assert scope.workbook_cache is None
+
+    asyncio.run(scenario())
 
     asyncio.run(scenario())
 

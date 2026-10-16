@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from foresight_os.domain.challenge import ReviewCheckResult, ReviewSlotStatus
-from foresight_os.runtime.local_toolbelt import SheetSelection, WorkbookReadResult, spreadsheet_read
+from foresight_os.runtime.local_toolbelt import SourceSnapshot, SheetSelection, WorkbookContext, WorkbookReadResult, spreadsheet_read
 
 
 class ValidationStatus(StrEnum):
@@ -29,10 +29,19 @@ class IndependentValidationReport:
         )
 
 
-def read_validation_source(source: str | Path, selection: SheetSelection | Mapping[str, Any] | None = None) -> WorkbookReadResult:
+def read_validation_source(
+    source: str | Path,
+    selection: SheetSelection | Mapping[str, Any] | None = None,
+    *,
+    snapshot: SourceSnapshot | None = None,
+    workbook_context: WorkbookContext | None = None,
+) -> WorkbookReadResult:
+    if workbook_context is not None:
+        return workbook_context.read(str(source), selection or SheetSelection(include_hidden=True, include_hidden_rows=True))
     return spreadsheet_read(
         str(source),
         selection or SheetSelection(include_hidden=True, include_hidden_rows=True),
+        _snapshot=snapshot,
     )
 
 
@@ -210,6 +219,8 @@ def run_independent_validation(
     source: str | Path,
     *,
     selection: SheetSelection | Mapping[str, Any] | None = None,
+    snapshot: SourceSnapshot | None = None,
+    workbook_context: WorkbookContext | None = None,
     expected_sha256: str | None = None,
     expected_ranges: Sequence[tuple[str, str]] = (),
     expected_sheets: Sequence[str] = (),
@@ -217,7 +228,7 @@ def run_independent_validation(
     calculations: Sequence[ReviewCheckResult] = (),
     missing_inputs: Sequence[str] = (),
 ) -> IndependentValidationReport:
-    result = read_validation_source(source, selection)
+    result = read_validation_source(source, selection, snapshot=snapshot, workbook_context=workbook_context)
     checks = (
         source_fidelity_check(result, expected_sha256=expected_sha256, expected_ranges=expected_ranges),
         scope_reconciliation_check(

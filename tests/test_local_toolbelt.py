@@ -13,9 +13,11 @@ from foresight_os.runtime.local_toolbelt import (
     AnalysisOperation,
     FormulaStatus,
     SheetSelection,
+    SourceSnapshot,
     ToolbeltLimits,
     ToolbeltError,
     TypedMeasurement,
+    WorkbookContext,
     _implicit_xlsx_bounds,
     calculation,
     data_analysis,
@@ -31,6 +33,78 @@ def test_provider_tool_paths_are_json_string_boundaries():
 
     assert get_type_hints(bindings["spreadsheet_read"].value)["source"] is str
     assert get_type_hints(bindings["powerbi_project_read"].value)["source"] is str
+
+
+def test_source_snapshot_is_byte_exact_and_detects_currentness(tmp_path: Path):
+    source = tmp_path / "snapshot.csv"
+    source.write_bytes(b"Region,Value\nNorth,10\n")
+
+    snapshot = SourceSnapshot.capture(source)
+
+    assert snapshot.byte_count == len(snapshot.content)
+    assert snapshot.sha256 == hashlib.sha256(snapshot.content).hexdigest()
+    assert snapshot.is_current()
+
+    source.write_bytes(b"Region,Value\nNorth,11\n")
+
+    assert not snapshot.is_current()
+
+
+def test_spreadsheet_read_uses_one_capture_for_cache_identity(workbook_path: Path, monkeypatch):
+    cache = WorkbookReadCache()
+    captures = 0
+    original_capture = SourceSnapshot.capture
+
+    def capture(*args, **kwargs):
+        nonlocal captures
+        captures += 1
+        return original_capture(*args, **kwargs)
+
+    monkeypatch.setattr(SourceSnapshot, "capture", capture)
+
+    first = spreadsheet_read(workbook_path, _cache=cache)
+    second = spreadsheet_read(workbook_path, _cache=cache)
+
+    assert first.workbook_sha256 == second.workbook_sha256
+    assert captures == 2
+    assert cache.size == 1
+
+
+def test_workbook_context_reuses_identical_views_without_reusing_different_selection(workbook_path: Path):
+    context = WorkbookContext()
+    selection = SheetSelection(sheet_names=("Demand",), include_hidden=True, include_hidden_rows=True)
+
+    first = context.read(workbook_path, selection)
+    second = context.read(workbook_path, selection)
+    different = context.read(workbook_path, SheetSelection(sheet_names=("Assumptions",), include_hidden=True))
+
+    assert first.workbook_sha256 == second.workbook_sha256 == different.workbook_sha256
+    assert context.stats.capture_count == 1
+    assert context.stats.capture_hash_count == 1
+    assert context.stats.xlsx_parse_count == 2
+    assert context.stats.cache_hits == 1
+    assert context.stats.openpyxl_load_count == 4
+
+
+def test_workbook_context_currentness_and_cleanup_are_explicit(tmp_path: Path):
+    source = tmp_path / "context.csv"
+    source.write_text("Region,Value\nNorth,10\n", encoding="utf-8")
+    context = WorkbookContext()
+
+    context.capture(source)
+    assert context.currentness(source)
+    source.write_text("Region,Value\nNorth,11\n", encoding="utf-8")
+    assert not context.currentness(source)
+    assert context.stats.currentness_hash_count == 2
+
+    context.clear()
+
+    assert context.snapshots == {}
+    assert context.cache.size == 0
+    assert context.authority_index.size == 0
+    assert context.stats.snapshot_bytes == 0
+    with pytest.raises(ToolbeltError, match="context is closed"):
+        context.capture(source)
 
 
 def test_provider_spreadsheet_arguments_are_json_coerced(workbook_path: Path):

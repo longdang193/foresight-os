@@ -31,6 +31,7 @@ from foresight_os.runtime.local_toolbelt import (
     AnalysisOperation,
     FormulaStatus,
     SheetSelection,
+    SourceSnapshot,
     ToolbeltError,
     data_analysis,
     spreadsheet_read,
@@ -247,12 +248,13 @@ def run_xlsx_finding_workflow(
     selection: SheetSelection | None = None,
     investigation_id: str = "xlsx-evidence-workflow",
     human_decision: str = "REJECT",
+    snapshot: SourceSnapshot | None = None,
 ) -> EvidenceWorkflowResult:
     """Promote a deterministic workbook analysis into reviewable domain state."""
     try:
-        before = hashlib.sha256(Path(source).read_bytes()).hexdigest()
-        workbook = spreadsheet_read(Path(source), selection)
-        if before != hashlib.sha256(Path(source).read_bytes()).hexdigest():
+        snapshot = snapshot or SourceSnapshot.capture(source)
+        workbook = spreadsheet_read(Path(source), selection, _snapshot=snapshot)
+        if not snapshot.is_current():
             raise ToolbeltError("source workbook changed during read")
         if not workbook.tables:
             raise ToolbeltError("workbook selection produced no table")

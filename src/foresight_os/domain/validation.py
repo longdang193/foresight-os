@@ -14,6 +14,10 @@ from .relationships import RecordKind, relationship_rule
 class ValidationError(ValueError):
     """Raised when a durable Foresight OS record violates its trust boundary."""
 
+    def __init__(self, message: str, *, code: str | None = None):
+        super().__init__(message)
+        self.code = code
+
 
 CURRENT_SCHEMA_VERSION = 2
 
