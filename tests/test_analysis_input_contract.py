@@ -344,6 +344,14 @@ def test_powerbi_missing_column_mapping_does_not_fallback_to_canonical_data():
         )
 
 
+def test_powerbi_mapping_source_in_another_table_fails_for_consuming_table():
+    with pytest.raises(ToolbeltError, match="MISSING_MAPPED_COLUMN.*Market_Type"):
+        analyze_powerbi_strategic_portfolio(
+            Path("tests/fixtures/exercise/05_PowerBI_Strategic_Portfolio.xlsx"),
+            AnalysisInputContract(domain="powerbi_strategic_portfolio", column_mappings={"Revenue_EUR": "Market_Type"}),
+        )
+
+
 def test_powerbi_column_mapping_reaches_optional_refresh_timestamp_consumption(tmp_path):
     from openpyxl import load_workbook
 
@@ -354,6 +362,10 @@ def test_powerbi_column_mapping_reaches_optional_refresh_timestamp_consumption(t
     header_row = next(row for row in fact_sheet.iter_rows() if any(cell.value == "Refresh_Timestamp" for cell in row))
     refresh_column = next(index for index, cell in enumerate(header_row, start=1) if cell.value == "Refresh_Timestamp")
     header_row[refresh_column - 1].value = "UpdatedAt"
+    dashboard_sheet = workbook["Dashboard_Snapshot"]
+    dashboard_header_row = next(row for row in dashboard_sheet.iter_rows() if any(cell.value == "Refresh_Timestamp" for cell in row))
+    dashboard_refresh_column = next(index for index, cell in enumerate(dashboard_header_row, start=1) if cell.value == "Refresh_Timestamp")
+    dashboard_header_row[dashboard_refresh_column - 1].value = "UpdatedAt"
     first_data_row = header_row[0].row + 1
     fact_sheet.cell(first_data_row, refresh_column).value = "2026-11-01"
     workbook.save(source)

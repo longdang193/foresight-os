@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
@@ -11,7 +12,7 @@ from foresight_os.domain.models import AnalysisState, Revision
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.runtime.page_retrieval import PageRetrievalCapability
 from foresight_os.runtime.web_search import WebSearchHit
-from foresight_os.runtime.local_toolbelt import AnalysisOperation, SheetSelection, SourceSnapshot, WorkbookContext
+from foresight_os.runtime.local_toolbelt import AnalysisOperation, SheetSelection, SourceSnapshot, ToolbeltLimits, WorkbookContext
 import openpyxl
 
 
@@ -299,3 +300,370 @@ def test_xlsx_finding_workflow_rejects_snapshot_and_context_together(tmp_path: P
 
     assert result.status == "failed"
     assert result.failure == "ValueError"
+
+
+def test_xlsx_finding_workflow_rejects_oversized_standalone_input_before_parse(tmp_path: Path, monkeypatch):
+    from foresight_os.analysis import evidence_workflow
+    from foresight_os.analysis.evidence_workflow import run_xlsx_finding_workflow
+
+    source = tmp_path / "oversized.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Demand"
+    sheet.append(["Value"])
+    sheet.append([10])
+    sheet.tables.add(openpyxl.worksheet.table.Table(displayName="DemandTable", ref="A1:A2"))
+    workbook.save(source)
+
+    monkeypatch.setattr(evidence_workflow, "spreadsheet_read", lambda *_args, **_kwargs: pytest.fail("parse should not run"))
+    result = run_xlsx_finding_workflow(
+        AnalysisStore(tmp_path / "oversized-case"),
+        source,
+        AnalysisOperation("sum", value_column="Value"),
+        selection=SheetSelection(tables=(("Demand", "DemandTable"),)),
+        limits=ToolbeltLimits(max_bytes=1),
+        human_decision="PENDING",
+    )
+
+    assert result.status == "failed"
+    assert result.failure == "ToolbeltError"
+
+
+def test_xlsx_finding_workflow_closes_only_workflow_owned_context(tmp_path: Path, monkeypatch):
+    from foresight_os.analysis.evidence_workflow import run_xlsx_finding_workflow
+
+    source = tmp_path / "owned-context.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Demand"
+    sheet.append(["Value"])
+    sheet.append([10])
+    sheet.tables.add(openpyxl.worksheet.table.Table(displayName="DemandTable", ref="A1:A2"))
+    workbook.save(source)
+    cleared = []
+    original_clear = WorkbookContext.clear
+
+    def record_clear(context):
+        cleared.append(context)
+        original_clear(context)
+
+    monkeypatch.setattr(WorkbookContext, "clear", record_clear)
+    result = run_xlsx_finding_workflow(
+        AnalysisStore(tmp_path / "owned-context-case"),
+        source,
+        AnalysisOperation("sum", value_column="Value"),
+        selection=SheetSelection(tables=(("Demand", "DemandTable"),)),
+        human_decision="PENDING",
+    )
+
+    assert result.status == "pending"
+    assert len(cleared) == 1
+    assert cleared[0]._closed is True
+
+
+def test_xlsx_finding_workflow_keeps_caller_context_open_and_reuses_snapshot(tmp_path: Path, monkeypatch):
+    from foresight_os.analysis import evidence_workflow
+    from foresight_os.analysis.evidence_workflow import run_xlsx_finding_workflow
+
+    source = tmp_path / "caller-context.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Demand"
+    sheet.append(["Value"])
+    sheet.append([10])
+    sheet.tables.add(openpyxl.worksheet.table.Table(displayName="DemandTable", ref="A1:A2"))
+    workbook.save(source)
+    context = WorkbookContext()
+    snapshot = SourceSnapshot.capture(source)
+
+    def fail_capture(*_args, **_kwargs):
+        raise AssertionError("caller snapshot must not be recaptured")
+
+    monkeypatch.setattr(evidence_workflow.SourceSnapshot, "capture", fail_capture)
+    first = run_xlsx_finding_workflow(
+        AnalysisStore(tmp_path / "caller-context-case"),
+        source,
+        AnalysisOperation("sum", value_column="Value"),
+        selection=SheetSelection(tables=(("Demand", "DemandTable"),)),
+        snapshot=snapshot,
+        human_decision="PENDING",
+    )
+    monkeypatch.undo()
+    second = run_xlsx_finding_workflow(
+        AnalysisStore(tmp_path / "caller-context-case-two"),
+        source,
+        AnalysisOperation("sum", value_column="Value"),
+        selection=SheetSelection(tables=(("Demand", "DemandTable"),)),
+        workbook_context=context,
+        human_decision="PENDING",
+    )
+
+    assert first.status == second.status == "pending"
+    assert context._closed is False
+
+
+def test_xlsx_finding_workflow_cancellation_rolls_back_before_publication(tmp_path: Path, monkeypatch):
+    from foresight_os.analysis.evidence_workflow import run_xlsx_finding_workflow
+
+    source = tmp_path / "cancelled.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Demand"
+    sheet.append(["Value"])
+    sheet.append([10])
+    sheet.tables.add(openpyxl.worksheet.table.Table(displayName="DemandTable", ref="A1:A2"))
+    workbook.save(source)
+    store = AnalysisStore(tmp_path / "cancelled-case")
+    context = WorkbookContext()
+    prior = run_xlsx_finding_workflow(
+        store,
+        source,
+        AnalysisOperation("sum", value_column="Value"),
+        selection=SheetSelection(tables=(("Demand", "DemandTable"),)),
+        workbook_context=context,
+        human_decision="ACCEPT",
+    )
+    before_retained = (context.cache.size, context.cache.analysis_bytes, context.authority_index.estimated_bytes, len(context.snapshots))
+    cancelled = False
+
+    def cancel_after_analysis():
+        nonlocal cancelled
+        cancelled = True
+
+    original_enforce_budget = context.enforce_budget
+
+    def enforce_then_cancel():
+        original_enforce_budget()
+        cancel_after_analysis()
+
+    monkeypatch.setattr(context, "enforce_budget", enforce_then_cancel)
+    result = run_xlsx_finding_workflow(
+        store,
+        source,
+        AnalysisOperation("sum", value_column="Value"),
+        selection=SheetSelection(tables=(("Demand", "DemandTable"),)),
+        workbook_context=context,
+        cancel_check=lambda: cancelled,
+        human_decision="ACCEPT",
+    )
+
+    assert prior.status == "accepted"
+    assert result.status == "failed"
+    assert result.failure == "ToolbeltError"
+    assert store.load_analysis().revision_status.value == "ACCEPTED"
+    assert (context.cache.size, context.cache.analysis_bytes, context.authority_index.estimated_bytes, len(context.snapshots)) == before_retained
+    assert context._closed is False
+
+
+def test_xlsx_finding_workflow_rolls_back_store_when_cancelled_after_pending_save(tmp_path: Path, monkeypatch):
+    from foresight_os.analysis.evidence_workflow import run_xlsx_finding_workflow
+
+    source = tmp_path / "cancel-after-pending.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Demand"
+    sheet.append(["Value"])
+    sheet.append([10])
+    sheet.tables.add(openpyxl.worksheet.table.Table(displayName="DemandTable", ref="A1:A2"))
+    workbook.save(source)
+    store = AnalysisStore(tmp_path / "cancel-after-pending-case")
+    prior = run_xlsx_finding_workflow(
+        store,
+        source,
+        AnalysisOperation("sum", value_column="Value"),
+        selection=SheetSelection(tables=(("Demand", "DemandTable"),)),
+        human_decision="ACCEPT",
+    )
+    accepted_before = store.analysis_path.read_bytes()
+    cancelled = False
+    original_save_pending_if_unchanged = store.save_pending_if_unchanged
+
+    def save_then_cancel(state, expected_snapshot):
+        nonlocal cancelled
+        result = original_save_pending_if_unchanged(state, expected_snapshot)
+        cancelled = True
+        return result
+
+    monkeypatch.setattr(store, "save_pending_if_unchanged", save_then_cancel)
+    result = run_xlsx_finding_workflow(
+        store,
+        source,
+        AnalysisOperation("sum", value_column="Value"),
+        selection=SheetSelection(tables=(("Demand", "DemandTable"),)),
+        cancel_check=lambda: cancelled,
+        human_decision="ACCEPT",
+    )
+
+    assert prior.status == "accepted"
+    assert result.status == "failed"
+    assert result.failure == "ToolbeltError"
+    assert store.analysis_path.read_bytes() == accepted_before
+    assert not store.pending_analysis_path.exists()
+
+
+def test_xlsx_finding_workflow_settles_accepted_when_cancelled_after_commit(tmp_path: Path, monkeypatch):
+    from foresight_os.analysis.evidence_workflow import run_xlsx_finding_workflow
+
+    source = tmp_path / "cancel-after-commit.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Demand"
+    sheet.append(["Value"])
+    sheet.append([10])
+    sheet.tables.add(openpyxl.worksheet.table.Table(displayName="DemandTable", ref="A1:A2"))
+    workbook.save(source)
+    store = AnalysisStore(tmp_path / "cancel-after-commit-case")
+    cancelled = False
+    original_commit_revision = store.commit_revision
+
+    def commit_then_cancel(state, expected_revision, accepted):
+        nonlocal cancelled
+        result = original_commit_revision(state, expected_revision, accepted)
+        cancelled = True
+        return result
+
+    monkeypatch.setattr(store, "commit_revision", commit_then_cancel)
+    result = run_xlsx_finding_workflow(
+        store,
+        source,
+        AnalysisOperation("sum", value_column="Value"),
+        selection=SheetSelection(tables=(("Demand", "DemandTable"),)),
+        cancel_check=lambda: cancelled,
+        human_decision="ACCEPT",
+    )
+
+    assert result.status == "accepted"
+    assert store.load_analysis().revision_status.value == "ACCEPTED"
+    assert not store.pending_analysis_path.exists()
+
+
+def test_xlsx_finding_workflow_does_not_rollback_concurrent_accepted_revision(tmp_path: Path, monkeypatch):
+    from foresight_os.analysis.evidence_workflow import run_xlsx_finding_workflow
+
+    source = tmp_path / "cancel-concurrent-writer.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Demand"
+    sheet.append(["Value"])
+    sheet.append([10])
+    sheet.tables.add(openpyxl.worksheet.table.Table(displayName="DemandTable", ref="A1:A2"))
+    workbook.save(source)
+    store = AnalysisStore(tmp_path / "cancel-concurrent-writer-case")
+    prior = run_xlsx_finding_workflow(
+        store,
+        source,
+        AnalysisOperation("sum", value_column="Value"),
+        selection=SheetSelection(tables=(("Demand", "DemandTable"),)),
+        human_decision="ACCEPT",
+    )
+    cancelled = False
+    pending_state = None
+    original_save_pending_if_unchanged = store.save_pending_if_unchanged
+
+    def save_then_concurrent_commit(state, expected_snapshot):
+        nonlocal cancelled, pending_state
+        pending_state, mutation_snapshot = original_save_pending_if_unchanged(state, expected_snapshot)
+        concurrent = replace(
+            prior.analysis,
+            revision=2,
+            revisions=[*prior.analysis.revisions, Revision("revision-2", 2, "concurrent accepted mutation", [item.id for item in prior.analysis.evidence])],
+        )
+        store.save_analysis(concurrent)
+        cancelled = True
+        return pending_state, mutation_snapshot
+
+    monkeypatch.setattr(store, "save_pending_if_unchanged", save_then_concurrent_commit)
+    result = run_xlsx_finding_workflow(
+        store,
+        source,
+        AnalysisOperation("sum", value_column="Value"),
+        selection=SheetSelection(tables=(("Demand", "DemandTable"),)),
+        cancel_check=lambda: cancelled,
+        human_decision="ACCEPT",
+    )
+
+    assert prior.status == "accepted"
+    assert result.status == "failed"
+    assert store.load_accepted().revision == 2
+    assert not store.pending_analysis_path.exists()
+    assert pending_state is not None
+    with pytest.raises(ValueError, match="stale pending identity"):
+        store.commit_revision(pending_state, expected_revision=pending_state.revision, accepted=True)
+
+
+def test_cancelled_pending_revision_cannot_be_replayed(tmp_path: Path, monkeypatch):
+    from foresight_os.analysis.evidence_workflow import run_xlsx_finding_workflow
+
+    source = tmp_path / "cancel-replay.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Demand"
+    sheet.append(["Value"])
+    sheet.append([10])
+    sheet.tables.add(openpyxl.worksheet.table.Table(displayName="DemandTable", ref="A1:A2"))
+    workbook.save(source)
+    store = AnalysisStore(tmp_path / "cancel-replay-case")
+    pending_state = None
+    cancelled = False
+    original_save_pending_if_unchanged = store.save_pending_if_unchanged
+
+    def save_then_cancel(state, expected_snapshot):
+        nonlocal cancelled, pending_state
+        pending_state, mutation_snapshot = original_save_pending_if_unchanged(state, expected_snapshot)
+        cancelled = True
+        return pending_state, mutation_snapshot
+
+    monkeypatch.setattr(store, "save_pending_if_unchanged", save_then_cancel)
+    result = run_xlsx_finding_workflow(
+        store,
+        source,
+        AnalysisOperation("sum", value_column="Value"),
+        selection=SheetSelection(tables=(("Demand", "DemandTable"),)),
+        cancel_check=lambda: cancelled,
+        human_decision="ACCEPT",
+    )
+
+    assert result.status == "failed"
+    assert pending_state is not None
+    with pytest.raises(ValueError, match="stale pending identity"):
+        store.commit_revision(pending_state, expected_revision=pending_state.revision, accepted=True)
+
+
+def test_xlsx_finding_workflow_rolls_back_pending_review_when_cancelled(tmp_path: Path, monkeypatch):
+    from foresight_os.analysis import evidence_workflow
+    from foresight_os.analysis.evidence_workflow import run_xlsx_finding_workflow
+
+    source = tmp_path / "cancel-pending-review.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Demand"
+    sheet.append(["Value"])
+    sheet.append([10])
+    sheet.tables.add(openpyxl.worksheet.table.Table(displayName="DemandTable", ref="A1:A2"))
+    workbook.save(source)
+    store = AnalysisStore(tmp_path / "cancel-pending-review-case")
+    context = WorkbookContext()
+    cancelled = False
+    original_review = evidence_workflow.review_analysis_state
+
+    def review_then_cancel(state):
+        nonlocal cancelled
+        result = original_review(state)
+        cancelled = True
+        return result
+
+    monkeypatch.setattr("foresight_os.analysis.evidence_workflow.review_analysis_state", review_then_cancel)
+    result = run_xlsx_finding_workflow(
+        store,
+        source,
+        AnalysisOperation("sum", value_column="Value"),
+        selection=SheetSelection(tables=(("Demand", "DemandTable"),)),
+        workbook_context=context,
+        cancel_check=lambda: cancelled,
+        human_decision="PENDING",
+    )
+
+    assert result.status == "failed"
+    assert not store.pending_analysis_path.exists()
+    assert context.cache.size == 0
+    assert context.authority_index.size == 0

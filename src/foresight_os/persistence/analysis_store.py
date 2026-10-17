@@ -4,6 +4,7 @@ import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Mapping
 
 import yaml
 from dataclasses import asdict, dataclass, replace
@@ -255,6 +256,55 @@ class AnalysisStore:
         with FileLock(str(self.lock_path)):
             self._write_validated(value)
 
+    def capture_revision_snapshot(self) -> dict[str, bytes | None]:
+        with FileLock(str(self.lock_path)):
+            return self._revision_snapshot_unlocked()
+
+    def restore_revision_snapshot(
+        self,
+        snapshot: Mapping[str, bytes | None],
+        *,
+        expected_current: Mapping[str, bytes | None] | None = None,
+    ) -> bool:
+        paths = {
+            "analysis": self.analysis_path,
+            "pending": self.pending_analysis_path,
+            "pending_tokens": self.pending_tokens_path,
+        }
+        with FileLock(str(self.lock_path)):
+            current = self._revision_snapshot_unlocked()
+            current_pending_token = self._pending_token_from_bytes(current.get("pending"))
+            snapshot_pending_token = self._pending_token_from_bytes(snapshot.get("pending"))
+            if expected_current is not None and current != dict(expected_current):
+                expected_pending = expected_current.get("pending")
+                if expected_pending is not None and current.get("pending") == expected_pending and snapshot.get("pending") != expected_pending:
+                    self.pending_analysis_path.unlink(missing_ok=True)
+                    self._remember_consumed_pending_token(current_pending_token)
+                return False
+            consumed_tokens = self._tokens_from_bytes(snapshot.get("pending_tokens"))
+            if current_pending_token and current_pending_token != snapshot_pending_token:
+                consumed_tokens.add(current_pending_token)
+            for name, path in paths.items():
+                content = snapshot.get(name)
+                if content is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    self._atomic_write(path, content.decode("utf-8"))
+            if consumed_tokens:
+                self._atomic_write(self.pending_tokens_path, json.dumps(sorted(consumed_tokens), indent=2) + "\n")
+            return True
+
+    def save_pending_if_unchanged(
+        self,
+        state: AnalysisState,
+        expected_snapshot: Mapping[str, bytes | None],
+    ) -> tuple[AnalysisState, dict[str, bytes | None]]:
+        with FileLock(str(self.lock_path)):
+            if self._revision_snapshot_unlocked() != dict(expected_snapshot):
+                raise ValueError("concurrent analysis mutation detected before pending publication")
+            pending = self._save_pending_unlocked(state)
+            return pending, self._revision_snapshot_unlocked()
+
     def save_delivery_receipt(self, artifact_id: str, receipt: dict[str, object]) -> AnalysisState:
         with FileLock(str(self.lock_path)):
             if self.pending_analysis_path.exists():
@@ -320,24 +370,52 @@ class AnalysisStore:
             return committed
 
     def save_pending(self, state: AnalysisState) -> AnalysisState:
-        pending = replace(state, revision_status=RevisionStatus.PENDING_REVIEW, pending_token=uuid.uuid4().hex)
         with FileLock(str(self.lock_path)):
-            current = self._load_path(self.analysis_path) if self.analysis_path.exists() else None
-            existing_pending = self._load_path(self.pending_analysis_path) if self.pending_analysis_path.exists() else None
-            if current is not None:
-                number = current.revision + 1
-                revision = Revision(
-                    f"revision-{number}",
-                    number,
-                    "pending mutation",
-                    [item.id for collection in [pending.evidence, pending.claims, pending.implications, pending.recommendations, pending.artifacts] for item in collection] + [item.id for item in pending.calculations],
-                )
-                pending = replace(pending, revision=number, revisions=[*current.revisions, revision])
-                pending = self._merge_states(current, pending)
-            self._write_validated(validate_analysis(pending), self.pending_analysis_path)
-            if existing_pending is not None:
-                self._remember_consumed_pending_token(existing_pending.pending_token)
+            return self._save_pending_unlocked(state)
+
+    def _save_pending_unlocked(self, state: AnalysisState) -> AnalysisState:
+        pending = replace(state, revision_status=RevisionStatus.PENDING_REVIEW, pending_token=uuid.uuid4().hex)
+        current = self._load_path(self.analysis_path) if self.analysis_path.exists() else None
+        existing_pending = self._load_path(self.pending_analysis_path) if self.pending_analysis_path.exists() else None
+        if current is not None:
+            number = current.revision + 1
+            revision = Revision(
+                f"revision-{number}",
+                number,
+                "pending mutation",
+                [item.id for collection in [pending.evidence, pending.claims, pending.implications, pending.recommendations, pending.artifacts] for item in collection] + [item.id for item in pending.calculations],
+            )
+            pending = replace(pending, revision=number, revisions=[*current.revisions, revision])
+            pending = self._merge_states(current, pending)
+        self._write_validated(validate_analysis(pending), self.pending_analysis_path)
+        if existing_pending is not None:
+            self._remember_consumed_pending_token(existing_pending.pending_token)
         return pending
+
+    def _revision_snapshot_unlocked(self) -> dict[str, bytes | None]:
+        return {
+            name: path.read_bytes() if path.exists() else None
+            for name, path in (
+                ("analysis", self.analysis_path),
+                ("pending", self.pending_analysis_path),
+                ("pending_tokens", self.pending_tokens_path),
+            )
+        }
+
+    @staticmethod
+    def _pending_token_from_bytes(content: bytes | None) -> str | None:
+        if content is None:
+            return None
+        value = json.loads(content.decode("utf-8"))
+        token = value.get("pending_token") if isinstance(value, dict) else None
+        return token if isinstance(token, str) and token else None
+
+    @staticmethod
+    def _tokens_from_bytes(content: bytes | None) -> set[str]:
+        if content is None:
+            return set()
+        value = json.loads(content.decode("utf-8"))
+        return {item for item in value if isinstance(item, str)} if isinstance(value, list) else set()
 
     def update_pending(self, state: AnalysisState) -> AnalysisState:
         if state.revision_status != RevisionStatus.PENDING_REVIEW or not state.pending_token:
