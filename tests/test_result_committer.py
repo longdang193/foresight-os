@@ -10,6 +10,7 @@ from foresight_os.analysis.result_committer import (
     CanonicalResultCommitter,
     analysis_stage_result_schema,
     normalize_stage_result,
+    _unknown_reference_error,
 )
 from foresight_os.domain.validation import ValidationError
 from foresight_os.persistence.analysis_store import AnalysisStore
@@ -115,6 +116,30 @@ def test_provider_ids_do_not_change_canonical_identity():
 def test_invalid_contract_provenance_and_references_are_rejected(payload, message):
     with pytest.raises(ValidationError, match=message):
         normalize_stage_result(payload)
+
+
+def test_unknown_reference_error_lists_available_canonical_ids():
+    existing = normalize_stage_result(_payload()).canonical_records()
+    invalid = _payload(claims=[{**_payload()["claims"][0], "evidence_ids": ["missing"]}])
+
+    with pytest.raises(ValidationError) as error:
+        normalize_stage_result(invalid, existing_records=existing)
+
+    assert next(iter(existing)) in str(error.value)
+    assert error.value.code == "UNRESOLVED_REFERENCE"
+
+
+def test_unknown_reference_error_bounds_and_deduplicates_canonical_ids():
+    aliases = {"provider-duplicate": "canonical-00"}
+    aliases.update({f"provider-{index:02d}": f"canonical-{index:02d}" for index in range(21)})
+
+    error = _unknown_reference_error("missing", aliases, "claims.evidence_ids", code="UNRESOLVED_REFERENCE")
+    message = str(error)
+
+    assert "valid canonical IDs:" in message
+    assert "... (1 more)" in message
+    assert "canonical-20" not in message
+    assert error.code == "UNRESOLVED_REFERENCE"
 
 
 def test_dependency_only_relationship_reference_is_rejected():
