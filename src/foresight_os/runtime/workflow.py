@@ -392,6 +392,7 @@ def _synthesize_stage_outputs(
     existing_records: Mapping[str, object] | None = None,
     cancel_check: Callable[[], bool] | None = None,
     participant_ids: tuple[str, ...] | None = None,
+    return_normalized_result: bool = False,
 ) -> object:
     operation_limit: int | None = None
     operation_count = 0
@@ -544,6 +545,28 @@ def _synthesize_stage_outputs(
 
     for root in sorted(raw_record_ids):
         visit_dependency(root, 0, ())
+
+    if len(outputs) == 1 and typed_outputs and not failures:
+        checkpoint()
+        try:
+            normalized = normalize_stage_result(
+                outputs[0],
+                expected_stage_id=str(getattr(stage, "stage_id", "stage")),
+                existing_records=existing_records,
+                prefer_current_aliases=True,
+                trusted_existing_records=existing_records or {},
+            )
+        except ValidationError as error:
+            raise ValidationError(
+                str(error),
+                code=getattr(error, "code", None) or "MALFORMED_OUTPUT",
+                participant_index=0,
+                participant_id=participant_ids[0] if participant_ids else None,
+            ) from error
+        if return_normalized_result:
+            return normalized
+        return normalized.to_contract_payload()
+
     normalized_outputs: list[Mapping[str, Any]] = []
     alias_records: dict[str, object] = {}
     alias_kinds: dict[str, RecordKind] = {}
@@ -1246,6 +1269,7 @@ async def run_recipe_async(
                     allow_legacy_fallback=context.get("analysis_store") is None,
                     existing_records=context.get("canonical_records"),
                     cancel_check=cancel_requested,
+                    return_normalized_result=committer is not None,
                 )
             if pattern == ExecutionPattern.DIRECT:
                 stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(prompt_value)]
@@ -1300,6 +1324,7 @@ async def run_recipe_async(
                     existing_records=context.get("canonical_records"),
                     participant_ids=successful_ids,
                     cancel_check=cancel_requested,
+                    return_normalized_result=committer is not None,
                 )
             elif pattern == ExecutionPattern.GROUP_CHAT:
                 stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(prompt_value)]
@@ -1324,6 +1349,7 @@ async def run_recipe_async(
                 allow_legacy_fallback=context.get("analysis_store") is None,
                 existing_records=context.get("canonical_records"),
                 cancel_check=cancel_requested,
+                return_normalized_result=committer is not None,
             )
         committer = context.get("canonical_result_committer")
         correction_prompt: str | None = None

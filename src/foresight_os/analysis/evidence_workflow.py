@@ -4,7 +4,7 @@ import hashlib
 from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state, review_analysis_state_with_skills, review_reasoning
 from foresight_os.domain.evidence import normalize_evidence_candidate
@@ -32,8 +32,11 @@ from foresight_os.runtime.local_toolbelt import (
     FormulaStatus,
     SheetSelection,
     SourceSnapshot,
+    ToolbeltLimits,
     ToolbeltError,
     WorkbookContext,
+    _check_cancel,
+    _coerce_toolbelt_limits,
     data_analysis,
     spreadsheet_read,
 )
@@ -249,20 +252,26 @@ def _run_xlsx_finding_workflow(
     selection: SheetSelection | None = None,
     investigation_id: str = "xlsx-evidence-workflow",
     human_decision: str = "REJECT",
+    limits: ToolbeltLimits | Mapping[str, Any] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
     snapshot: SourceSnapshot | None = None,
     workbook_context: WorkbookContext | None = None,
 ) -> EvidenceWorkflowResult:
     """Promote a deterministic workbook analysis into reviewable domain state."""
     try:
+        read_limits = _coerce_toolbelt_limits(limits)
+        _check_cancel(cancel_check)
         if snapshot is not None and workbook_context is not None:
             raise ValueError("snapshot and workbook_context are mutually exclusive")
+        if snapshot is not None and snapshot.byte_count > read_limits.max_bytes:
+            raise ToolbeltError("workbook exceeds byte limit")
         if workbook_context is not None:
-            workbook = workbook_context.read(Path(source), selection)
-            current = workbook_context.currentness(Path(source))
+            workbook = workbook_context.read(Path(source), selection, read_limits, cancel_check=cancel_check)
+            current = workbook_context.currentness(Path(source), cancel_check=cancel_check)
         else:
-            snapshot = snapshot or SourceSnapshot.capture(source)
-            workbook = spreadsheet_read(Path(source), selection, _snapshot=snapshot)
-            current = snapshot.is_current()
+            snapshot = snapshot or SourceSnapshot.capture(source, cancel_check=cancel_check, max_bytes=read_limits.max_bytes)
+            workbook = spreadsheet_read(Path(source), selection, read_limits, cancel_check=cancel_check, _snapshot=snapshot)
+            current = snapshot.is_current(cancel_check=cancel_check)
         if not current:
             raise ToolbeltError("source workbook changed during read")
         if not workbook.tables:
@@ -278,7 +287,7 @@ def _run_xlsx_finding_workflow(
             table = next((candidate for candidate in workbook.tables if (candidate.sheet, candidate.source_range) in requested), None)
             if table is None:
                 raise ToolbeltError("selected range was not found in workbook")
-        result = workbook_context.analyze(table, operation) if workbook_context is not None else data_analysis(table, operation)
+        result = workbook_context.analyze(table, operation, read_limits, cancel_check=cancel_check) if workbook_context is not None else data_analysis(table, operation, read_limits, cancel_check=cancel_check)
         measurements = {(item.provenance.sheet, item.provenance.coordinate): item for item in workbook.measurements}
         evidence: list[Evidence] = []
         selected_columns = {table.columns.index(operation.value_column)} if operation.value_column in table.columns else set(range(len(table.columns)))
@@ -337,14 +346,18 @@ def _run_xlsx_finding_workflow(
         )
         if workbook_context is not None:
             workbook_context.enforce_budget()
+        _check_cancel(cancel_check)
         pending = store.save_pending(state)
+        _check_cancel(cancel_check)
         review = review_analysis_state(pending)
         if human_decision.upper() in {"PENDING", "PENDING_REVIEW"}:
             return EvidenceWorkflowResult("pending", tuple(), table.sheet, evidence[0], claim, review, pending, ("spreadsheet_read", "data_analysis"))
         if human_decision.upper() != "ACCEPT" or not review.accepted:
+            _check_cancel(cancel_check)
             rejected = store.commit_revision(pending, expected_revision=pending.revision, accepted=False)
             return EvidenceWorkflowResult("rejected", tuple(), table.sheet, evidence[0], claim, review, rejected, ("spreadsheet_read", "data_analysis"), "explicit acceptance was not granted")
         reviewed = attach_review_record(pending, review, f"review-{pending.investigation_id}-{pending.revision}")
+        _check_cancel(cancel_check)
         committed = store.commit_revision(reviewed, expected_revision=reviewed.revision, accepted=True)
         return EvidenceWorkflowResult("accepted", tuple(), table.sheet, evidence[0], claim, review, committed, ("spreadsheet_read", "data_analysis"))
     except Exception as error:
@@ -359,26 +372,33 @@ def run_xlsx_finding_workflow(
     selection: SheetSelection | None = None,
     investigation_id: str = "xlsx-evidence-workflow",
     human_decision: str = "REJECT",
+    limits: ToolbeltLimits | Mapping[str, Any] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
     snapshot: SourceSnapshot | None = None,
     workbook_context: WorkbookContext | None = None,
 ) -> EvidenceWorkflowResult:
-    if workbook_context is None:
-        return _run_xlsx_finding_workflow(
-            store,
-            source,
-            operation,
-            selection=selection,
-            investigation_id=investigation_id,
-            human_decision=human_decision,
-            snapshot=snapshot,
-            workbook_context=None,
-        )
+    owned_context = workbook_context is None and snapshot is None
+    active_context = workbook_context or (WorkbookContext() if owned_context else None)
+
     class _RollbackWorkflow(Exception):
         def __init__(self, result: EvidenceWorkflowResult):
             self.result = result
 
     try:
-        with workbook_context.transaction():
+        if active_context is None:
+            return _run_xlsx_finding_workflow(
+                store,
+                source,
+                operation,
+                selection=selection,
+                investigation_id=investigation_id,
+                human_decision=human_decision,
+                limits=limits,
+                cancel_check=cancel_check,
+                snapshot=snapshot,
+                workbook_context=None,
+            )
+        with active_context.transaction(cancel_check=cancel_check):
             result = _run_xlsx_finding_workflow(
                 store,
                 source,
@@ -386,11 +406,18 @@ def run_xlsx_finding_workflow(
                 selection=selection,
                 investigation_id=investigation_id,
                 human_decision=human_decision,
+                limits=limits,
+                cancel_check=cancel_check,
                 snapshot=snapshot,
-                workbook_context=workbook_context,
+                workbook_context=active_context,
             )
             if result.status == "failed":
                 raise _RollbackWorkflow(result)
             return result
     except _RollbackWorkflow as rollback:
         return rollback.result
+    except ToolbeltError as error:
+        return EvidenceWorkflowResult("failed", tuple(), None, None, None, None, None, ("spreadsheet_read", "data_analysis"), type(error).__name__)
+    finally:
+        if owned_context and active_context is not None:
+            active_context.clear()

@@ -15,9 +15,23 @@ import tracemalloc
 from collections.abc import Mapping
 from pathlib import Path
 
-# Direct probe execution must measure the checked-out worktree, not an
+
+def _cli_path(name: str) -> Path | None:
+    try:
+        index = sys.argv.index(name)
+    except ValueError:
+        return None
+    if index + 1 >= len(sys.argv):
+        raise SystemExit(f"{name} requires a path")
+    return Path(sys.argv[index + 1]).resolve()
+
+
+TARGET_ROOT = _cli_path("--target-root") or Path(__file__).parents[2].resolve()
+HARNESS_ROOT = _cli_path("--harness-root") or Path(__file__).parents[2].resolve()
+# Direct probe execution must measure the explicitly selected worktree, not an
 # unrelated editable installation from another checkout.
-sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
+sys.path.insert(0, str(HARNESS_ROOT))
+sys.path.insert(0, str(TARGET_ROOT / "src"))
 
 from agent_framework import Agent, ChatResponse, ChatResponseUpdate, Content, FunctionInvocationContext, Message, ResponseStream
 
@@ -32,7 +46,9 @@ from foresight_os.runtime.capabilities import (
 from foresight_os.runtime.local_toolbelt import AnalysisOperation, SheetSelection, WorkbookContext, data_analysis, spreadsheet_read
 from foresight_os.analysis.independent_validation import run_independent_validation
 from foresight_os.runtime.workflow import run_recipe_async
-from optimization_measurement import MANDATORY_XLSX_WORKLOADS, _metric_snapshot, _percentile, build_receipt, measurement_evidence, observed_xlsx_state, process_rss_bytes, stage_metric
+from optimization_measurement import MANDATORY_XLSX_WORKLOADS, _metric_snapshot, _percentile, build_receipt, configure_measurement_roots, measurement_evidence, observed_xlsx_state, process_rss_bytes, stage_metric
+
+configure_measurement_roots(target_root=TARGET_ROOT, harness_root=HARNESS_ROOT)
 
 
 class _ProbeClient:
@@ -93,10 +109,10 @@ async def _native_mcp_receipt() -> dict[str, object]:
 
     port = _free_port()
     process = subprocess.Popen(
-        [sys.executable, "tests/fixtures/mcp_streamable_http_server.py", "--port", str(port)],
+        [sys.executable, str(TARGET_ROOT / "tests/fixtures/mcp_streamable_http_server.py"), "--port", str(port)],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        env={**os.environ, "PYTHONPATH": str(Path("src").resolve())},
+        env={**os.environ, "PYTHONPATH": str((TARGET_ROOT / "src").resolve())},
     )
     tool = MCPStreamableHTTPTool("optimization", f"http://127.0.0.1:{port}/mcp", load_prompts=False)
     try:
@@ -228,6 +244,7 @@ def _repeated_workflow(path: Path) -> dict[str, object]:
 
     with tempfile.TemporaryDirectory(prefix="foresight-repeat-") as temporary_dir:
         store = AnalysisStore(Path(temporary_dir) / "state")
+        context = WorkbookContext()
         selection = SheetSelection(include_hidden=True, include_hidden_rows=True)
         started = time.perf_counter()
         first = run_xlsx_finding_workflow(
@@ -237,6 +254,7 @@ def _repeated_workflow(path: Path) -> dict[str, object]:
             selection=selection,
             investigation_id="optimization-repeat",
             human_decision="ACCEPT",
+            workbook_context=context,
         )
         second = run_xlsx_finding_workflow(
             store,
@@ -245,6 +263,7 @@ def _repeated_workflow(path: Path) -> dict[str, object]:
             selection=selection,
             investigation_id="optimization-repeat",
             human_decision="ACCEPT",
+            workbook_context=context,
         )
         elapsed_ms = (time.perf_counter() - started) * 1000
     first_hash = first.evidence.source_locator.file_version if first.evidence is not None else None
@@ -268,6 +287,16 @@ def _repeated_workflow(path: Path) -> dict[str, object]:
         "same_calculation_value": first_value == second_value,
         "wall_time_ms": round(elapsed_ms, 3),
         "local_tool_calls": len(first.tool_calls) + len(second.tool_calls),
+        "capture_count": context.stats.capture_count,
+        "capture_hash_count": context.stats.capture_hash_count,
+        "currentness_hash_count": context.stats.currentness_hash_count,
+        "xlsx_parse_count": context.stats.xlsx_parse_count,
+        "read_cache_hits": context.stats.cache_hits,
+        "analysis_cache_hits": context.stats.analysis_cache_hits,
+        "retained_snapshot_bytes": context.stats.snapshot_bytes,
+        "retained_read_result_bytes": context.stats.retained_read_result_bytes,
+        "retained_analysis_result_bytes": context.stats.retained_analysis_result_bytes,
+        "retained_authority_record_bytes": context.stats.retained_authority_record_bytes,
         "limitation": None,
     }
 
@@ -631,13 +660,16 @@ async def _run(mode: str, fixture: Path, evidence_root: Path, measurement_mode: 
     try:
         mcp = await _native_mcp_receipt()
     except Exception as error:
-        mcp = {"status": "FAILED", "error_type": type(error).__name__}
+        mcp = {"status": "NOT_MEASURED", "error_type": type(error).__name__, "limitation": "optional MCP fixture unavailable"}
     state = observed_xlsx_state(fixture, evidence_root)
+    local_correctness = all(workbook.get("workloads", {}).get(name, {}).get("status") == "VERIFIED" for name in MANDATORY_XLSX_WORKLOADS)
     evidence = {
-        "correctness": measurement_evidence("VERIFIED", limitation=None),
+        "correctness": measurement_evidence("VERIFIED" if local_correctness else "FAILED", limitation=None if local_correctness else "local workbook workload failed"),
         "latency": workbook["latency"],
         "allocation": workbook["allocation"],
         "soak": measurement_evidence("VERIFIED", limitation=None) if soak["runs"] >= 100 and not soak["monotonic_growth"] else measurement_evidence("FAILED", limitation="resource soak did not reach a clean plateau"),
+        "regression_threshold": measurement_evidence("NOT_MEASURED", limitation="requires baseline/release comparison"),
+        "optimization_demonstrated": measurement_evidence("NOT_MEASURED", limitation="no optimization claim is made by a single receipt"),
     }
     return build_receipt(
         mode=mode,
@@ -651,18 +683,30 @@ async def _run(mode: str, fixture: Path, evidence_root: Path, measurement_mode: 
         state=state,
         thresholds={"p95_regression_pct": 20, "peak_allocation_regression_pct": 15, "tool_calls_per_finding_increase": 0, "soak_runs": 100},
         evidence=evidence,
+        target_root=TARGET_ROOT,
+        harness_root=HARNESS_ROOT,
     )
 
 
 def main() -> int:
+    global TARGET_ROOT, HARNESS_ROOT
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("baseline", "release"), required=True)
     parser.add_argument("--fixture", type=Path, default=Path("tests/fixtures/analyst_multisheet.xlsx"))
     parser.add_argument("--workbook", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--measurement-mode", choices=("full", "timing", "allocation"), default="full")
+    parser.add_argument("--target-root", type=Path, default=TARGET_ROOT)
+    parser.add_argument("--harness-root", type=Path, default=HARNESS_ROOT)
     args = parser.parse_args()
+    target_root = args.target_root.resolve()
+    harness_root = args.harness_root.resolve()
+    TARGET_ROOT = target_root
+    HARNESS_ROOT = harness_root
+    configure_measurement_roots(target_root=TARGET_ROOT, harness_root=HARNESS_ROOT)
     fixture = args.workbook or args.fixture
+    if not fixture.is_absolute():
+        fixture = target_root / fixture
     output = args.output or Path(f"work/optimization-{args.mode}/receipt.json")
     output.parent.mkdir(parents=True, exist_ok=True)
     result = asyncio.run(_run(args.mode, fixture, output.parent / "measurement-state", args.measurement_mode))

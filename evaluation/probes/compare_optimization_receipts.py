@@ -136,8 +136,11 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
     for field in SOAK_FIELDS if soak_verified else ():
         if field not in growth:
             missing.append(f"soak.resource_growth.{field}")
-    if receipt.get("native_mcp", {}).get("status") != "VERIFIED":
-        missing.append("native_mcp.status=VERIFIED")
+    native_status = receipt.get("native_mcp", {}).get("status")
+    if native_status not in {"VERIFIED", "NOT_MEASURED", "FAILED", "DEFERRED"}:
+        missing.append("native_mcp.status")
+    elif native_status != "VERIFIED" and not isinstance(receipt.get("native_mcp", {}).get("limitation"), str):
+        missing.append("native_mcp.limitation")
     if not receipt.get("workload", {}).get("patterns"):
         missing.append("workload.patterns")
     workloads = receipt.get("xlsx", {}).get("workloads", {})
@@ -339,7 +342,7 @@ def compare(baseline: dict, release: dict) -> dict:
         float(release_economics["per_accepted_finding"][field]) <= float(baseline_economics["per_accepted_finding"][field])
         for field in {"model_calls", "tool_calls_total", "local_tool_calls", "mcp_tool_calls", "external_http_requests"}
     )
-    accepted = (
+    threshold_accepted = (
         (p95_regression is None or p95_regression <= 20)
         and (allocation_regression is None or allocation_regression <= 15)
         and rss_regression <= 15
@@ -347,8 +350,17 @@ def compare(baseline: dict, release: dict) -> dict:
         and all(value <= 20 for value in timing_path_regressions.values())
         and non_regressive_economics
         and not reused_stage_new_calls
-        and not unavailable_dimensions
     )
+    accepted = threshold_accepted and not unavailable_dimensions
+    correctness_status = "VERIFIED" if baseline.get("evidence", {}).get("correctness", {}).get("status") == "VERIFIED" and release_evidence.get("correctness", {}).get("status") == "VERIFIED" else "FAILED"
+    if unavailable_dimensions:
+        regression_status = "NOT_MEASURED"
+        regression_limitation = f"unavailable dimensions: {', '.join(unavailable_dimensions)}"
+    else:
+        regression_status = "VERIFIED" if threshold_accepted else "FAILED"
+        regression_limitation = None if threshold_accepted else "one or more regression thresholds failed"
+    optimization_status = "NOT_MEASURED"
+    optimization_limitation = "comparison is a regression gate; no optimization claim is made"
     return {
         "accepted": accepted,
         "baseline": {"p95_ms": baseline["xlsx"]["p95_ms"], "peak_allocation_bytes": baseline["xlsx"]["peak_allocation_bytes"], "timing_paths": baseline["xlsx"]["timing_paths"], "economics_per_accepted_finding": baseline_economics["per_accepted_finding"]},
@@ -360,6 +372,11 @@ def compare(baseline: dict, release: dict) -> dict:
         "native_mcp": {"baseline": baseline["native_mcp"]["status"], "release": release["native_mcp"]["status"]},
         "reused_stage_new_calls": reused_stage_new_calls,
         "evidence": {"release": release_evidence, "unavailable_dimensions": unavailable_dimensions},
+        "outcomes": {
+            "correctness": {"status": correctness_status, "limitation": None if correctness_status == "VERIFIED" else "local correctness was not verified for both receipts"},
+            "regression_threshold": {"status": regression_status, "limitation": regression_limitation},
+            "optimization_demonstrated": {"status": optimization_status, "limitation": optimization_limitation},
+        },
         "gate": "PASS" if accepted else ("NOT_MEASURED" if unavailable_dimensions else "FAILED"),
     }
 

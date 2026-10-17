@@ -10,7 +10,7 @@ from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, R
 from foresight_os.controller.budgets import BudgetState
 from foresight_os.persistence.ids import canonical_json_hash
 from foresight_os.domain.validation import ValidationError
-from foresight_os.analysis.result_committer import ANALYSIS_STAGE_RESULT_CONTRACT, decode_stage_output
+from foresight_os.analysis.result_committer import ANALYSIS_STAGE_RESULT_CONTRACT, StageAnalyticalResult, decode_stage_output
 from foresight_os.runtime.workflow import CanonicalStageResult, _canonical_result_hash, _close_agents, _dependency_stage_ids, _expand_dependency_records, _run_native_stage, _synthesize_stage_outputs, _workflow_output_value, run_recipe_async
 from foresight_os.runtime.metrics import BudgetExceededError, RunCanceledError, RunMetrics
 from foresight_os.runtime.orchestration import RunControl
@@ -224,6 +224,36 @@ def test_typed_synthesis_uses_one_bounded_normalization_pass(monkeypatch):
     _synthesize_stage_outputs(stage, outputs)
 
     assert calls <= len(outputs) + 1
+
+
+def test_single_typed_synthesis_passes_normalized_result_to_committer(monkeypatch):
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.DIRECT,
+        ({"id": "one"},),
+        "typed-result",
+        "typed-result",
+        {},
+        synthesis_policy="aggregate-typed-results",
+    )
+    calls = 0
+    original = workflow_module.normalize_stage_result
+
+    def counting_normalize(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(workflow_module, "normalize_stage_result", counting_normalize)
+
+    result = _synthesize_stage_outputs(
+        stage,
+        [_typed_stage_result("stage-1", "provider-one", "observation")],
+        return_normalized_result=True,
+    )
+
+    assert calls == 1
+    assert isinstance(result, StageAnalyticalResult)
 
 
 def test_typed_synthesis_preflights_payload_bytes_before_normalization():

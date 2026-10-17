@@ -7,7 +7,7 @@ import platform
 import subprocess
 import sys
 import time
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +15,7 @@ from foresight_os.analysis.evidence_workflow import run_xlsx_finding_workflow
 from foresight_os.domain.challenge import ReviewOutcome, ReviewRecord, build_material_fingerprint, derive_finding_views
 from foresight_os.domain.models import AnalysisState
 from foresight_os.persistence.analysis_store import AnalysisStore
-from foresight_os.runtime.local_toolbelt import AnalysisOperation, SheetSelection
+from foresight_os.runtime.local_toolbelt import AnalysisOperation, SheetSelection, ToolbeltLimits
 
 
 SCHEMA_VERSION = 2
@@ -37,11 +37,20 @@ MANDATORY_XLSX_WORKLOADS = (
     "blocking_cancellation",
 )
 
+_TARGET_ROOT: Path | None = None
+_HARNESS_ROOT: Path | None = None
 
-def _revision_metadata() -> dict[str, str]:
+
+def configure_measurement_roots(*, target_root: Path, harness_root: Path) -> None:
+    global _TARGET_ROOT, _HARNESS_ROOT
+    _TARGET_ROOT = target_root.resolve()
+    _HARNESS_ROOT = harness_root.resolve()
+
+
+def _revision_metadata(target_root: Path | None = None) -> dict[str, str]:
     import foresight_os
 
-    repo_root = Path(__file__).parents[2].resolve()
+    repo_root = (target_root or _TARGET_ROOT or Path(__file__).parents[2]).resolve()
     package_path = Path(foresight_os.__file__).resolve()
     if repo_root not in package_path.parents:
         raise RuntimeError(f"resolved foresight_os package is outside measured worktree: {package_path}")
@@ -87,8 +96,8 @@ def _environment_metadata() -> dict[str, object]:
     }
 
 
-def _harness_metadata() -> dict[str, object]:
-    repo_root = Path(__file__).parents[2].resolve()
+def _harness_metadata(harness_root: Path | None = None) -> dict[str, object]:
+    repo_root = (harness_root or _HARNESS_ROOT or Path(__file__).parents[2]).resolve()
     digest = hashlib.sha256()
     for relative_path in HARNESS_PATHS:
         path = repo_root / relative_path
@@ -251,6 +260,8 @@ def build_receipt(
     stage_metrics: list[dict[str, Any]],
     thresholds: dict[str, Any],
     evidence: dict[str, Any] | None = None,
+    target_root: Path | None = None,
+    harness_root: Path | None = None,
 ) -> dict[str, Any]:
     accepted_count = accepted_finding_count(state)
     economics = {
@@ -267,20 +278,28 @@ def build_receipt(
         for key, value in economics.items()
         if key != "per_accepted_finding"
     }
+    evidence = evidence or {
+        "correctness": measurement_evidence("VERIFIED", limitation=None),
+        "latency": measurement_evidence("VERIFIED", limitation=None),
+        "allocation": measurement_evidence("VERIFIED", limitation=None),
+        "soak": measurement_evidence("VERIFIED", limitation=None),
+        "regression_threshold": measurement_evidence("NOT_MEASURED", limitation="requires baseline/release comparison"),
+        "optimization_demonstrated": measurement_evidence("NOT_MEASURED", limitation="no optimization claim is made by a single receipt"),
+    }
     return {
         "schema_version": SCHEMA_VERSION,
         "mode": mode,
-        "status": "VERIFIED" if native_mcp.get("status") == "VERIFIED" else "FAILED",
+        "status": evidence["correctness"]["status"],
         "environment": _environment_metadata(),
-        "harness": _harness_metadata(),
-        "revision": _revision_metadata(),
+        "harness": _harness_metadata(harness_root),
+        "revision": _revision_metadata(target_root),
         "workload": {
             "fixture": fixture.name,
             "fixture_sha256": hashlib.sha256(fixture.read_bytes()).hexdigest(),
             "warmups": 2,
             "measured_runs": 10,
-            "process_runs": len(patterns),
             "samples_per_process_run": 10,
+            "limits": asdict(ToolbeltLimits()),
             "patterns": sorted(patterns),
         },
         "acceptance": thresholds,
@@ -293,12 +312,7 @@ def build_receipt(
         "external_fixture": external_fixture,
         "native_mcp": native_mcp,
         "resource": {"rss_bytes": process_rss_bytes(), "measurement": "process_rss"},
-        "evidence": evidence or {
-            "correctness": measurement_evidence("VERIFIED", limitation=None),
-            "latency": measurement_evidence("VERIFIED", limitation=None),
-            "allocation": measurement_evidence("VERIFIED", limitation=None),
-            "soak": measurement_evidence("VERIFIED", limitation=None),
-        },
+        "evidence": evidence,
         "acceptance_matrix": {
             name: {
                 "status": workbook.get("workloads", {}).get(name, {}).get("status", "MISSING"),

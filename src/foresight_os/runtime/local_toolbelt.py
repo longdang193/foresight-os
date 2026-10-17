@@ -784,7 +784,7 @@ class WorkbookContext:
             raise ToolbeltError("workbook context is closed")
 
     @contextmanager
-    def transaction(self):
+    def transaction(self, *, cancel_check: Callable[[], bool] | None = None):
         self.ensure_open()
         owner = get_ident()
         if self._transaction is not None and self._transaction_owner == owner:
@@ -810,7 +810,9 @@ class WorkbookContext:
             self._transaction_owner = owner
             try:
                 yield self
+                _check_cancel(cancel_check)
                 self._enforce_budget()
+                _check_cancel(cancel_check)
             except BaseException:
                 self.cache.rollback_transaction(transaction["cache"])
                 self.authority_index.rollback_transaction(transaction["authority"])
@@ -828,10 +830,10 @@ class WorkbookContext:
                 self._transaction = None
                 self._transaction_owner = None
 
-    def _run_transaction(self, operation: Callable[[], Any]) -> Any:
+    def _run_transaction(self, operation: Callable[[], Any], *, cancel_check: Callable[[], bool] | None = None) -> Any:
         if self._transaction is not None and self._transaction_owner == get_ident():
             return operation()
-        with self.transaction():
+        with self.transaction(cancel_check=cancel_check):
             return operation()
 
     def capture(
@@ -843,7 +845,10 @@ class WorkbookContext:
     ) -> SourceSnapshot:
         self.ensure_open()
         _check_cancel(cancel_check)
-        return self._run_transaction(lambda: self._capture_in_transaction(source, cancel_check=cancel_check, max_bytes=max_bytes))
+        return self._run_transaction(
+            lambda: self._capture_in_transaction(source, cancel_check=cancel_check, max_bytes=max_bytes),
+            cancel_check=cancel_check,
+        )
 
     def _capture_in_transaction(
         self,
@@ -855,6 +860,8 @@ class WorkbookContext:
         key = str(Path(source).resolve())
         snapshot = self.snapshots.get(key)
         if snapshot is not None:
+            if max_bytes is not None and snapshot.byte_count > max_bytes:
+                raise ToolbeltError("workbook exceeds byte limit")
             return snapshot
         snapshot = SourceSnapshot.capture(source, cancel_check=cancel_check, max_bytes=max_bytes)
         self.snapshots[key] = snapshot
@@ -866,7 +873,10 @@ class WorkbookContext:
     def currentness(self, source: str | Path, *, cancel_check: Callable[[], bool] | None = None) -> bool:
         self.ensure_open()
         _check_cancel(cancel_check)
-        return self._run_transaction(lambda: self._currentness_in_transaction(source, cancel_check=cancel_check))
+        return self._run_transaction(
+            lambda: self._currentness_in_transaction(source, cancel_check=cancel_check),
+            cancel_check=cancel_check,
+        )
 
     def _currentness_in_transaction(self, source: str | Path, *, cancel_check: Callable[[], bool] | None = None) -> bool:
         snapshot = self._capture_in_transaction(source, cancel_check=cancel_check)
@@ -891,7 +901,8 @@ class WorkbookContext:
             if cached_result is not None:
                 return cached_result
             return self._run_transaction(
-                lambda: self._read_in_transaction(source, selection, read_limits, cancel_check=cancel_check)
+                lambda: self._read_in_transaction(source, selection, read_limits, cancel_check=cancel_check),
+                cancel_check=cancel_check,
             )
 
     def _try_read_cache_hit(
@@ -1013,7 +1024,8 @@ class WorkbookContext:
                     normalized_operation,
                     normalized_limits,
                     cancel_check=cancel_check,
-                )
+                ),
+                cancel_check=cancel_check,
             )
 
     def _analyze_in_transaction(
