@@ -521,11 +521,26 @@ def _measurement_key(value: object, label: str) -> MeasurementKey:
     )
 
 
+def _unknown_reference_error(
+    value: object,
+    aliases: Mapping[str, str],
+    label: str,
+    *,
+    code: str,
+) -> ValidationError:
+    available = sorted(set(aliases.values()))
+    hint = ", ".join(available[:20])
+    if len(available) > 20:
+        hint += f", ... ({len(available) - 20} more)"
+    suffix = f"; valid canonical IDs: {hint}" if hint else ""
+    return ValidationError(f"unknown reference: {label} -> {value}{suffix}", code=code)
+
+
 def _resolve(value: object, aliases: Mapping[str, str], label: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValidationError(f"{label} must reference a non-empty ID", code="UNRESOLVED_REFERENCE")
     if value not in aliases:
-        raise ValidationError(f"unknown reference: {label} -> {value}", code="UNRESOLVED_REFERENCE")
+        raise _unknown_reference_error(value, aliases, label, code="UNRESOLVED_REFERENCE")
     return aliases[value]
 
 
@@ -839,7 +854,12 @@ def normalize_stage_result(
                 or known_relationship_aliases.get(reference)
             )
             if relationship_id is None:
-                raise ValidationError(f"unknown reference: {label} -> {reference}", code="INVALID_RELATIONSHIP")
+                raise _unknown_reference_error(
+                    reference,
+                    {**trusted_relationship_aliases, **relationship_aliases, **known_relationship_aliases},
+                    label,
+                    code="INVALID_RELATIONSHIP",
+                )
             resolved.append(relationship_id)
         return resolved
 

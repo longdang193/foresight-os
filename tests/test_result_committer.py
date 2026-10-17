@@ -117,6 +117,16 @@ def test_invalid_contract_provenance_and_references_are_rejected(payload, messag
         normalize_stage_result(payload)
 
 
+def test_unknown_reference_error_lists_available_canonical_ids():
+    existing = normalize_stage_result(_payload()).canonical_records()
+    invalid = _payload(claims=[{**_payload()["claims"][0], "evidence_ids": ["missing"]}])
+
+    with pytest.raises(ValidationError) as error:
+        normalize_stage_result(invalid, existing_records=existing)
+
+    assert next(iter(existing)) in str(error.value)
+
+
 def test_dependency_only_relationship_reference_is_rejected():
     prior = normalize_stage_result(_payload())
     dependency_claim = prior.claims[0]
