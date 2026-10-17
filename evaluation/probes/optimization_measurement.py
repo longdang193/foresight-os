@@ -19,6 +19,12 @@ from foresight_os.runtime.local_toolbelt import AnalysisOperation, SheetSelectio
 
 
 SCHEMA_VERSION = 2
+HARNESS_VERSION = "optimization-harness-v1"
+HARNESS_PATHS = (
+    "evaluation/probes/optimization_measurement.py",
+    "evaluation/probes/run_optimization_probe.py",
+    "evaluation/probes/compare_optimization_receipts.py",
+)
 MEASUREMENT_STATUSES = {"VERIFIED", "FAILED", "NOT_MEASURED", "DEFERRED", "FINAL_ONLY"}
 MANDATORY_XLSX_WORKLOADS = (
     "cold_workbook",
@@ -78,6 +84,21 @@ def _environment_metadata() -> dict[str, object]:
         "platform": platform.platform(),
         "executable": str(Path(sys.executable).resolve()),
         "pip_freeze": freeze,
+    }
+
+
+def _harness_metadata() -> dict[str, object]:
+    repo_root = Path(__file__).parents[2].resolve()
+    digest = hashlib.sha256()
+    for relative_path in HARNESS_PATHS:
+        path = repo_root / relative_path
+        digest.update(relative_path.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+    return {
+        "version": HARNESS_VERSION,
+        "source_tree_sha256": digest.hexdigest(),
+        "paths": list(HARNESS_PATHS),
     }
 
 
@@ -251,6 +272,7 @@ def build_receipt(
         "mode": mode,
         "status": "VERIFIED" if native_mcp.get("status") == "VERIFIED" else "FAILED",
         "environment": _environment_metadata(),
+        "harness": _harness_metadata(),
         "revision": _revision_metadata(),
         "workload": {
             "fixture": fixture.name,

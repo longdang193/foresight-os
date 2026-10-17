@@ -5,15 +5,18 @@ import csv
 import hashlib
 import io
 import json
+from contextlib import contextmanager
 from itertools import zip_longest
 import operator
 import posixpath
 import re
+from threading import RLock
+from types import MappingProxyType
 import zipfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field, fields, replace
 from datetime import date, datetime
-from enum import StrEnum
+from enum import Enum, StrEnum
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
@@ -79,16 +82,12 @@ class FormulaStatus(StrEnum):
     ERROR = "ERROR"
 
 
+@dataclass(frozen=True, slots=True)
 class ExcelError:
-    def __init__(self, value: str):
-        self.value = value
+    value: str
 
     def __repr__(self) -> str:
         return f"ExcelError({self.value!r})"
-
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, ExcelError) and self.value == other.value
-
 
 @dataclass(frozen=True)
 class ToolbeltLimits:
@@ -202,7 +201,7 @@ class WorkbookReadCache:
         self._put(self._analysis_entries, key, result)
 
     def _put(self, entries: dict[tuple[Any, ...], tuple[Any, int]], key: tuple[Any, ...], result: Any) -> None:
-        estimated = max(1, len(repr(result)))
+        estimated = max(1, int(getattr(result, "retained_bytes", 0) or _retained_size(result)))
         if estimated > self.max_bytes:
             return
         name = "entries" if entries is self._entries else "analysis_entries"
@@ -283,12 +282,18 @@ class AuthorityIndex:
         self._measurement_bytes: dict[tuple[str, str, str], int] = {}
         self._calculation_bytes: dict[tuple[str, str], int] = {}
         self._bytes = 0
+        self._generation = 0
         self._transaction: dict[str, Any] | None = None
 
     def begin_transaction(self) -> dict[str, Any]:
         if self._transaction is not None:
             raise RuntimeError("authority transaction already active")
-        self._transaction = {"measurements": {}, "calculations": {}, "bytes": self._bytes}
+        self._transaction = {
+            "measurements": {},
+            "calculations": {},
+            "bytes": self._bytes,
+            "generation": self._generation,
+        }
         return self._transaction
 
     def commit_transaction(self, transaction: dict[str, Any]) -> None:
@@ -309,6 +314,7 @@ class AuthorityIndex:
                     entries[key] = previous[0]
                     sizes[key] = previous[1]
         self._bytes = transaction["bytes"]
+        self._generation = transaction["generation"]
         self._transaction = None
 
     def _record_transaction(self, name: str, key: tuple[Any, ...], value: Any, size: int) -> None:
@@ -316,38 +322,51 @@ class AuthorityIndex:
             self._transaction[name][key] = _MISSING if value is None else (value, size)
 
     def remember_measurements(self, measurements: Iterable[TypedMeasurement]) -> None:
+        changed = False
         for measurement in measurements:
             key = (measurement.provenance.workbook_sha256, measurement.id, measurement.provenance.range)
             self._record_transaction("measurements", key, self.measurements.get(key), self._measurement_bytes.get(key, 0))
+            if self.measurements.get(key) != measurement:
+                changed = True
             self.measurements[key] = measurement
-            size = max(1, len(repr(measurement)))
+            size = _retained_size(measurement)
             self._bytes += size - self._measurement_bytes.get(key, 0)
             self._measurement_bytes[key] = size
         while len(self.measurements) > self.max_records:
+            changed = True
             key = next(iter(self.measurements))
             self._record_transaction("measurements", key, self.measurements.get(key), self._measurement_bytes.get(key, 0))
             self.measurements.pop(key)
             self._bytes -= self._measurement_bytes.pop(key, 0)
+        if changed:
+            self._generation += 1
 
     def remember_calculation(self, record: CalculationRecord, workbook_hash: str) -> None:
         key = (workbook_hash, record.id)
         self._record_transaction("calculations", key, self.calculations.get(key), self._calculation_bytes.get(key, 0))
+        changed = self.calculations.get(key) != record
         self.calculations[key] = record
-        size = max(1, len(repr(record)))
+        size = _retained_size(record)
         self._bytes += size - self._calculation_bytes.get(key, 0)
         self._calculation_bytes[key] = size
         while len(self.calculations) > self.max_records:
+            changed = True
             key = next(iter(self.calculations))
             self._record_transaction("calculations", key, self.calculations.get(key), self._calculation_bytes.get(key, 0))
             self.calculations.pop(key)
             self._bytes -= self._calculation_bytes.pop(key, 0)
+        if changed:
+            self._generation += 1
 
     def clear(self) -> None:
+        changed = bool(self.measurements or self.calculations)
         self.measurements.clear()
         self.calculations.clear()
         self._measurement_bytes.clear()
         self._calculation_bytes.clear()
         self._bytes = 0
+        if changed:
+            self._generation += 1
 
     @property
     def size(self) -> int:
@@ -356,6 +375,10 @@ class AuthorityIndex:
     @property
     def estimated_bytes(self) -> int:
         return self._bytes
+
+    @property
+    def generation(self) -> int:
+        return self._generation
 
 
 def _sha256_file(
@@ -499,13 +522,36 @@ def _stable_material_value(value: Any) -> Any:
         return {str(key): _stable_material_value(item) for key, item in sorted(value.items(), key=lambda item: str(item[0]))}
     if isinstance(value, (list, tuple)):
         return [_stable_material_value(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        items = [_stable_material_value(item) for item in value]
+        return sorted(items, key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":"), ensure_ascii=True))
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
+    if isinstance(value, bytes):
+        return value.hex()
     if isinstance(value, (date, datetime)):
         return value.isoformat()
+    if isinstance(value, Enum):
+        return _stable_material_value(value.value)
     if hasattr(value, "to_dict"):
         return _stable_material_value(value.to_dict())
+    if hasattr(value, "__dataclass_fields__"):
+        return {
+            field_info.name: _stable_material_value(getattr(value, field_info.name))
+            for field_info in fields(value)
+            if field_info.name != "retained_bytes"
+        }
     return repr(value)
+
+
+def _retained_size(value: Any) -> int:
+    encoded = json.dumps(
+        _stable_material_value(value),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
+    return max(1, len(encoded))
 
 
 TYPED_TABLE_IDENTITY_VERSION = "typed-table-material-v2"
@@ -629,6 +675,41 @@ def _remember_authoritative_calculation(
         _AUTHORITATIVE_CALCULATIONS.pop(next(iter(_AUTHORITATIVE_CALCULATIONS)))
 
 
+def _publish_read_result(
+    result: WorkbookReadResult,
+    *,
+    cache: Any = None,
+    cache_key: tuple[Any, ...] | None = None,
+    authority_index: AuthorityIndex | None = None,
+) -> WorkbookReadResult:
+    cache_transaction = None
+    authority_transaction = None
+    if cache is not None and hasattr(cache, "begin_transaction") and getattr(cache, "_transaction", None) is None:
+        cache_transaction = cache.begin_transaction()
+    if authority_index is not None and getattr(authority_index, "_transaction", None) is None:
+        authority_transaction = authority_index.begin_transaction()
+    try:
+        _remember_authoritative_measurements(result.measurements, authority_index)
+        if cache is not None and cache_key is not None:
+            cache.put(cache_key, result)
+        if cache_transaction is not None:
+            cache.commit_transaction(cache_transaction)
+        if authority_transaction is not None:
+            authority_index.commit_transaction(authority_transaction)
+        return result
+    except BaseException:
+        if cache_transaction is not None:
+            cache.rollback_transaction(cache_transaction)
+        if authority_transaction is not None:
+            authority_index.rollback_transaction(authority_transaction)
+        raise
+
+
+def _with_read_source(result: WorkbookReadResult, source: str | Path) -> WorkbookReadResult:
+    source_text = str(source)
+    return result if result.source == source_text else replace(result, source=source_text)
+
+
 @dataclass(frozen=True)
 class SheetSummary:
     name: str
@@ -659,6 +740,11 @@ class WorkbookReadResult:
     tables: tuple[TypedTable, ...]
     measurements: tuple[TypedMeasurement, ...]
     warnings: tuple[str, ...] = ()
+    retained_bytes: int = field(default=0, init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "warnings", tuple(self.warnings))
+        object.__setattr__(self, "retained_bytes", _retained_size(self))
 
     def to_dict(self) -> dict[str, Any]:
         serialized_measurements = [
@@ -688,10 +774,61 @@ class WorkbookContext:
         self.stats = WorkbookStats()
         self.max_total_bytes = max(1, max_total_bytes)
         self._closed = False
+        self._lock = RLock()
+        self._transaction: dict[str, Any] | None = None
+        self._authority_validated: dict[tuple[Any, ...], int] = {}
 
     def ensure_open(self) -> None:
         if self._closed:
             raise ToolbeltError("workbook context is closed")
+
+    @contextmanager
+    def transaction(self):
+        self.ensure_open()
+        with self._lock:
+            if self._transaction is not None:
+                yield self
+                return
+            transaction = {
+                "cache": self.cache.begin_transaction(),
+                "authority": self.authority_index.begin_transaction(),
+                "snapshots": dict(self.snapshots),
+                "authority_validated": dict(self._authority_validated),
+                "stats": {
+                    name: getattr(self.stats, name)
+                    for name in (
+                        "snapshot_bytes",
+                        "retained_read_result_bytes",
+                        "retained_analysis_result_bytes",
+                        "retained_authority_record_bytes",
+                    )
+                },
+            }
+            self._transaction = transaction
+            try:
+                yield self
+                self._enforce_budget()
+            except BaseException:
+                self.cache.rollback_transaction(transaction["cache"])
+                self.authority_index.rollback_transaction(transaction["authority"])
+                self.snapshots.clear()
+                self.snapshots.update(transaction["snapshots"])
+                self._authority_validated.clear()
+                self._authority_validated.update(transaction["authority_validated"])
+                for name, value in transaction["stats"].items():
+                    setattr(self.stats, name, value)
+                raise
+            else:
+                self.cache.commit_transaction(transaction["cache"])
+                self.authority_index.commit_transaction(transaction["authority"])
+            finally:
+                self._transaction = None
+
+    def _run_transaction(self, operation: Callable[[], Any]) -> Any:
+        if self._transaction is not None:
+            return operation()
+        with self.transaction():
+            return operation()
 
     def capture(
         self,
@@ -733,43 +870,40 @@ class WorkbookContext:
         read_limits = _coerce_toolbelt_limits(limits)
         source = Path(source)
         source_key = str(Path(source).resolve())
+        cached_key: tuple[Any, ...] | None = None
         cached_snapshot = self.snapshots.get(source_key)
         if cached_snapshot is not None:
             cached_key = self.cache.key(source, selection, read_limits, snapshot=cached_snapshot)
             cached_result = self.cache.get(cached_key)
             if cached_result is not None:
                 _check_cancel(cancel_check)
+                if (
+                    self._authority_validated.get(cached_key) == self.authority_index.generation
+                    and len(self.authority_index.measurements) >= len(cached_result.measurements)
+                ):
+                    self.stats.cache_hits += 1
+                    return _with_read_source(cached_result, source)
+
                 authority_keys = {
                     (item.provenance.workbook_sha256, item.id, item.provenance.range)
                     for item in cached_result.measurements
                 }
-                if not authority_keys.issubset(self.authority_index.measurements):
-                    authority_transaction = self.authority_index.begin_transaction()
-                    try:
-                        _remember_authoritative_measurements(cached_result.measurements, self.authority_index)
-                        self._refresh_retained_stats()
-                        self._enforce_budget()
-                        self.authority_index.commit_transaction(authority_transaction)
-                    except BaseException:
-                        self.authority_index.rollback_transaction(authority_transaction)
-                        raise
-                self.stats.cache_hits += 1
-                return replace(cached_result, source=str(source))
-        had_snapshot = source_key in self.snapshots
-        snapshot_bytes = self.stats.snapshot_bytes
-        retained_stats = {
-            name: getattr(self.stats, name)
-            for name in (
-                "retained_read_result_bytes",
-                "retained_analysis_result_bytes",
-                "retained_authority_record_bytes",
-            )
-        }
-        cache_transaction = self.cache.begin_transaction()
-        authority_transaction = self.authority_index.begin_transaction()
-        try:
+                if all(key in self.authority_index.measurements for key in authority_keys):
+                    self._authority_validated[cached_key] = self.authority_index.generation
+                    self.stats.cache_hits += 1
+                    return _with_read_source(cached_result, source)
+
+                def restore_authority() -> WorkbookReadResult:
+                    _remember_authoritative_measurements(cached_result.measurements, self.authority_index)
+                    self._authority_validated[cached_key] = self.authority_index.generation
+                    self.stats.cache_hits += 1
+                    return _with_read_source(cached_result, source)
+
+                return self._run_transaction(restore_authority)
+
+        def read_uncached() -> WorkbookReadResult:
             snapshot = self.capture(source, cancel_check=cancel_check, max_bytes=read_limits.max_bytes)
-            result = spreadsheet_read(
+            return spreadsheet_read(
                 str(source),
                 selection,
                 read_limits,
@@ -779,25 +913,57 @@ class WorkbookContext:
                 _authority_index=self.authority_index,
                 _stats=self.stats,
             )
-            self._refresh_retained_stats()
-            self._enforce_budget()
-            self.cache.commit_transaction(cache_transaction)
-            self.authority_index.commit_transaction(authority_transaction)
-            return result
-        except BaseException:
-            self.cache.rollback_transaction(cache_transaction)
-            self.authority_index.rollback_transaction(authority_transaction)
-            if not had_snapshot:
-                self.snapshots.pop(source_key, None)
-                self.stats.snapshot_bytes = snapshot_bytes
-            for name, value in retained_stats.items():
-                setattr(self.stats, name, value)
-            raise
+
+        result = self._run_transaction(read_uncached)
+        cached_key = self.cache.key(source, selection, read_limits, snapshot=self.snapshots[source_key])
+        if self.cache.get(cached_key) is not None:
+            self._authority_validated[cached_key] = self.authority_index.generation
+        self._prune_authority_validation()
+        return result
+
+    def analyze(
+        self,
+        table: TypedTable | Mapping[str, Any],
+        operation: AnalysisOperation | Mapping[str, Any],
+        limits: Mapping[str, Any] | None = None,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> AnalysisResult:
+        self.ensure_open()
+        _check_cancel(cancel_check)
+        normalized_table = _coerce_typed_table(table)
+        normalized_operation = _coerce_analysis_operation(operation)
+        normalized_limits = _coerce_toolbelt_limits(limits)
+        cache_key = self.cache.analysis_key(normalized_table, normalized_operation, normalized_limits)
+        cached_result = self.cache.get_analysis(cache_key)
+        if cached_result is not None:
+            self.stats.analysis_cache_hits += 1
+            return cached_result
+
+        def analyze_uncached() -> AnalysisResult:
+            return data_analysis(
+                normalized_table,
+                normalized_operation,
+                normalized_limits,
+                cancel_check=cancel_check,
+                _cache=self.cache,
+                _authority_index=self.authority_index,
+                _stats=self.stats,
+            )
+
+        return self._run_transaction(analyze_uncached)
 
     def _refresh_retained_stats(self) -> None:
         self.stats.retained_read_result_bytes = self.cache.read_bytes
         self.stats.retained_analysis_result_bytes = self.cache.analysis_bytes
         self.stats.retained_authority_record_bytes = self.authority_index.estimated_bytes
+
+    def _prune_authority_validation(self) -> None:
+        self._authority_validated = {
+            key: generation
+            for key, generation in self._authority_validated.items()
+            if self.cache.get(key) is not None
+        }
 
     def _enforce_budget(self) -> None:
         self._refresh_retained_stats()
@@ -817,6 +983,7 @@ class WorkbookContext:
         self.snapshots.clear()
         self.cache.clear()
         self.authority_index.clear()
+        self._authority_validated.clear()
         self.stats.snapshot_bytes = 0
         self.stats.retained_read_result_bytes = 0
         self.stats.retained_analysis_result_bytes = 0
@@ -855,10 +1022,56 @@ def _analysis_operation_identity(operation: AnalysisOperation) -> tuple[Any, ...
 @dataclass(frozen=True)
 class AnalysisResult:
     operation: str
-    rows: tuple[dict[str, Any], ...]
+    rows: tuple[Mapping[str, Any], ...]
     provenance: tuple[CellProvenance, ...]
     deterministic_key: str
     warnings: tuple[str, ...] = ()
+    retained_bytes: int = field(default=0, init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "rows",
+            tuple(
+                MappingProxyType({str(key): _freeze_result_value(value) for key, value in row.items()})
+                for row in self.rows
+            ),
+        )
+        object.__setattr__(self, "warnings", tuple(self.warnings))
+        object.__setattr__(self, "retained_bytes", _retained_size(self))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "operation": self.operation,
+            "rows": [_thaw_result_value(row) for row in self.rows],
+            "provenance": [_thaw_result_value(item) for item in self.provenance],
+            "deterministic_key": self.deterministic_key,
+            "warnings": list(self.warnings),
+        }
+
+
+def _freeze_result_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({str(key): _freeze_result_value(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_result_value(item) for item in value)
+    if isinstance(value, set):
+        return frozenset(_freeze_result_value(item) for item in value)
+    return value
+
+
+def _thaw_result_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _thaw_result_value(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw_result_value(item) for item in value]
+    if isinstance(value, frozenset):
+        return sorted((_thaw_result_value(item) for item in value), key=repr)
+    if isinstance(value, ExcelError):
+        return value.value
+    if hasattr(value, "__dataclass_fields__"):
+        return {field_name: _thaw_result_value(getattr(value, field_name)) for field_name in value.__dataclass_fields__}
+    return value
 
 
 @dataclass(frozen=True)
@@ -1143,17 +1356,19 @@ def spreadsheet_read(
         if cached_result is not None:
             if _stats is not None:
                 _stats.cache_hits += 1
-            cached_result = replace(cached_result, source=str(source))
-            _remember_authoritative_measurements(cached_result.measurements, _authority_index)
+            cached_result = _with_read_source(cached_result, source)
+            _publish_read_result(cached_result, authority_index=_authority_index)
             return cached_result
     if snapshot.byte_count > limits.max_bytes:
         raise ToolbeltError("workbook exceeds byte limit")
     if source.suffix.lower() in {".csv", ".tsv"}:
         result = _read_delimited(snapshot, selection, limits, cancel_check)
-        _remember_authoritative_measurements(result.measurements, _authority_index)
-        if _cache is not None and cache_key is not None:
-            _cache.put(cache_key, result)
-        return result
+        return _publish_read_result(
+            result,
+            cache=_cache,
+            cache_key=cache_key,
+            authority_index=_authority_index,
+        )
     if source.suffix.lower() not in {".xlsx", ".xlsm", ".xltx", ".xltm"}:
         raise ToolbeltError("unsupported spreadsheet format")
     try:
@@ -1284,10 +1499,12 @@ def spreadsheet_read(
                 related.extend(CellProvenance(digest, sheet, coordinate, f"{sheet}!{coordinate}") for sheet, coordinate in measurement.cross_sheet_cells)
             finalized_tables.append(replace(table, related_provenance=tuple(dict.fromkeys(related))))
         result = WorkbookReadResult(str(source), digest, tuple(sheets), tuple(finalized_tables), tuple(measurements))
-        if _cache is not None and cache_key is not None:
-            _cache.put(cache_key, result)
-        _remember_authoritative_measurements(result.measurements, _authority_index)
-        return result
+        return _publish_read_result(
+            result,
+            cache=_cache,
+            cache_key=cache_key,
+            authority_index=_authority_index,
+        )
     finally:
         if cached is not None:
             cached.close()
@@ -1321,9 +1538,12 @@ def data_analysis(
     *,
     cancel_check: Callable[[], bool] | None = None,
     _cache: Any = None,
+    _workbook_context: WorkbookContext | None = None,
     _authority_index: AuthorityIndex | None = None,
     _stats: WorkbookStats | None = None,
 ) -> AnalysisResult:
+    if _workbook_context is not None:
+        return _workbook_context.analyze(table, operation, limits, cancel_check=cancel_check)
     table = _coerce_typed_table(table)
     operation = _coerce_analysis_operation(operation)
     limits = _coerce_toolbelt_limits(limits)

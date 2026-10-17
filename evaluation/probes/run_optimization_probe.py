@@ -12,6 +12,7 @@ import threading
 import tempfile
 import time
 import tracemalloc
+from collections.abc import Mapping
 from pathlib import Path
 
 # Direct probe execution must measure the checked-out worktree, not an
@@ -157,7 +158,7 @@ def _analysis_value(table: object) -> float | None:
     if value_column is None:
         return None
     result = data_analysis(table, AnalysisOperation("aggregate", value_column=value_column))
-    if result.rows and isinstance(result.rows[0], dict):
+    if result.rows and isinstance(result.rows[0], Mapping):
         value = result.rows[0].get("sum")
         if value is None:
             value = result.rows[0].get("value")

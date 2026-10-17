@@ -30,6 +30,15 @@ def _receipt() -> dict:
     }
     return {
         "schema_version": 2,
+        "harness": {
+            "version": "optimization-harness-v1",
+            "source_tree_sha256": "harness",
+            "paths": [
+                "evaluation/probes/optimization_measurement.py",
+                "evaluation/probes/run_optimization_probe.py",
+                "evaluation/probes/compare_optimization_receipts.py",
+            ],
+        },
         "revision": {
             "commit": "commit",
             "repo_root": "repo",
@@ -124,6 +133,22 @@ def test_comparator_rejects_missing_or_zero_denominator_without_raising():
     release = deepcopy(baseline)
     del release["revision"]
     assert not compare(baseline, release)["accepted"]
+
+
+def test_comparator_rejects_missing_or_mismatched_harness_identity():
+    baseline = _receipt()
+    release = deepcopy(baseline)
+    del release["harness"]
+
+    missing = compare(baseline, release)
+    assert not missing["accepted"]
+    assert "harness.version" in missing["missing_required_evidence"]["release"]
+
+    release = deepcopy(baseline)
+    release["harness"]["source_tree_sha256"] = "different-harness"
+
+    mismatched = compare(baseline, release)
+    assert mismatched == {"accepted": False, "mismatched_comparison_inputs": ["harness"]}
 
 
 def test_comparator_rejects_missing_evidence_statuses():

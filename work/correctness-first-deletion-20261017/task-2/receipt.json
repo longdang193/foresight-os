@@ -1,0 +1,28 @@
+{
+  "task": "task-2",
+  "status": "completed",
+  "date": "2026-10-17",
+  "base_commit": "14bd69644b7012639c00a65fa94cdd67f52b4c62",
+  "verification": {
+    "command": "python -m pytest -q tests/test_local_toolbelt.py tests/test_runtime_boundaries.py tests/test_evidence_workflow.py",
+    "status": "PASS",
+    "tests_passed": 117
+  },
+  "diff_check": {
+    "command": "git diff --check",
+    "status": "PASS"
+  },
+  "evidence": [
+    "analysis cache values reject nested mutation without changing later hits",
+    "rejected evidence persistence rolls back newly published analysis state",
+    "budget rejection preserves earlier committed cache entries and retained-state accounting",
+    "direct and capability-dispatched analysis produce equivalent context-backed results",
+    "standalone read and context cleanup boundaries remain covered"
+  ],
+  "deferred": [
+    "full repository pytest",
+    "compileall",
+    "matched optimization comparison",
+    "optional deletion tail"
+  ]
+}

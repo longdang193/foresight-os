@@ -1,0 +1,162 @@
+{
+  "investigation_id": "xlsx-evidence-workflow",
+  "revision": 1,
+  "evidence": [
+    {
+      "id": "xlsx-evidence-c1ef700f207255bb",
+      "source_locator": {
+        "file_version": "3f381b148ab6f2d0942061964b3851b26e4a66c224dd0866d431cc3c9d52d123",
+        "sheet": "Demand",
+        "range": "C3",
+        "units": "unknown",
+        "transformation": "data_analysis:aggregate",
+        "calculation": "aggregate"
+      },
+      "version": "3f381b148ab6f2d0942061964b3851b26e4a66c224dd0866d431cc3c9d52d123",
+      "date": "2026-10-17",
+      "excerpt": "10",
+      "limitations": [
+        "read-only workbook inspection"
+      ],
+      "measurement_key": null
+    },
+    {
+      "id": "xlsx-evidence-54a93ba543943688",
+      "source_locator": {
+        "file_version": "3f381b148ab6f2d0942061964b3851b26e4a66c224dd0866d431cc3c9d52d123",
+        "sheet": "Demand",
+        "range": "C4",
+        "units": "unknown",
+        "transformation": "data_analysis:aggregate",
+        "calculation": "aggregate"
+      },
+      "version": "3f381b148ab6f2d0942061964b3851b26e4a66c224dd0866d431cc3c9d52d123",
+      "date": "2026-10-17",
+      "excerpt": "10",
+      "limitations": [
+        "read-only workbook inspection"
+      ],
+      "measurement_key": null
+    }
+  ],
+  "claims": [
+    {
+      "id": "xlsx-claim-86d42d5270358cd2",
+      "statement": "Workbook analysis aggregate produced 20.0.",
+      "basis": "DERIVED",
+      "assessment": "SUPPORTED",
+      "lifecycle": "CURRENT",
+      "evidence_ids": [
+        "xlsx-evidence-c1ef700f207255bb",
+        "xlsx-evidence-54a93ba543943688"
+      ],
+      "relationship_ids": [
+        "xlsx-relationship-86d42d5270358cd2"
+      ],
+      "assumptions": [],
+      "uncertainty": [],
+      "confidence_rationale": "",
+      "disconfirmation_conditions": [],
+      "monitoring_indicators": []
+    }
+  ],
+  "implications": [],
+  "recommendations": [],
+  "artifacts": [],
+  "relationships": [
+    {
+      "id": "xlsx-relationship-86d42d5270358cd2",
+      "from_id": "xlsx-evidence-c1ef700f207255bb",
+      "to_id": "xlsx-claim-86d42d5270358cd2",
+      "relation_type": "supports"
+    }
+  ],
+  "revisions": [
+    {
+      "id": "revision-1",
+      "number": 1,
+      "change_reason": "deterministic workbook analysis pending acceptance",
+      "record_ids": [
+        "xlsx-evidence-c1ef700f207255bb",
+        "xlsx-evidence-54a93ba543943688",
+        "xlsx-calculation-86d42d5270358cd2",
+        "xlsx-claim-86d42d5270358cd2",
+        "xlsx-relationship-86d42d5270358cd2"
+      ]
+    }
+  ],
+  "invalidation": {
+    "stale_artifact_ids": [],
+    "reassessment_ids": [],
+    "reasons": []
+  },
+  "schema_version": 2,
+  "revision_status": "ACCEPTED",
+  "calculations": [
+    {
+      "id": "xlsx-calculation-86d42d5270358cd2",
+      "key": {
+        "region": "Demand",
+        "measure": "aggregate",
+        "period": "current",
+        "units": "unknown",
+        "scenario": "default",
+        "version": "v1"
+      },
+      "formula": "data_analysis(aggregate)",
+      "input_ids": [
+        "xlsx-evidence-c1ef700f207255bb",
+        "xlsx-evidence-54a93ba543943688"
+      ],
+      "output": 20.0,
+      "units": "unknown",
+      "source_locators": [
+        "C3",
+        "C4"
+      ],
+      "verification_status": "NOT_VERIFIED"
+    }
+  ],
+  "pending_token": null,
+  "review_records": [
+    {
+      "review_id": "review-xlsx-evidence-workflow-1",
+      "target_ids": [
+        "xlsx-claim-86d42d5270358cd2"
+      ],
+      "reviewed_state_revision": 1,
+      "input_fingerprint": "426589c5e3715e7142f5538631b1948f8e5dfaf88c1d5abc515561a4bcbd8d1e",
+      "skill_ids": [
+        "quantitative-sanity-check",
+        "red-team-claim"
+      ],
+      "skill_versions": [
+        "1.1.0",
+        "1.1.0"
+      ],
+      "objections": [],
+      "outcome": "ACCEPTED",
+      "limitations": [],
+      "unresolved_issues": [],
+      "policy_id": "review-policy-quantitative-v1",
+      "policy_version": "1",
+      "skill_hashes": [
+        "0711d992f5a8bb6b6f6eadfa01a02e44cf593e9e645ca4531bbb818e63fcdbb4",
+        "5fceb46ebaf75b9be1ec5301896453c459c393b75fa90e29b3569470e971380c"
+      ],
+      "check_id": "",
+      "reviewer_id": "",
+      "execution_id": "",
+      "attempt_id": "",
+      "method": "",
+      "source_fingerprints": [],
+      "dependency_fingerprints": [],
+      "slot_key": "",
+      "supersedes_review_id": null,
+      "superseded_by_review_id": null,
+      "conflict_review_ids": [],
+      "check_results": [],
+      "legacy": true
+    }
+  ]
+}
