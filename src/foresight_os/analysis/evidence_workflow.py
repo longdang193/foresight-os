@@ -4,7 +4,7 @@ import hashlib
 from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state, review_analysis_state_with_skills, review_reasoning
 from foresight_os.domain.evidence import normalize_evidence_candidate
@@ -241,7 +241,7 @@ def accept_pending_evidence(store: AnalysisStore, *, human_decision: str, source
     return EvidenceWorkflowResult("accepted", tuple(), None, state.evidence[0] if state.evidence else None, state.claims[0] if state.claims else None, review, committed, tuple())
 
 
-def run_xlsx_finding_workflow(
+def _run_xlsx_finding_workflow(
     store: AnalysisStore,
     source: Path,
     operation: AnalysisOperation,
@@ -278,14 +278,7 @@ def run_xlsx_finding_workflow(
             table = next((candidate for candidate in workbook.tables if (candidate.sheet, candidate.source_range) in requested), None)
             if table is None:
                 raise ToolbeltError("selected range was not found in workbook")
-        analysis_kwargs = {}
-        if workbook_context is not None:
-            analysis_kwargs = {
-                "_cache": workbook_context.cache,
-                "_authority_index": workbook_context.authority_index,
-                "_stats": workbook_context.stats,
-            }
-        result = data_analysis(table, operation, **analysis_kwargs)
+        result = workbook_context.analyze(table, operation) if workbook_context is not None else data_analysis(table, operation)
         measurements = {(item.provenance.sheet, item.provenance.coordinate): item for item in workbook.measurements}
         evidence: list[Evidence] = []
         selected_columns = {table.columns.index(operation.value_column)} if operation.value_column in table.columns else set(range(len(table.columns)))
@@ -312,7 +305,7 @@ def run_xlsx_finding_workflow(
         if not evidence:
             raise ToolbeltError("analysis has no promotable evidence")
         output = None
-        if result.rows and isinstance(result.rows[0], dict):
+        if result.rows and isinstance(result.rows[0], Mapping):
             output = result.rows[0].get("sum")
             if output is None:
                 output = result.rows[0].get("value")
@@ -342,6 +335,8 @@ def run_xlsx_finding_workflow(
             revision_status=RevisionStatus.DRAFT,
             calculations=[calculation],
         )
+        if workbook_context is not None:
+            workbook_context.enforce_budget()
         pending = store.save_pending(state)
         review = review_analysis_state(pending)
         if human_decision.upper() in {"PENDING", "PENDING_REVIEW"}:
@@ -354,3 +349,48 @@ def run_xlsx_finding_workflow(
         return EvidenceWorkflowResult("accepted", tuple(), table.sheet, evidence[0], claim, review, committed, ("spreadsheet_read", "data_analysis"))
     except Exception as error:
         return EvidenceWorkflowResult("failed", tuple(), None, None, None, None, None, ("spreadsheet_read", "data_analysis"), type(error).__name__)
+
+
+def run_xlsx_finding_workflow(
+    store: AnalysisStore,
+    source: Path,
+    operation: AnalysisOperation,
+    *,
+    selection: SheetSelection | None = None,
+    investigation_id: str = "xlsx-evidence-workflow",
+    human_decision: str = "REJECT",
+    snapshot: SourceSnapshot | None = None,
+    workbook_context: WorkbookContext | None = None,
+) -> EvidenceWorkflowResult:
+    if workbook_context is None:
+        return _run_xlsx_finding_workflow(
+            store,
+            source,
+            operation,
+            selection=selection,
+            investigation_id=investigation_id,
+            human_decision=human_decision,
+            snapshot=snapshot,
+            workbook_context=None,
+        )
+    class _RollbackWorkflow(Exception):
+        def __init__(self, result: EvidenceWorkflowResult):
+            self.result = result
+
+    try:
+        with workbook_context.transaction():
+            result = _run_xlsx_finding_workflow(
+                store,
+                source,
+                operation,
+                selection=selection,
+                investigation_id=investigation_id,
+                human_decision=human_decision,
+                snapshot=snapshot,
+                workbook_context=workbook_context,
+            )
+            if result.status == "failed":
+                raise _RollbackWorkflow(result)
+            return result
+    except _RollbackWorkflow as rollback:
+        return rollback.result

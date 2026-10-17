@@ -16,7 +16,7 @@ from foresight_os.controller.budgets import BudgetState
 from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
 from foresight_os.runtime.executors import AnalystExecutor, ReviewerExecutor, _toolless_retry_agent, run_agent_with_tool_fallback
 from foresight_os.runtime.workflow import run_recipe_async
-from foresight_os.runtime.local_toolbelt import data_analysis, spreadsheet_read
+from foresight_os.runtime.local_toolbelt import AnalysisOperation, data_analysis, spreadsheet_read
 
 
 class FakeClient:
@@ -743,6 +743,35 @@ def test_instrumented_workbook_tools_share_one_scope_context():
         await scope.close()
         assert scope.workbook_context is None
         assert not any(name == "workbook" + "_cache" for name in vars(scope))
+
+    asyncio.run(scenario())
+
+
+def test_direct_and_capability_dispatched_analysis_share_context_behavior():
+    async def scenario():
+        workbook_path = Path(__file__).parent / "fixtures" / "analyst_multisheet.xlsx"
+        scope = CapabilityScope(ownership=ScopeOwnership.RUN)
+        read_tool = instrument_tool(
+            spreadsheet_read,
+            CapabilityDefinition("spreadsheet_read", "local_deterministic", execution_mode=ExecutionMode.BLOCKING),
+            {"scope": scope},
+        )
+        analysis_tool = instrument_tool(
+            data_analysis,
+            CapabilityDefinition("data_analysis", "local_deterministic", execution_mode=ExecutionMode.BLOCKING),
+            {"scope": scope},
+        )
+        operation = AnalysisOperation("sum", value_column="Value")
+
+        workbook = await read_tool(str(workbook_path))
+        direct = scope.workbook_context.analyze(workbook.tables[0], operation)
+        dispatched = await analysis_tool(workbook.tables[0], operation)
+
+        assert dispatched == direct
+        assert dispatched.deterministic_key == direct.deterministic_key
+        assert scope.workbook_context.stats.analysis_cache_hits == 1
+
+        await scope.close()
 
     asyncio.run(scenario())
 

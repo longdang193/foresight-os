@@ -13,6 +13,7 @@ from foresight_os.domain.validation import ValidationError
 from foresight_os.analysis.result_committer import ANALYSIS_STAGE_RESULT_CONTRACT, decode_stage_output
 from foresight_os.runtime.workflow import CanonicalStageResult, _canonical_result_hash, _close_agents, _dependency_stage_ids, _expand_dependency_records, _run_native_stage, _synthesize_stage_outputs, _workflow_output_value, run_recipe_async
 from foresight_os.runtime.metrics import BudgetExceededError, RunCanceledError, RunMetrics
+from foresight_os.runtime.orchestration import RunControl
 import foresight_os.runtime.workflow as workflow_module
 
 
@@ -264,6 +265,28 @@ def test_direct_synthesis_preflights_payload_bytes_before_returning_single_outpu
     assert caught.value.code == "BUDGET_EXHAUSTED"
 
 
+def test_single_typed_output_uses_canonical_normalization_and_rejects_dangling_references():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.DIRECT,
+        ({"id": "one"},),
+        "typed-result",
+        "typed-result",
+        {},
+        synthesis_policy="aggregate-typed-results",
+    )
+    output = _typed_stage_result("stage-1", "evidence-one", "observation")
+    output["relationships"] = [{
+        "id": "dangling",
+        "from_id": "missing-evidence",
+        "to_id": "missing-claim",
+        "relation_type": "supports",
+    }]
+
+    with pytest.raises(ValidationError, match="reference|relationship"):
+        _synthesize_stage_outputs(stage, [output])
+
+
 def test_typed_synthesis_honors_cancellation_checkpoint():
     stage = RecipeStage(
         "stage-1",
@@ -284,6 +307,42 @@ def test_typed_synthesis_honors_cancellation_checkpoint():
             ],
             cancel_check=lambda: True,
         )
+
+
+def test_production_stage_synthesis_honors_run_cancellation_after_outputs(monkeypatch):
+    control = RunControl("production-synthesis-cancel")
+    output = _typed_stage_result("stage-1", "evidence-one", "observation")
+
+    async def run_native_stage(pattern, prompt, client, roles, metrics, run_context):
+        control.request_cancel()
+        return [output]
+
+    monkeypatch.setattr(workflow_module, "_run_native_stage", run_native_stage)
+
+    with pytest.raises(RunCanceledError, match="stage synthesis"):
+        asyncio.run(
+            run_recipe_async(
+                _recipe((ExecutionPattern.SEQUENTIAL,)),
+                "hello",
+                FakeChatClient(),
+                "production-synthesis-cancel",
+                {"run_control": control},
+            )
+        )
+
+
+def test_single_unstructured_output_keeps_legacy_synthesis_compatibility():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.DIRECT,
+        ({"id": "one"},),
+        "typed-result",
+        "typed-result",
+        {},
+    )
+    output = {"stage_id": "stage-1", "value": "legacy"}
+
+    assert _synthesize_stage_outputs(stage, [output]) == output
 
 
 def test_typed_synthesis_counts_material_work_against_operation_budget():
@@ -892,6 +951,58 @@ def test_sequential_validation_failure_retries_the_complete_stage():
     assert len(calls) == 2
     assert "complete sequential stage" in calls[1]
     assert "audit every evidence_ids" in calls[1]
+
+
+def test_sequential_recovery_honors_run_cancellation_before_retry(monkeypatch):
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.SEQUENTIAL,
+        ({"id": "analyst", "purpose": "analyze"}, {"id": "reviewer", "purpose": "review"}),
+        "typed-result",
+        "typed-result",
+        {},
+        synthesis_policy="aggregate-typed-results",
+    )
+    base = make_recipe(RecipeName.ANALYZE_REVIEW)
+    recipe = ExecutionRecipe(
+        base.name,
+        base.pattern,
+        base.roles,
+        base.max_agent_steps,
+        1,
+        12,
+        base.completion,
+        base.escalation,
+        base.partial_result,
+        stages=(stage,),
+    )
+    control = RunControl("sequential-recovery-cancel")
+    dispatches = 0
+    output = _typed_stage_result("stage-1", "evidence-one", "validated")
+
+    async def run_native_stage(pattern, prompt, client, roles, metrics, run_context):
+        nonlocal dispatches
+        dispatches += 1
+        return [output, output]
+
+    def committer(stage, current, context):
+        control.request_cancel()
+        raise ValidationError("unknown reference", code="UNRESOLVED_REFERENCE", participant_index=0)
+
+    monkeypatch.setattr(workflow_module, "_run_native_stage", run_native_stage)
+
+    with pytest.raises(RunCanceledError, match="canceled"):
+        asyncio.run(
+            run_recipe_async(
+                recipe,
+                "hello",
+                FakeChatClient(),
+                "sequential-recovery-cancel",
+                {"canonical_result_committer": committer, "run_control": control},
+            )
+        )
+
+    assert dispatches == 1
 
 
 def test_stage_context_binds_recipe_contract_and_structured_output_mode():

@@ -1,0 +1,268 @@
+{
+  "absolute": {
+    "economics_per_accepted_finding": {
+      "external_http_requests": {
+        "baseline": 1.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 1.0
+      },
+      "input_tokens": {
+        "baseline": 0.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 0.0
+      },
+      "local_tool_calls": {
+        "baseline": 5.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 5.0
+      },
+      "mcp_tool_calls": {
+        "baseline": 1.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 1.0
+      },
+      "model_calls": {
+        "baseline": 80.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 80.0
+      },
+      "output_tokens": {
+        "baseline": 0.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 0.0
+      },
+      "tool_calls_total": {
+        "baseline": 2.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 2.0
+      }
+    },
+    "maf_patterns": {
+      "ANALYZE": {
+        "baseline": 16.014,
+        "delta": 0.029,
+        "pct": 0.181,
+        "release": 16.043
+      },
+      "CHALLENGE_RECOMMENDATION": {
+        "baseline": 16.007,
+        "delta": 0.138,
+        "pct": 0.862,
+        "release": 16.145
+      },
+      "CONCURRENT": {
+        "baseline": 16.038,
+        "delta": -0.345,
+        "pct": -2.151,
+        "release": 15.693
+      },
+      "DIRECT": {
+        "baseline": 16.017,
+        "delta": 0.052,
+        "pct": 0.325,
+        "release": 16.069
+      },
+      "HANDOFF": {
+        "baseline": 15.997,
+        "delta": 0.379,
+        "pct": 2.369,
+        "release": 16.376
+      }
+    },
+    "resource": {
+      "rss_bytes": {
+        "baseline": 152604672.0,
+        "delta": 679936.0,
+        "pct": 0.446,
+        "release": 153284608.0
+      }
+    },
+    "xlsx": {
+      "p95_ms": {
+        "baseline": 12.948,
+        "delta": 1.352,
+        "pct": 10.442,
+        "release": 14.3
+      },
+      "peak_allocation_bytes": {
+        "baseline": 1065463.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 1065463.0
+      },
+      "timing_paths": {
+        "analyst_validator_reuse": {
+          "baseline": 0.473,
+          "delta": -0.027,
+          "pct": -5.708,
+          "release": 0.446
+        },
+        "cold_workbook": {
+          "baseline": 13.107,
+          "delta": 1.451,
+          "pct": 11.07,
+          "release": 14.558
+        },
+        "repeated_investigation": {
+          "baseline": 84.465,
+          "delta": 11.498,
+          "pct": 13.613,
+          "release": 95.963
+        },
+        "same_view_repeat": {
+          "baseline": 0.552,
+          "delta": -0.13,
+          "pct": -23.551,
+          "release": 0.422
+        }
+      }
+    }
+  },
+  "accepted": true,
+  "accepted_finding_count": {
+    "baseline": 1,
+    "release": 1
+  },
+  "baseline": {
+    "economics_per_accepted_finding": {
+      "external_http_requests": 1.0,
+      "input_tokens": 0.0,
+      "local_tool_calls": 5.0,
+      "mcp_tool_calls": 1.0,
+      "model_calls": 80.0,
+      "output_tokens": 0.0,
+      "tool_calls_total": 2.0
+    },
+    "p95_ms": 12.948,
+    "peak_allocation_bytes": 1065463,
+    "timing_paths": {
+      "analyst_validator_reuse": {
+        "wall_time_ms": 0.473
+      },
+      "cold_workbook": {
+        "wall_time_ms": 13.107
+      },
+      "direct_workbook": {
+        "p50_ms": 12.277,
+        "p90_ms": 12.948,
+        "p95_ms": 12.948,
+        "sample_count": 10
+      },
+      "repeated_investigation": {
+        "wall_time_ms": 84.465
+      },
+      "same_view_repeat": {
+        "wall_time_ms": 0.552
+      }
+    }
+  },
+  "evidence": {
+    "release": {
+      "allocation": {
+        "limitation": null,
+        "status": "VERIFIED"
+      },
+      "correctness": {
+        "limitation": null,
+        "status": "VERIFIED"
+      },
+      "latency": {
+        "limitation": null,
+        "status": "VERIFIED"
+      },
+      "soak": {
+        "limitation": null,
+        "status": "VERIFIED"
+      }
+    },
+    "unavailable_dimensions": []
+  },
+  "gate": "PASS",
+  "native_mcp": {
+    "baseline": "VERIFIED",
+    "release": "VERIFIED"
+  },
+  "regression": {
+    "economics_per_accepted_finding_delta": {
+      "external_http_requests": 0.0,
+      "input_tokens": 0.0,
+      "local_tool_calls": 0.0,
+      "mcp_tool_calls": 0.0,
+      "model_calls": 0.0,
+      "output_tokens": 0.0,
+      "tool_calls_total": 0.0
+    },
+    "p95_pct": 10.442,
+    "pattern_p95_pct": {
+      "ANALYZE": 0.181,
+      "CHALLENGE_RECOMMENDATION": 0.862,
+      "CONCURRENT": -2.151,
+      "DIRECT": 0.325,
+      "HANDOFF": 2.369
+    },
+    "peak_allocation_pct": 0.0,
+    "rss_pct": 0.446,
+    "timing_paths_pct": {
+      "analyst_validator_reuse": -5.708,
+      "cold_workbook": 11.07,
+      "repeated_investigation": 13.613,
+      "same_view_repeat": -23.551
+    }
+  },
+  "release": {
+    "economics_per_accepted_finding": {
+      "external_http_requests": 1.0,
+      "input_tokens": 0.0,
+      "local_tool_calls": 5.0,
+      "mcp_tool_calls": 1.0,
+      "model_calls": 80.0,
+      "output_tokens": 0.0,
+      "tool_calls_total": 2.0
+    },
+    "p95_ms": 14.3,
+    "peak_allocation_bytes": 1065463,
+    "timing_paths": {
+      "analyst_validator_reuse": {
+        "wall_time_ms": 0.446
+      },
+      "cold_workbook": {
+        "wall_time_ms": 14.558
+      },
+      "direct_workbook": {
+        "p50_ms": 13.486,
+        "p90_ms": 14.3,
+        "p95_ms": 14.3,
+        "sample_count": 10
+      },
+      "repeated_investigation": {
+        "wall_time_ms": 95.963
+      },
+      "same_view_repeat": {
+        "wall_time_ms": 0.422
+      }
+    }
+  },
+  "reused_stage_new_calls": [],
+  "workload": {
+    "fixture": "analyst_multisheet.xlsx",
+    "fixture_sha256": "3f381b148ab6f2d0942061964b3851b26e4a66c224dd0866d431cc3c9d52d123",
+    "measured_runs": 10,
+    "patterns": [
+      "ANALYZE",
+      "CHALLENGE_RECOMMENDATION",
+      "CONCURRENT",
+      "DIRECT",
+      "HANDOFF"
+    ],
+    "process_runs": 5,
+    "samples_per_process_run": 10,
+    "warmups": 2
+  }
+}

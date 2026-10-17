@@ -43,6 +43,7 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
     missing: list[str] = []
     required = (
         "schema_version",
+        "harness",
         "revision",
         "accepted_finding_count",
         "economics",
@@ -59,6 +60,10 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
     missing.extend(key for key in required if key not in receipt)
     if receipt.get("schema_version") != SCHEMA_VERSION:
         missing.append(f"schema_version={SCHEMA_VERSION}")
+    harness = receipt.get("harness", {})
+    for field in ("version", "source_tree_sha256"):
+        if not isinstance(harness.get(field), str) or not harness[field].strip():
+            missing.append(f"harness.{field}")
     evidence = receipt.get("evidence")
     evidence_statuses: dict[str, str] = {}
     for dimension in ("correctness", "latency", "allocation", "soak"):
@@ -213,6 +218,8 @@ def validate_stability(baseline_repeat: list[dict], release_repeat: list[dict]) 
             errors.append(f"{label}.environment differs between repeats")
         if first.get("revision") != second.get("revision"):
             errors.append(f"{label}.revision differs between repeats")
+        if first.get("harness") != second.get("harness"):
+            errors.append(f"{label}.harness differs between repeats")
         try:
             drift = _safe_pct(
                 float(second["maf_patterns"]["CHALLENGE_RECOMMENDATION"]["latency"]["wall_time_ms_p95"]),
@@ -232,6 +239,8 @@ def validate_stability(baseline_repeat: list[dict], release_repeat: list[dict]) 
             errors.append("baseline/release workload differs")
         if baseline_repeat[0].get("environment") != release_repeat[0].get("environment"):
             errors.append("baseline/release environment differs")
+        if baseline_repeat[0].get("harness") != release_repeat[0].get("harness"):
+            errors.append("baseline/release harness differs")
         if (
             baseline_repeat[0].get("revision", {}).get("commit")
             == release_repeat[0].get("revision", {}).get("commit")
@@ -257,6 +266,8 @@ def compare(baseline: dict, release: dict) -> dict:
         return {"accepted": False, "missing_required_evidence": {"baseline": missing_baseline, "release": missing_release}}
 
     mismatches: list[str] = []
+    if baseline.get("harness") != release.get("harness"):
+        mismatches.append("harness")
     if baseline.get("workload") != release.get("workload"):
         mismatches.append("workload")
     if baseline.get("xlsx", {}).get("deterministic_key") != release.get("xlsx", {}).get("deterministic_key"):

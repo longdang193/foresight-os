@@ -425,7 +425,15 @@ def _synthesize_stage_outputs(
         raise _synthesis_error("MALFORMED_OUTPUT", "typed stage synthesis payload is not serializable") from error
     if payload_bytes > max_payload_bytes:
         raise _synthesis_error("BUDGET_EXHAUSTED", f"typed stage synthesis exceeded {max_payload_bytes} payload bytes")
-    if len(outputs) == 1 and not failures:
+    if (
+        len(outputs) == 1
+        and not failures
+        and not (
+            isinstance(outputs[0], Mapping)
+            and "contract" in outputs[0]
+            and "stage_id" in outputs[0]
+        )
+    ):
         return outputs[0]
     if str(getattr(stage, "synthesis_policy", "")) != "aggregate-typed-results":
         raise _synthesis_error(
@@ -1015,6 +1023,18 @@ async def run_recipe_async(
     context["scope"] = scope
     context["metrics"] = metrics
     context["budget"] = budget
+
+    def cancel_requested() -> bool:
+        checker = context.get("cancel_check")
+        if checker is not None and checker():
+            return True
+        control = context.get("run_control")
+        return getattr(control, "state", "") in {"cancel_requested", "canceled"}
+
+    def ensure_not_cancelled() -> None:
+        if cancel_requested():
+            raise RunCanceledError("run canceled during stage execution")
+
     required_capabilities: set[str] = set()
     selected_skills_by_stage: dict[str, dict[str, tuple[object, ...]]] = {}
     for stage in recipe.stages or ():
@@ -1070,6 +1090,7 @@ async def run_recipe_async(
             pass
 
     async def dispatch_stage(stage: Any, stage_input: object) -> tuple[list[object], object]:
+        ensure_not_cancelled()
         pattern = ExecutionPattern(stage.pattern)
         stage_skill_ids = tuple(getattr(stage, "skill_ids", ()))
         participants = list(_stage_participants(stage))
@@ -1210,6 +1231,7 @@ async def run_recipe_async(
             if not budget.reserve(branches=branch_count):
                 raise BudgetExceededError("maximum concurrent branches exceeded before dispatch")
         async def invoke(stage_prompt: str | None = None) -> tuple[list[object], object]:
+            ensure_not_cancelled()
             prompt_value = stage_prompt or str(stage_input)
             if stage_context.get("correction_participant_ids") and client is not None and pattern != ExecutionPattern.DIRECT:
                 raise _synthesis_error("UNSUPPORTED_RECOVERY", "native orchestration cannot expose participant-local correction state")
@@ -1223,6 +1245,7 @@ async def run_recipe_async(
                     native_outputs,
                     allow_legacy_fallback=context.get("analysis_store") is None,
                     existing_records=context.get("canonical_records"),
+                    cancel_check=cancel_requested,
                 )
             if pattern == ExecutionPattern.DIRECT:
                 stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(prompt_value)]
@@ -1276,6 +1299,7 @@ async def run_recipe_async(
                     allow_legacy_fallback=context.get("analysis_store") is None,
                     existing_records=context.get("canonical_records"),
                     participant_ids=successful_ids,
+                    cancel_check=cancel_requested,
                 )
             elif pattern == ExecutionPattern.GROUP_CHAT:
                 stage_outputs = [await AnalystExecutor(client, factory, ParticipantConfig.from_mapping(participants[0] if participants else {}, "analyst"), stage_context).execute(prompt_value)]
@@ -1299,6 +1323,7 @@ async def run_recipe_async(
                 stage_outputs,
                 allow_legacy_fallback=context.get("analysis_store") is None,
                 existing_records=context.get("canonical_records"),
+                cancel_check=cancel_requested,
             )
         committer = context.get("canonical_result_committer")
         correction_prompt: str | None = None

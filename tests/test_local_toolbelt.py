@@ -2,9 +2,11 @@ import hashlib
 import json
 import re
 import zipfile
+from collections.abc import MutableMapping
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from threading import Event, Thread
 from typing import get_type_hints
 
 import openpyxl
@@ -12,6 +14,8 @@ import pytest
 
 from foresight_os.runtime.local_toolbelt import (
     AnalysisOperation,
+    AnalysisResult,
+    AuthorityIndex,
     FormulaStatus,
     SheetSelection,
     SourceSnapshot,
@@ -215,6 +219,53 @@ def test_workbook_context_rolls_back_retained_state_when_budget_rejects_read(tmp
     assert context.stats.snapshot_bytes == 0
     assert context.stats.capture_count == 1
     assert context.stats.xlsx_parse_count == 0
+
+
+def test_workbook_context_budget_rejection_preserves_prior_committed_entry(tmp_path: Path):
+    first_source = tmp_path / "first.csv"
+    second_source = tmp_path / "second.csv"
+    first_source.write_text("Region,Value\nNorth,10\n", encoding="utf-8")
+    second_source.write_text("Region,Value\nSouth,20\n", encoding="utf-8")
+    context = WorkbookContext()
+
+    first = context.read(first_source)
+    committed_snapshots = dict(context.snapshots)
+    first_key = context.cache.key(
+        first_source,
+        SheetSelection(),
+        ToolbeltLimits(),
+        snapshot=committed_snapshots[str(first_source.resolve())],
+    )
+    committed_cache_size = context.cache.size
+    committed_cache_bytes = context.cache.bytes_used
+    committed_retained_stats = {
+        name: getattr(context.stats, name)
+        for name in (
+            "snapshot_bytes",
+            "retained_read_result_bytes",
+            "retained_analysis_result_bytes",
+            "retained_authority_record_bytes",
+        )
+    }
+    context.max_total_bytes = (
+        context.stats.snapshot_bytes
+        + context.stats.retained_read_result_bytes
+        + context.stats.retained_analysis_result_bytes
+        + context.stats.retained_authority_record_bytes
+        + 1
+    )
+
+    with pytest.raises(ToolbeltError, match="retained-state budget"):
+        context.read(second_source)
+
+    assert context.cache.get(first_key).workbook_sha256 == first.workbook_sha256
+    assert context.snapshots == committed_snapshots
+    assert context.cache.size == committed_cache_size
+    assert context.cache.bytes_used == committed_cache_bytes
+    assert {
+        name: getattr(context.stats, name)
+        for name in committed_retained_stats
+    } == committed_retained_stats
 
 
 def test_analysis_cache_uses_material_identity_not_reused_table_ids():
@@ -439,6 +490,61 @@ def test_workbook_read_cache_does_not_retain_unbounded_source_identity_state(tmp
     assert not hasattr(cache, "_source_versions")
 
 
+def test_cache_retained_size_does_not_recompute_repr_on_publication(monkeypatch, workbook_path):
+    cache = WorkbookReadCache()
+    result = spreadsheet_read(workbook_path)
+
+    def fail_repr(_self):
+        raise AssertionError("cache publication must use construction-time retained size")
+
+    monkeypatch.setattr(type(result), "__repr__", fail_repr)
+
+    cache.put(("read",), result)
+
+    assert cache.bytes_used == result.retained_bytes
+
+
+def test_warm_hit_authority_validation_is_reused_until_authority_changes(workbook_path):
+    context = WorkbookContext()
+    selection = SheetSelection(sheet_names=("Demand",), include_hidden=True, include_hidden_rows=True)
+    context.read(workbook_path, selection)
+
+    class CountingMeasurements(MutableMapping):
+        def __init__(self, values):
+            self.values = dict(values)
+            self.contains_calls = 0
+
+        def __contains__(self, key):
+            self.contains_calls += 1
+            return key in self.values
+
+        def __getitem__(self, key):
+            return self.values[key]
+
+        def __setitem__(self, key, value):
+            self.values[key] = value
+
+        def __delitem__(self, key):
+            del self.values[key]
+
+        def __iter__(self):
+            return iter(self.values)
+
+        def __len__(self):
+            return len(self.values)
+
+    counted = CountingMeasurements(context.authority_index.measurements)
+    context.authority_index.measurements = counted
+    context.authority_index.clear()
+
+    context.read(workbook_path, selection)
+    first_count = counted.contains_calls
+    context.read(workbook_path, selection)
+
+    assert first_count > 0
+    assert counted.contains_calls == first_count
+
+
 def test_workbook_and_analysis_entries_share_one_cache_budget(workbook_path):
     cache = WorkbookReadCache(max_entries=2)
     table = spreadsheet_read(workbook_path, _cache=cache).tables[0]
@@ -447,6 +553,33 @@ def test_workbook_and_analysis_entries_share_one_cache_budget(workbook_path):
 
     assert cache.size <= 2
     assert cache.bytes_used <= cache.max_bytes
+
+
+def test_analysis_cache_hit_is_immune_to_nested_result_mutation(workbook_path):
+    context = WorkbookContext()
+    workbook = context.read(workbook_path, SheetSelection(sheet_names=("Demand",), include_hidden=True, include_hidden_rows=True))
+    operation = AnalysisOperation("duplicates", key_columns=("Region", "Metric", "Value"))
+
+    first = data_analysis(
+        workbook.tables[0],
+        operation,
+        _cache=context.cache,
+        _authority_index=context.authority_index,
+        _stats=context.stats,
+    )
+    with pytest.raises(TypeError):
+        first.rows[0]["count"] = 999
+
+    second = data_analysis(
+        workbook.tables[0],
+        operation,
+        _cache=context.cache,
+        _authority_index=context.authority_index,
+        _stats=context.stats,
+    )
+
+    assert second.rows[0]["count"] == 2
+    assert second.deterministic_key == first.deterministic_key
 
 
 def test_failed_and_cancelled_reads_never_publish_cache_entries(tmp_path: Path):
@@ -462,6 +595,108 @@ def test_failed_and_cancelled_reads_never_publish_cache_entries(tmp_path: Path):
     with pytest.raises(ToolbeltError, match="cancelled"):
         spreadsheet_read(source, cancel_check=lambda: True, _cache=cancelled_cache)
     assert cancelled_cache.size == 0
+
+
+def test_cross_thread_read_waits_for_active_transaction_and_publishes_after_rollback(workbook_path):
+    context = WorkbookContext()
+    started = Event()
+    finished = Event()
+    results = []
+    errors = []
+
+    def read_in_worker() -> None:
+        started.set()
+        try:
+            results.append(context.read(workbook_path, SheetSelection(sheet_names=("Demand",))))
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            finished.set()
+
+    worker = Thread(target=read_in_worker)
+    with pytest.raises(RuntimeError, match="rollback"):
+        with context.transaction():
+            worker.start()
+            assert started.wait(1)
+            assert not finished.wait(0.1)
+            raise RuntimeError("rollback")
+    worker.join(timeout=1)
+
+    assert finished.is_set()
+    assert not errors
+    assert len(results) == 1
+    assert context.cache.size == 1
+
+
+def test_cross_thread_warm_read_and_analysis_wait_for_active_transaction_and_rollback(workbook_path):
+    context = WorkbookContext()
+    selection = SheetSelection(sheet_names=("Demand",))
+    operation = AnalysisOperation("duplicates", key_columns=("Region", "Metric", "Value"))
+    started = Event()
+    finished = Event()
+    results = []
+    errors = []
+
+    def read_and_analyze_in_worker() -> None:
+        started.set()
+        try:
+            workbook = context.read(workbook_path, selection)
+            results.append(context.analyze(workbook.tables[0], operation))
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            finished.set()
+
+    worker = Thread(target=read_and_analyze_in_worker)
+    with pytest.raises(RuntimeError, match="rollback"):
+        with context.transaction():
+            workbook = context.read(workbook_path, selection)
+            context.analyze(workbook.tables[0], operation)
+            worker.start()
+            assert started.wait(1)
+            assert not finished.wait(0.1)
+            raise RuntimeError("rollback")
+    worker.join(timeout=1)
+
+    assert finished.is_set()
+    assert not errors
+    assert len(results) == 1
+    assert context.cache.size == 2
+
+
+def test_analysis_rechecks_cancellation_after_waiting_for_transaction(workbook_path):
+    context = WorkbookContext()
+    selection = SheetSelection(sheet_names=("Demand",))
+    operation = AnalysisOperation("duplicates", key_columns=("Region", "Metric", "Value"))
+    started = Event()
+    cancelled = Event()
+    errors = []
+
+    def cancel_check() -> bool:
+        if not started.is_set():
+            started.set()
+            return False
+        return cancelled.is_set()
+
+    def analyze_in_worker() -> None:
+        try:
+            context.analyze(table, operation, cancel_check=cancel_check)
+        except BaseException as error:
+            errors.append(error)
+
+    with context.transaction():
+        workbook = context.read(workbook_path, selection)
+        context.analyze(workbook.tables[0], operation)
+        table = workbook.tables[0]
+        worker = Thread(target=analyze_in_worker)
+        worker.start()
+        assert started.wait(1)
+        cancelled.set()
+    worker.join(timeout=1)
+
+    assert len(errors) == 1
+    assert isinstance(errors[0], ToolbeltError)
+    assert str(errors[0]) == "cancelled"
 
 
 def _make_workbook(path: Path) -> None:
