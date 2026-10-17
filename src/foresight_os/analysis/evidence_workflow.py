@@ -361,6 +361,7 @@ def _run_xlsx_finding_workflow(
         _check_cancel(cancel_check)
         review = review_analysis_state(pending)
         if human_decision.upper() in {"PENDING", "PENDING_REVIEW"}:
+            _check_cancel(cancel_check)
             return EvidenceWorkflowResult("pending", tuple(), table.sheet, evidence[0], claim, review, pending, ("spreadsheet_read", "data_analysis"))
         if human_decision.upper() != "ACCEPT" or not review.accepted:
             _check_cancel(cancel_check)

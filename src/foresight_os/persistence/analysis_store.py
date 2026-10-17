@@ -273,17 +273,25 @@ class AnalysisStore:
         }
         with FileLock(str(self.lock_path)):
             current = self._revision_snapshot_unlocked()
+            current_pending_token = self._pending_token_from_bytes(current.get("pending"))
+            snapshot_pending_token = self._pending_token_from_bytes(snapshot.get("pending"))
             if expected_current is not None and current != dict(expected_current):
                 expected_pending = expected_current.get("pending")
                 if expected_pending is not None and current.get("pending") == expected_pending and snapshot.get("pending") != expected_pending:
                     self.pending_analysis_path.unlink(missing_ok=True)
+                    self._remember_consumed_pending_token(current_pending_token)
                 return False
+            consumed_tokens = self._tokens_from_bytes(snapshot.get("pending_tokens"))
+            if current_pending_token and current_pending_token != snapshot_pending_token:
+                consumed_tokens.add(current_pending_token)
             for name, path in paths.items():
                 content = snapshot.get(name)
                 if content is None:
                     path.unlink(missing_ok=True)
                 else:
                     self._atomic_write(path, content.decode("utf-8"))
+            if consumed_tokens:
+                self._atomic_write(self.pending_tokens_path, json.dumps(sorted(consumed_tokens), indent=2) + "\n")
             return True
 
     def save_pending_if_unchanged(
@@ -393,6 +401,21 @@ class AnalysisStore:
                 ("pending_tokens", self.pending_tokens_path),
             )
         }
+
+    @staticmethod
+    def _pending_token_from_bytes(content: bytes | None) -> str | None:
+        if content is None:
+            return None
+        value = json.loads(content.decode("utf-8"))
+        token = value.get("pending_token") if isinstance(value, dict) else None
+        return token if isinstance(token, str) and token else None
+
+    @staticmethod
+    def _tokens_from_bytes(content: bytes | None) -> set[str]:
+        if content is None:
+            return set()
+        value = json.loads(content.decode("utf-8"))
+        return {item for item in value if isinstance(item, str)} if isinstance(value, list) else set()
 
     def update_pending(self, state: AnalysisState) -> AnalysisState:
         if state.revision_status != RevisionStatus.PENDING_REVIEW or not state.pending_token:
