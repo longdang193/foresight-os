@@ -390,6 +390,7 @@ def _synthesize_stage_outputs(
     *,
     allow_legacy_fallback: bool = False,
     existing_records: Mapping[str, object] | None = None,
+    dependency_records: Mapping[str, object] | None = None,
     cancel_check: Callable[[], bool] | None = None,
     participant_ids: tuple[str, ...] | None = None,
     return_normalized_result: bool = False,
@@ -507,6 +508,10 @@ def _synthesize_stage_outputs(
                             dependencies.add(value)
                         elif isinstance(value, (list, tuple)):
                             dependencies.update(item for item in value if isinstance(item, str))
+    for key in collections:
+        entries = outputs[0].get(key, []) if len(outputs) == 1 else None
+        if isinstance(entries, (list, tuple)) and len(entries) > max_records:
+            raise _synthesis_error("BUDGET_EXHAUSTED", f"typed stage synthesis exceeded {max_records} records")
     if preflight_records > max_records * len(collections):
         raise _synthesis_error("BUDGET_EXHAUSTED", "typed stage synthesis exceeded the record budget")
     if preflight_relationships > max_relationships:
@@ -552,9 +557,9 @@ def _synthesize_stage_outputs(
             normalized = normalize_stage_result(
                 outputs[0],
                 expected_stage_id=str(getattr(stage, "stage_id", "stage")),
-                existing_records=existing_records,
+                existing_records=dependency_records if dependency_records is not None else existing_records,
                 prefer_current_aliases=True,
-                trusted_existing_records=existing_records or {},
+                trusted_existing_records=(dependency_records if dependency_records is not None else existing_records) or {},
             )
         except ValidationError as error:
             raise ValidationError(
@@ -635,7 +640,7 @@ def _synthesize_stage_outputs(
                     existing_records=dependency_records,
                     existing_record_kinds=dependency_record_kinds,
                     prefer_current_aliases=True,
-                    trusted_existing_records=existing_records or {},
+                    trusted_existing_records=(dependency_records if dependency_records is not None else existing_records) or {},
                     return_aliases=True,
                 )
             except ValidationError as error:
@@ -1268,6 +1273,7 @@ async def run_recipe_async(
                     native_outputs,
                     allow_legacy_fallback=context.get("analysis_store") is None,
                     existing_records=context.get("canonical_records"),
+                    dependency_records=stage_context.get("dependency_records"),
                     cancel_check=cancel_requested,
                     return_normalized_result=committer is not None,
                 )
@@ -1322,6 +1328,7 @@ async def run_recipe_async(
                     failures,
                     allow_legacy_fallback=context.get("analysis_store") is None,
                     existing_records=context.get("canonical_records"),
+                    dependency_records=stage_context.get("dependency_records"),
                     participant_ids=successful_ids,
                     cancel_check=cancel_requested,
                     return_normalized_result=committer is not None,
@@ -1348,6 +1355,7 @@ async def run_recipe_async(
                 stage_outputs,
                 allow_legacy_fallback=context.get("analysis_store") is None,
                 existing_records=context.get("canonical_records"),
+                dependency_records=stage_context.get("dependency_records"),
                 cancel_check=cancel_requested,
                 return_normalized_result=committer is not None,
             )

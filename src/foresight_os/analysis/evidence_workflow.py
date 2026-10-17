@@ -29,6 +29,7 @@ from foresight_os.runtime.executors import ReviewerExecutor
 from foresight_os.runtime.web_search import WebSearchCapability, WebSearchProvider
 from foresight_os.runtime.local_toolbelt import (
     AnalysisOperation,
+    CancellationRequested,
     FormulaStatus,
     SheetSelection,
     SourceSnapshot,
@@ -225,6 +226,8 @@ async def run_evidence_workflow(
         reviewed = attach_review_record(pending, review, f"review-{pending.investigation_id}-{pending.revision}")
         committed = store.commit_revision(reviewed, expected_revision=reviewed.revision, accepted=True)
         return EvidenceWorkflowResult("accepted", candidates, evidence.source_locator.file_version, evidence, claim, review, committed, tuple(tools))
+    except CancellationRequested:
+        raise
     except Exception as error:
         return EvidenceWorkflowResult("failed", tuple(), None, None, None, None, None, tuple(tools), type(error).__name__)
 
@@ -360,6 +363,8 @@ def _run_xlsx_finding_workflow(
         _check_cancel(cancel_check)
         committed = store.commit_revision(reviewed, expected_revision=reviewed.revision, accepted=True)
         return EvidenceWorkflowResult("accepted", tuple(), table.sheet, evidence[0], claim, review, committed, ("spreadsheet_read", "data_analysis"))
+    except CancellationRequested:
+        raise
     except Exception as error:
         return EvidenceWorkflowResult("failed", tuple(), None, None, None, None, None, ("spreadsheet_read", "data_analysis"), type(error).__name__)
 
@@ -384,6 +389,7 @@ def run_xlsx_finding_workflow(
         def __init__(self, result: EvidenceWorkflowResult):
             self.result = result
 
+    publication_snapshot = store.capture_revision_snapshot() if hasattr(store, "capture_revision_snapshot") else None
     try:
         if active_context is None:
             return _run_xlsx_finding_workflow(
@@ -398,7 +404,7 @@ def run_xlsx_finding_workflow(
                 snapshot=snapshot,
                 workbook_context=None,
             )
-        with active_context.transaction(cancel_check=cancel_check):
+        with active_context.transaction(cancel_check=None):
             result = _run_xlsx_finding_workflow(
                 store,
                 source,
@@ -416,6 +422,10 @@ def run_xlsx_finding_workflow(
             return result
     except _RollbackWorkflow as rollback:
         return rollback.result
+    except CancellationRequested:
+        if publication_snapshot is not None:
+            store.restore_revision_snapshot(publication_snapshot)
+        return EvidenceWorkflowResult("failed", tuple(), None, None, None, None, None, ("spreadsheet_read", "data_analysis"), "ToolbeltError")
     except ToolbeltError as error:
         return EvidenceWorkflowResult("failed", tuple(), None, None, None, None, None, ("spreadsheet_read", "data_analysis"), type(error).__name__)
     finally:

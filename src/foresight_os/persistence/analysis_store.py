@@ -4,6 +4,7 @@ import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Mapping
 
 import yaml
 from dataclasses import asdict, dataclass, replace
@@ -254,6 +255,31 @@ class AnalysisStore:
         value = validate_analysis(state)
         with FileLock(str(self.lock_path)):
             self._write_validated(value)
+
+    def capture_revision_snapshot(self) -> dict[str, bytes | None]:
+        with FileLock(str(self.lock_path)):
+            return {
+                name: path.read_bytes() if path.exists() else None
+                for name, path in (
+                    ("analysis", self.analysis_path),
+                    ("pending", self.pending_analysis_path),
+                    ("pending_tokens", self.pending_tokens_path),
+                )
+            }
+
+    def restore_revision_snapshot(self, snapshot: Mapping[str, bytes | None]) -> None:
+        paths = {
+            "analysis": self.analysis_path,
+            "pending": self.pending_analysis_path,
+            "pending_tokens": self.pending_tokens_path,
+        }
+        with FileLock(str(self.lock_path)):
+            for name, path in paths.items():
+                content = snapshot.get(name)
+                if content is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    self._atomic_write(path, content.decode("utf-8"))
 
     def save_delivery_receipt(self, artifact_id: str, receipt: dict[str, object]) -> AnalysisState:
         with FileLock(str(self.lock_path)):

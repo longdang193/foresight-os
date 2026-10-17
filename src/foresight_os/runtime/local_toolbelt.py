@@ -30,6 +30,10 @@ class ToolbeltError(ValueError):
     pass
 
 
+class CancellationRequested(ToolbeltError):
+    pass
+
+
 _MISSING = object()
 
 
@@ -1264,7 +1268,7 @@ def _implicit_xlsx_bounds(ws) -> tuple[int, int, int, int] | None:
 
 def _check_cancel(cancel_check: Callable[[], bool] | None) -> None:
     if cancel_check and cancel_check():
-        raise ToolbeltError("cancelled")
+        raise CancellationRequested("cancelled")
 
 
 def _delimited_value(value: str) -> Any:

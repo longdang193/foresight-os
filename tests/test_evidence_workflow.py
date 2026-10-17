@@ -452,3 +452,85 @@ def test_xlsx_finding_workflow_cancellation_rolls_back_before_publication(tmp_pa
     assert store.load_analysis().revision_status.value == "ACCEPTED"
     assert (context.cache.size, context.cache.analysis_bytes, context.authority_index.estimated_bytes, len(context.snapshots)) == before_retained
     assert context._closed is False
+
+
+def test_xlsx_finding_workflow_rolls_back_store_when_cancelled_after_pending_save(tmp_path: Path, monkeypatch):
+    from foresight_os.analysis.evidence_workflow import run_xlsx_finding_workflow
+
+    source = tmp_path / "cancel-after-pending.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Demand"
+    sheet.append(["Value"])
+    sheet.append([10])
+    sheet.tables.add(openpyxl.worksheet.table.Table(displayName="DemandTable", ref="A1:A2"))
+    workbook.save(source)
+    store = AnalysisStore(tmp_path / "cancel-after-pending-case")
+    prior = run_xlsx_finding_workflow(
+        store,
+        source,
+        AnalysisOperation("sum", value_column="Value"),
+        selection=SheetSelection(tables=(("Demand", "DemandTable"),)),
+        human_decision="ACCEPT",
+    )
+    accepted_before = store.analysis_path.read_bytes()
+    cancelled = False
+    original_save_pending = store.save_pending
+
+    def save_then_cancel(state):
+        nonlocal cancelled
+        result = original_save_pending(state)
+        cancelled = True
+        return result
+
+    monkeypatch.setattr(store, "save_pending", save_then_cancel)
+    result = run_xlsx_finding_workflow(
+        store,
+        source,
+        AnalysisOperation("sum", value_column="Value"),
+        selection=SheetSelection(tables=(("Demand", "DemandTable"),)),
+        cancel_check=lambda: cancelled,
+        human_decision="ACCEPT",
+    )
+
+    assert prior.status == "accepted"
+    assert result.status == "failed"
+    assert result.failure == "ToolbeltError"
+    assert store.analysis_path.read_bytes() == accepted_before
+    assert not store.pending_analysis_path.exists()
+
+
+def test_xlsx_finding_workflow_settles_accepted_when_cancelled_after_commit(tmp_path: Path, monkeypatch):
+    from foresight_os.analysis.evidence_workflow import run_xlsx_finding_workflow
+
+    source = tmp_path / "cancel-after-commit.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Demand"
+    sheet.append(["Value"])
+    sheet.append([10])
+    sheet.tables.add(openpyxl.worksheet.table.Table(displayName="DemandTable", ref="A1:A2"))
+    workbook.save(source)
+    store = AnalysisStore(tmp_path / "cancel-after-commit-case")
+    cancelled = False
+    original_commit_revision = store.commit_revision
+
+    def commit_then_cancel(state, expected_revision, accepted):
+        nonlocal cancelled
+        result = original_commit_revision(state, expected_revision, accepted)
+        cancelled = True
+        return result
+
+    monkeypatch.setattr(store, "commit_revision", commit_then_cancel)
+    result = run_xlsx_finding_workflow(
+        store,
+        source,
+        AnalysisOperation("sum", value_column="Value"),
+        selection=SheetSelection(tables=(("Demand", "DemandTable"),)),
+        cancel_check=lambda: cancelled,
+        human_decision="ACCEPT",
+    )
+
+    assert result.status == "accepted"
+    assert store.load_analysis().revision_status.value == "ACCEPTED"
+    assert not store.pending_analysis_path.exists()

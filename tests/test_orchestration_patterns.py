@@ -10,7 +10,7 @@ from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, R
 from foresight_os.controller.budgets import BudgetState
 from foresight_os.persistence.ids import canonical_json_hash
 from foresight_os.domain.validation import ValidationError
-from foresight_os.analysis.result_committer import ANALYSIS_STAGE_RESULT_CONTRACT, StageAnalyticalResult, decode_stage_output
+from foresight_os.analysis.result_committer import ANALYSIS_STAGE_RESULT_CONTRACT, StageAnalyticalResult, decode_stage_output, normalize_stage_result
 from foresight_os.runtime.workflow import CanonicalStageResult, _canonical_result_hash, _close_agents, _dependency_stage_ids, _expand_dependency_records, _run_native_stage, _synthesize_stage_outputs, _workflow_output_value, run_recipe_async
 from foresight_os.runtime.metrics import BudgetExceededError, RunCanceledError, RunMetrics
 from foresight_os.runtime.orchestration import RunControl
@@ -254,6 +254,50 @@ def test_single_typed_synthesis_passes_normalized_result_to_committer(monkeypatc
 
     assert calls == 1
     assert isinstance(result, StageAnalyticalResult)
+
+
+def test_single_typed_synthesis_respects_declared_dependency_scope():
+    stage = RecipeStage(
+        "stage-2",
+        ExecutionPattern.DIRECT,
+        ({"id": "one"},),
+        "typed-result",
+        "typed-result",
+        {},
+        synthesis_policy="aggregate-typed-results",
+    )
+    prior = _typed_stage_result("stage-1", "prior-evidence", "prior observation")
+    existing = normalize_stage_result(prior).canonical_records()
+    prior_evidence_id = next(item for item in existing if item.startswith("evidence-"))
+    output = _typed_stage_result("stage-2", "current-evidence", "current observation")
+    output["evidence"] = []
+    output["claims"][0]["evidence_ids"] = [prior_evidence_id]
+    output["relationships"][0]["from_id"] = prior_evidence_id
+
+    with pytest.raises(ValidationError, match="unknown reference"):
+        _synthesize_stage_outputs(stage, [output], existing_records=existing, dependency_records={})
+
+    result = _synthesize_stage_outputs(stage, [output], existing_records=existing, dependency_records=existing)
+    assert result["claims"][0]["evidence_ids"] == [prior_evidence_id]
+
+
+def test_single_typed_synthesis_enforces_per_collection_record_limit():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.DIRECT,
+        ({"id": "one"},),
+        "typed-result",
+        "typed-result",
+        {"max_synthesis_records": 1},
+        synthesis_policy="aggregate-typed-results",
+    )
+    output = _typed_stage_result("stage-1", "evidence-one", "observation")
+    output["evidence"].append({**output["evidence"][0], "id": "evidence-two", "excerpt": "second observation"})
+
+    with pytest.raises(ValidationError, match="exceeded") as caught:
+        _synthesize_stage_outputs(stage, [output])
+
+    assert caught.value.code == "BUDGET_EXHAUSTED"
 
 
 def test_typed_synthesis_preflights_payload_bytes_before_normalization():

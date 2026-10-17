@@ -67,7 +67,8 @@ reusable state and preserves an earlier valid committed revision.
 ### Single-pass typed synthesis
 
 Single typed stage output is structurally bounded and normalized once before
-durable commit. Multi-output synthesis keeps its merge and conflict checks.
+durable commit, using only the stage-declared dependency records for reference
+resolution. Multi-output synthesis keeps its merge and conflict checks.
 Commit-time provenance, dependency, currentness, and persistence checks remain
 owned by their existing canonical owners. Active synthesis cancellation is
 measured; worker offload is implemented only if the measured cancellation
@@ -120,7 +121,7 @@ work is recorded as deferred rather than added speculatively.
 | Task 5 | `complete` | dedicated worktree | `lead controller` | Task 4 | single-output synthesis tests and cancellation measurement | single typed output reaches the committer as `StageAnalyticalResult` after one normalization; focused orchestration/committer tests pass; 20/20 cancellation settlements measured, p50 `0.111 ms`, p95 `0.177 ms`, max `0.223 ms`; worker offload deferred |
 | Task 6 | `complete` | dedicated worktree | `lead controller` | Tasks 4 and 5 | gated cache/authority evidence or explicit deferral | no runtime optimization justified: retained-state estimates and peak allocation unchanged, RSS `-0.618%`, repeated-investigation path `+6.952%` versus optimization baseline, cache/eviction/cross-source authority checks `VERIFIED`; authority/memory/eviction and lock-scope candidates explicitly deferred |
 | Task 7 | `complete` | dedicated worktree | `lead controller` | Tasks 4–6 | mandatory compatibility audit and optional safe deletions | `stage_cache` retained — live reuse, provenance, and tamper tests; `normalize_work_brief` retained — distinct controller, gate, and domain consumers; schema retained — preflight/runtime boundary consumers; wrapper cleanup deferred — no proven duplicate owner or migration-safe deletion; focused inventory tests pass |
-| Task 8 | `complete` | dedicated worktree | `lead controller` | Tasks 1–7 | full repository and benchmark verification | full pytest and compile checks passed; Markdown-link check passed; final frozen-harness comparison passed with local correctness `VERIFIED`, regression threshold `VERIFIED`, optimization demonstration `NOT_MEASURED` by design; incidental probe artifact restored and final scope reconciled |
+| Task 8 | `complete` | dedicated worktree | `lead controller` | Tasks 1–7 | full repository and benchmark verification | full pytest and compile checks passed; Markdown-link check passed; review-cycle-1 findings fixed with focused regressions for dependency scope, record budgets, and durable cancellation settlement; final frozen-harness comparison passed with local correctness `VERIFIED`, regression threshold `VERIFIED`, optimization demonstration `NOT_MEASURED` by design; incidental probe artifact restored and final scope reconciled |
 
 ## Task Breakdown
 
@@ -520,7 +521,7 @@ work is recorded as deferred rather than added speculatively.
 - [x] `python -m compileall -q src tests evaluation` — passed.
 - [x] `python -m pytest -q tests/test_markdown_links.py` — passed.
 - [x] `git diff --check` — passed.
-- [x] The Task 4 comparator against the final source tree and the exact regression reference at `27002c03b0c837ab8937b9c7e34a89bf35322b3f` — `gate: PASS`; p95 `-15.584%`, peak allocation `+0.010%`, RSS `+0.516%`, economics unchanged; local correctness `VERIFIED`, regression threshold `VERIFIED`, optimization demonstration `NOT_MEASURED` with the explicit limitation that this comparison is a regression gate.
+- [x] The Task 4 comparator against the final source tree and the exact regression reference at `27002c03b0c837ab8937b9c7e34a89bf35322b3f` — `gate: PASS`; post-review-fix p95 `-22.119%`, peak allocation `+0.010%`, RSS `-0.190%`, economics unchanged; local correctness `VERIFIED`, regression threshold `VERIFIED`, optimization demonstration `NOT_MEASURED` with the explicit limitation that this comparison is a regression gate.
 - Expected: all required checks pass; benchmark statuses are truthful; raw receipts remain outside Git; the final diff contains only approved plan-lane files. **Observed:** satisfied; frozen harness digest `11c17bda3805d1bc0125adc2165eb2a90b8c83ff7cbe75c44528ac79911f5b0c`, implementation source-tree digest `9dc3ed6615789f57db7cb86a7226cb5f9e765720d7097d75eef12703bdd999f9`, and regression-reference source-tree digest `e20d5b3d5361c88467fe9fd1c94e50104423fd8227e7627d1de133568e7ec42c` were recorded in the external receipts under `$env:TEMP\foresight-os-next-pass`.
 
 **Exit Criteria:**
@@ -560,7 +561,7 @@ The plan is ready for completion verification when:
 1. The isolated worktree is based on `27002c03b0c837ab8937b9c7e34a89bf35322b3f` and the primary checkout's existing work is untouched.
 2. Explicit Power BI mappings are exact-or-fail within the consuming table, while omitted mappings preserve compatibility behavior.
 3. Oversized standalone workbooks are rejected before full capture, workflow-owned contexts always close, and caller-owned contexts remain caller-owned.
-4. Cancellation immediately before reusable publication leaves no new cache or authority state and preserves prior valid committed state.
+4. Cancellation before durable publication rolls back pending and accepted-file mutations and leaves no new cache or authority state; cancellation observed after the accepted commit is treated as a settled success rather than a post-commit failure.
 5. Single-output synthesis is normalized once without weakening structural, dependency, provenance, or durable commit validation.
 6. The repeated-investigation probe reuses one context and reports capture, parse, currentness, cache, retained-resource, correctness, threshold, and optimization evidence separately.
 7. Authority, retained-memory, eviction, compatibility, and orchestration changes are either backed by named measurements and regressions or explicitly deferred.
