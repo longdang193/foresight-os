@@ -664,6 +664,41 @@ def test_cross_thread_warm_read_and_analysis_wait_for_active_transaction_and_rol
     assert context.cache.size == 2
 
 
+def test_analysis_rechecks_cancellation_after_waiting_for_transaction(workbook_path):
+    context = WorkbookContext()
+    selection = SheetSelection(sheet_names=("Demand",))
+    operation = AnalysisOperation("duplicates", key_columns=("Region", "Metric", "Value"))
+    started = Event()
+    cancelled = Event()
+    errors = []
+
+    def cancel_check() -> bool:
+        if not started.is_set():
+            started.set()
+            return False
+        return cancelled.is_set()
+
+    def analyze_in_worker() -> None:
+        try:
+            context.analyze(table, operation, cancel_check=cancel_check)
+        except BaseException as error:
+            errors.append(error)
+
+    with context.transaction():
+        workbook = context.read(workbook_path, selection)
+        context.analyze(workbook.tables[0], operation)
+        table = workbook.tables[0]
+        worker = Thread(target=analyze_in_worker)
+        worker.start()
+        assert started.wait(1)
+        cancelled.set()
+    worker.join(timeout=1)
+
+    assert len(errors) == 1
+    assert isinstance(errors[0], ToolbeltError)
+    assert str(errors[0]) == "cancelled"
+
+
 def _make_workbook(path: Path) -> None:
     workbook = openpyxl.Workbook()
     demand = workbook.active

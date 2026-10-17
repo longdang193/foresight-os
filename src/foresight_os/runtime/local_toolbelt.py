@@ -1001,6 +1001,7 @@ class WorkbookContext:
         normalized_operation = _coerce_analysis_operation(operation)
         normalized_limits = _coerce_toolbelt_limits(limits)
         with self._lock:
+            _check_cancel(cancel_check)
             cache_key = self.cache.analysis_key(normalized_table, normalized_operation, normalized_limits)
             cached_result = self.cache.get_analysis(cache_key)
             if cached_result is not None:
