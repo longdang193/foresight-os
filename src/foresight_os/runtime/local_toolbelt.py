@@ -729,6 +729,7 @@ class WorkbookContext:
     ) -> WorkbookReadResult:
         self.ensure_open()
         _check_cancel(cancel_check)
+        selection = _coerce_sheet_selection(selection)
         read_limits = _coerce_toolbelt_limits(limits)
         source = Path(source)
         source_key = str(Path(source).resolve())
@@ -771,7 +772,7 @@ class WorkbookContext:
             result = spreadsheet_read(
                 str(source),
                 selection,
-                limits,
+                read_limits,
                 cancel_check=cancel_check,
                 _cache=self.cache,
                 _snapshot=snapshot,
