@@ -335,6 +335,8 @@ def _run_xlsx_finding_workflow(
             revision_status=RevisionStatus.DRAFT,
             calculations=[calculation],
         )
+        if workbook_context is not None:
+            workbook_context.enforce_budget()
         pending = store.save_pending(state)
         review = review_analysis_state(pending)
         if human_decision.upper() in {"PENDING", "PENDING_REVIEW"}:

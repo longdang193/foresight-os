@@ -10,7 +10,7 @@ from itertools import zip_longest
 import operator
 import posixpath
 import re
-from threading import RLock
+from threading import RLock, get_ident
 from types import MappingProxyType
 import zipfile
 import xml.etree.ElementTree as ET
@@ -776,6 +776,7 @@ class WorkbookContext:
         self._closed = False
         self._lock = RLock()
         self._transaction: dict[str, Any] | None = None
+        self._transaction_owner: int | None = None
         self._authority_validated: dict[tuple[Any, ...], int] = {}
 
     def ensure_open(self) -> None:
@@ -785,10 +786,11 @@ class WorkbookContext:
     @contextmanager
     def transaction(self):
         self.ensure_open()
+        owner = get_ident()
+        if self._transaction is not None and self._transaction_owner == owner:
+            yield self
+            return
         with self._lock:
-            if self._transaction is not None:
-                yield self
-                return
             transaction = {
                 "cache": self.cache.begin_transaction(),
                 "authority": self.authority_index.begin_transaction(),
@@ -805,6 +807,7 @@ class WorkbookContext:
                 },
             }
             self._transaction = transaction
+            self._transaction_owner = owner
             try:
                 yield self
                 self._enforce_budget()
@@ -823,9 +826,10 @@ class WorkbookContext:
                 self.authority_index.commit_transaction(transaction["authority"])
             finally:
                 self._transaction = None
+                self._transaction_owner = None
 
     def _run_transaction(self, operation: Callable[[], Any]) -> Any:
-        if self._transaction is not None:
+        if self._transaction is not None and self._transaction_owner == get_ident():
             return operation()
         with self.transaction():
             return operation()
@@ -975,6 +979,10 @@ class WorkbookContext:
         )
         if retained > self.max_total_bytes:
             raise ToolbeltError("workbook context retained-state budget exceeded")
+
+    def enforce_budget(self) -> None:
+        self.ensure_open()
+        self._enforce_budget()
 
     def clear(self) -> None:
         if self._closed:

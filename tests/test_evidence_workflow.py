@@ -177,6 +177,35 @@ def test_xlsx_finding_workflow_rolls_back_analysis_cache_when_persistence_reject
     assert context.stats.retained_analysis_result_bytes == 0
 
 
+def test_xlsx_finding_workflow_rejects_durable_publication_before_budget_rollback(tmp_path: Path):
+    from foresight_os.analysis.evidence_workflow import run_xlsx_finding_workflow
+
+    source = tmp_path / "budget-rejected-publication.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Demand"
+    sheet.append(["Region", "Value"])
+    sheet.append(["North", 10])
+    sheet.append(["South", 20])
+    sheet.tables.add(openpyxl.worksheet.table.Table(displayName="DemandTable", ref="A1:B3"))
+    workbook.save(source)
+    store = AnalysisStore(tmp_path / "budget-case")
+    context = WorkbookContext(max_total_bytes=1)
+
+    result = run_xlsx_finding_workflow(
+        store,
+        source,
+        AnalysisOperation("sum", value_column="Value"),
+        selection=SheetSelection(tables=(("Demand", "DemandTable"),)),
+        workbook_context=context,
+        human_decision="ACCEPT",
+    )
+
+    assert result.status == "failed"
+    assert not store.analysis_path.exists()
+    assert not store.pending_analysis_path.exists()
+
+
 def test_xlsx_finding_workflow_uses_selected_table_when_workbook_has_multiple_tables(tmp_path: Path):
     from foresight_os.analysis.evidence_workflow import run_xlsx_finding_workflow
 
