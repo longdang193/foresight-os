@@ -259,6 +259,8 @@ def _run_xlsx_finding_workflow(
     cancel_check: Callable[[], bool] | None = None,
     snapshot: SourceSnapshot | None = None,
     workbook_context: WorkbookContext | None = None,
+    publication_snapshot: Mapping[str, bytes | None] | None = None,
+    publication_journal: dict[str, Mapping[str, bytes | None]] | None = None,
 ) -> EvidenceWorkflowResult:
     """Promote a deterministic workbook analysis into reviewable domain state."""
     try:
@@ -350,7 +352,12 @@ def _run_xlsx_finding_workflow(
         if workbook_context is not None:
             workbook_context.enforce_budget()
         _check_cancel(cancel_check)
-        pending = store.save_pending(state)
+        if publication_snapshot is not None and hasattr(store, "save_pending_if_unchanged"):
+            pending, mutation_snapshot = store.save_pending_if_unchanged(state, publication_snapshot)
+            if publication_journal is not None:
+                publication_journal["mutation_snapshot"] = mutation_snapshot
+        else:
+            pending = store.save_pending(state)
         _check_cancel(cancel_check)
         review = review_analysis_state(pending)
         if human_decision.upper() in {"PENDING", "PENDING_REVIEW"}:
@@ -389,7 +396,12 @@ def run_xlsx_finding_workflow(
         def __init__(self, result: EvidenceWorkflowResult):
             self.result = result
 
-    publication_snapshot = store.capture_revision_snapshot() if hasattr(store, "capture_revision_snapshot") else None
+    publication_snapshot = (
+        store.capture_revision_snapshot()
+        if cancel_check is not None and hasattr(store, "capture_revision_snapshot")
+        else None
+    )
+    publication_journal: dict[str, Mapping[str, bytes | None]] = {"mutation_snapshot": publication_snapshot} if publication_snapshot is not None else {}
     try:
         if active_context is None:
             return _run_xlsx_finding_workflow(
@@ -403,6 +415,8 @@ def run_xlsx_finding_workflow(
                 cancel_check=cancel_check,
                 snapshot=snapshot,
                 workbook_context=None,
+                publication_snapshot=publication_snapshot,
+                publication_journal=publication_journal,
             )
         with active_context.transaction(cancel_check=None):
             result = _run_xlsx_finding_workflow(
@@ -416,6 +430,8 @@ def run_xlsx_finding_workflow(
                 cancel_check=cancel_check,
                 snapshot=snapshot,
                 workbook_context=active_context,
+                publication_snapshot=publication_snapshot,
+                publication_journal=publication_journal,
             )
             if result.status == "failed":
                 raise _RollbackWorkflow(result)
@@ -424,7 +440,10 @@ def run_xlsx_finding_workflow(
         return rollback.result
     except CancellationRequested:
         if publication_snapshot is not None:
-            store.restore_revision_snapshot(publication_snapshot)
+            store.restore_revision_snapshot(
+                publication_snapshot,
+                expected_current=publication_journal.get("mutation_snapshot"),
+            )
         return EvidenceWorkflowResult("failed", tuple(), None, None, None, None, None, ("spreadsheet_read", "data_analysis"), "ToolbeltError")
     except ToolbeltError as error:
         return EvidenceWorkflowResult("failed", tuple(), None, None, None, None, None, ("spreadsheet_read", "data_analysis"), type(error).__name__)

@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
@@ -475,15 +476,15 @@ def test_xlsx_finding_workflow_rolls_back_store_when_cancelled_after_pending_sav
     )
     accepted_before = store.analysis_path.read_bytes()
     cancelled = False
-    original_save_pending = store.save_pending
+    original_save_pending_if_unchanged = store.save_pending_if_unchanged
 
-    def save_then_cancel(state):
+    def save_then_cancel(state, expected_snapshot):
         nonlocal cancelled
-        result = original_save_pending(state)
+        result = original_save_pending_if_unchanged(state, expected_snapshot)
         cancelled = True
         return result
 
-    monkeypatch.setattr(store, "save_pending", save_then_cancel)
+    monkeypatch.setattr(store, "save_pending_if_unchanged", save_then_cancel)
     result = run_xlsx_finding_workflow(
         store,
         source,
@@ -533,4 +534,54 @@ def test_xlsx_finding_workflow_settles_accepted_when_cancelled_after_commit(tmp_
 
     assert result.status == "accepted"
     assert store.load_analysis().revision_status.value == "ACCEPTED"
+    assert not store.pending_analysis_path.exists()
+
+
+def test_xlsx_finding_workflow_does_not_rollback_concurrent_accepted_revision(tmp_path: Path, monkeypatch):
+    from foresight_os.analysis.evidence_workflow import run_xlsx_finding_workflow
+
+    source = tmp_path / "cancel-concurrent-writer.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Demand"
+    sheet.append(["Value"])
+    sheet.append([10])
+    sheet.tables.add(openpyxl.worksheet.table.Table(displayName="DemandTable", ref="A1:A2"))
+    workbook.save(source)
+    store = AnalysisStore(tmp_path / "cancel-concurrent-writer-case")
+    prior = run_xlsx_finding_workflow(
+        store,
+        source,
+        AnalysisOperation("sum", value_column="Value"),
+        selection=SheetSelection(tables=(("Demand", "DemandTable"),)),
+        human_decision="ACCEPT",
+    )
+    cancelled = False
+    original_save_pending_if_unchanged = store.save_pending_if_unchanged
+
+    def save_then_concurrent_commit(state, expected_snapshot):
+        nonlocal cancelled
+        pending, mutation_snapshot = original_save_pending_if_unchanged(state, expected_snapshot)
+        concurrent = replace(
+            prior.analysis,
+            revision=2,
+            revisions=[*prior.analysis.revisions, Revision("revision-2", 2, "concurrent accepted mutation", [item.id for item in prior.analysis.evidence])],
+        )
+        store.save_analysis(concurrent)
+        cancelled = True
+        return pending, mutation_snapshot
+
+    monkeypatch.setattr(store, "save_pending_if_unchanged", save_then_concurrent_commit)
+    result = run_xlsx_finding_workflow(
+        store,
+        source,
+        AnalysisOperation("sum", value_column="Value"),
+        selection=SheetSelection(tables=(("Demand", "DemandTable"),)),
+        cancel_check=lambda: cancelled,
+        human_decision="ACCEPT",
+    )
+
+    assert prior.status == "accepted"
+    assert result.status == "failed"
+    assert store.load_accepted().revision == 2
     assert not store.pending_analysis_path.exists()
