@@ -843,6 +843,15 @@ class WorkbookContext:
     ) -> SourceSnapshot:
         self.ensure_open()
         _check_cancel(cancel_check)
+        return self._run_transaction(lambda: self._capture_in_transaction(source, cancel_check=cancel_check, max_bytes=max_bytes))
+
+    def _capture_in_transaction(
+        self,
+        source: str | Path,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
+        max_bytes: int | None = None,
+    ) -> SourceSnapshot:
         key = str(Path(source).resolve())
         snapshot = self.snapshots.get(key)
         if snapshot is not None:
@@ -856,7 +865,11 @@ class WorkbookContext:
 
     def currentness(self, source: str | Path, *, cancel_check: Callable[[], bool] | None = None) -> bool:
         self.ensure_open()
-        snapshot = self.capture(source, cancel_check=cancel_check)
+        _check_cancel(cancel_check)
+        return self._run_transaction(lambda: self._currentness_in_transaction(source, cancel_check=cancel_check))
+
+    def _currentness_in_transaction(self, source: str | Path, *, cancel_check: Callable[[], bool] | None = None) -> bool:
+        snapshot = self._capture_in_transaction(source, cancel_check=cancel_check)
         self.stats.currentness_hash_count += 1
         return snapshot.is_current(cancel_check=cancel_check)
 
@@ -873,6 +886,55 @@ class WorkbookContext:
         selection = _coerce_sheet_selection(selection)
         read_limits = _coerce_toolbelt_limits(limits)
         source = Path(source)
+        with self._lock:
+            cached_result = self._try_read_cache_hit(source, selection, read_limits, cancel_check=cancel_check)
+            if cached_result is not None:
+                return cached_result
+            return self._run_transaction(
+                lambda: self._read_in_transaction(source, selection, read_limits, cancel_check=cancel_check)
+            )
+
+    def _try_read_cache_hit(
+        self,
+        source: Path,
+        selection: SheetSelection,
+        read_limits: ToolbeltLimits,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> WorkbookReadResult | None:
+        source_key = str(source.resolve())
+        cached_snapshot = self.snapshots.get(source_key)
+        if cached_snapshot is None:
+            return None
+        cached_key = self.cache.key(source, selection, read_limits, snapshot=cached_snapshot)
+        cached_result = self.cache.get(cached_key)
+        if cached_result is None:
+            return None
+        _check_cancel(cancel_check)
+        if (
+            self._authority_validated.get(cached_key) == self.authority_index.generation
+            and len(self.authority_index.measurements) >= len(cached_result.measurements)
+        ):
+            self.stats.cache_hits += 1
+            return _with_read_source(cached_result, source)
+        authority_keys = {
+            (item.provenance.workbook_sha256, item.id, item.provenance.range)
+            for item in cached_result.measurements
+        }
+        if all(key in self.authority_index.measurements for key in authority_keys):
+            self._authority_validated[cached_key] = self.authority_index.generation
+            self.stats.cache_hits += 1
+            return _with_read_source(cached_result, source)
+        return None
+
+    def _read_in_transaction(
+        self,
+        source: Path,
+        selection: SheetSelection,
+        read_limits: ToolbeltLimits,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> WorkbookReadResult:
         source_key = str(Path(source).resolve())
         cached_key: tuple[Any, ...] | None = None
         cached_snapshot = self.snapshots.get(source_key)
@@ -903,10 +965,10 @@ class WorkbookContext:
                     self.stats.cache_hits += 1
                     return _with_read_source(cached_result, source)
 
-                return self._run_transaction(restore_authority)
+                return restore_authority()
 
         def read_uncached() -> WorkbookReadResult:
-            snapshot = self.capture(source, cancel_check=cancel_check, max_bytes=read_limits.max_bytes)
+            snapshot = self._capture_in_transaction(source, cancel_check=cancel_check, max_bytes=read_limits.max_bytes)
             return spreadsheet_read(
                 str(source),
                 selection,
@@ -918,7 +980,7 @@ class WorkbookContext:
                 _stats=self.stats,
             )
 
-        result = self._run_transaction(read_uncached)
+        result = read_uncached()
         cached_key = self.cache.key(source, selection, read_limits, snapshot=self.snapshots[source_key])
         if self.cache.get(cached_key) is not None:
             self._authority_validated[cached_key] = self.authority_index.generation
@@ -938,6 +1000,29 @@ class WorkbookContext:
         normalized_table = _coerce_typed_table(table)
         normalized_operation = _coerce_analysis_operation(operation)
         normalized_limits = _coerce_toolbelt_limits(limits)
+        with self._lock:
+            cache_key = self.cache.analysis_key(normalized_table, normalized_operation, normalized_limits)
+            cached_result = self.cache.get_analysis(cache_key)
+            if cached_result is not None:
+                self.stats.analysis_cache_hits += 1
+                return cached_result
+            return self._run_transaction(
+                lambda: self._analyze_in_transaction(
+                    normalized_table,
+                    normalized_operation,
+                    normalized_limits,
+                    cancel_check=cancel_check,
+                )
+            )
+
+    def _analyze_in_transaction(
+        self,
+        normalized_table: TypedTable,
+        normalized_operation: AnalysisOperation,
+        normalized_limits: ToolbeltLimits,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> AnalysisResult:
         cache_key = self.cache.analysis_key(normalized_table, normalized_operation, normalized_limits)
         cached_result = self.cache.get_analysis(cache_key)
         if cached_result is not None:
@@ -955,7 +1040,7 @@ class WorkbookContext:
                 _stats=self.stats,
             )
 
-        return self._run_transaction(analyze_uncached)
+        return analyze_uncached()
 
     def _refresh_retained_stats(self) -> None:
         self.stats.retained_read_result_bytes = self.cache.read_bytes

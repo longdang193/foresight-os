@@ -628,6 +628,42 @@ def test_cross_thread_read_waits_for_active_transaction_and_publishes_after_roll
     assert context.cache.size == 1
 
 
+def test_cross_thread_warm_read_and_analysis_wait_for_active_transaction_and_rollback(workbook_path):
+    context = WorkbookContext()
+    selection = SheetSelection(sheet_names=("Demand",))
+    operation = AnalysisOperation("duplicates", key_columns=("Region", "Metric", "Value"))
+    started = Event()
+    finished = Event()
+    results = []
+    errors = []
+
+    def read_and_analyze_in_worker() -> None:
+        started.set()
+        try:
+            workbook = context.read(workbook_path, selection)
+            results.append(context.analyze(workbook.tables[0], operation))
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            finished.set()
+
+    worker = Thread(target=read_and_analyze_in_worker)
+    with pytest.raises(RuntimeError, match="rollback"):
+        with context.transaction():
+            workbook = context.read(workbook_path, selection)
+            context.analyze(workbook.tables[0], operation)
+            worker.start()
+            assert started.wait(1)
+            assert not finished.wait(0.1)
+            raise RuntimeError("rollback")
+    worker.join(timeout=1)
+
+    assert finished.is_set()
+    assert not errors
+    assert len(results) == 1
+    assert context.cache.size == 2
+
+
 def _make_workbook(path: Path) -> None:
     workbook = openpyxl.Workbook()
     demand = workbook.active
