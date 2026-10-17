@@ -1,6 +1,7 @@
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import StrEnum
+import json
 from typing import Any
 
 from foresight_os.controller.recipes import ExecutionRecipe
@@ -76,6 +77,28 @@ class ApprovalProjection:
         brief.pop("producer", None)
         material["brief"] = brief
         return material
+
+    @staticmethod
+    def compatibility_material_projection(value: dict[str, Any]) -> dict[str, Any]:
+        material = ApprovalProjection.material_projection(value)
+        recipe = material.get("recipe")
+        if isinstance(recipe, dict):
+            metadata = recipe.get("metadata", {})
+            try:
+                legacy_analysis_domains = json.loads(metadata.get("analysis_contract_domains", "{}")) if isinstance(metadata, dict) else {}
+            except (TypeError, ValueError):
+                legacy_analysis_domains = {}
+            stages = recipe.get("stages", ())
+            if isinstance(stages, list):
+                for stage in stages:
+                    if not isinstance(stage, dict) or "analysis_domains" in stage:
+                        continue
+                    stage["analysis_domains"] = list(legacy_analysis_domains.get(str(stage.get("stage_id", "")), ()))
+        return material
+
+    @classmethod
+    def compatibility_fingerprint_for_dict(cls, value: dict[str, Any]) -> str:
+        return canonical_json_hash(cls.compatibility_material_projection(value))
 
     @classmethod
     def fingerprint_for_dict(cls, value: dict[str, Any]) -> str:

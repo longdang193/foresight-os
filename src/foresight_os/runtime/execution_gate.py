@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -6,7 +7,7 @@ from typing import Any
 
 from filelock import FileLock
 
-from foresight_os.domain.approval import AdaptationEnvelope, ApprovalStatus, approval_projection
+from foresight_os.domain.approval import AdaptationEnvelope, ApprovalProjection, ApprovalStatus, approval_projection
 from foresight_os.controller.recipes import ExecutionRecipe
 from foresight_os.analysis.result_committer import ANALYSIS_STAGE_RESULT_CONTRACT, CanonicalResultCommitter, analysis_stage_result_schema
 from foresight_os.persistence.analysis_store import AnalysisStore
@@ -125,11 +126,17 @@ class ExecutionGate:
             envelope = AdaptationEnvelope.from_dict(approval.projection.adaptation_envelope)
             current = approval_projection(brief, recipe, envelope)
             recipe_fingerprint = canonical_json_hash(recipe.to_dict())
+            persisted_recipe_fingerprint = canonical_json_hash(
+                json.loads(self.store.execution_recipe_path.read_text(encoding="utf-8"))
+            )
             if current.fingerprint != approval.projection_fingerprint:
-                raise ExecutionAdmissionError("persisted brief or recipe no longer matches the approved projection")
+                current_compatibility_fingerprint = ApprovalProjection.compatibility_fingerprint_for_dict(current.to_dict())
+                approved_compatibility_fingerprint = ApprovalProjection.compatibility_fingerprint_for_dict(approval.projection.to_dict())
+                if current_compatibility_fingerprint != approved_compatibility_fingerprint:
+                    raise ExecutionAdmissionError("persisted brief or recipe no longer matches the approved projection")
             if approval.displayed_fingerprint != approval.projection_fingerprint:
                 raise ExecutionAdmissionError("approval displayed fingerprint is stale")
-            if approval.recipe_snapshot_fingerprint != recipe_fingerprint:
+            if approval.recipe_snapshot_fingerprint not in {recipe_fingerprint, persisted_recipe_fingerprint}:
                 raise ExecutionAdmissionError("persisted recipe no longer matches the approved snapshot")
             if approval.investigation_id != brief.investigation_id:
                 raise ExecutionAdmissionError("approval investigation does not match the WorkBrief")
