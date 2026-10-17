@@ -281,7 +281,9 @@ async def _run_native_stage(
                 results.append(result)
                 current_prompt = (
                     f"Retain the original stage input and source context:\n{prompt}\n\n"
-                    "Challenge this proposal and return the required structured result:\n"
+                    "Challenge this proposal and return the required structured result. Preserve every unchanged "
+                    "record verbatim; use a new record ID for any revised interpretation, and never reuse an "
+                    "existing ID for materially different content:\n"
                     f"{result}"
                 )
                 if metrics is not None:
@@ -301,7 +303,9 @@ async def _run_native_stage(
             if index + 1 < len(agents):
                 current_prompt = (
                     f"Retain the original stage input and source context:\n{prompt}\n\n"
-                    "Review this proposal and return the required structured result:\n"
+                    "Review this proposal and return the required structured result. Preserve every unchanged "
+                    "record verbatim; use a new record ID for any revised interpretation, and never reuse an "
+                    "existing ID for materially different content:\n"
                     f"{result}"
                 )
         return results
@@ -1361,6 +1365,19 @@ async def run_recipe_async(
                         "UNSUPPORTED_RECOVERY",
                         "validation failure does not identify a safe participant-local correction target",
                     ) from error
+                if pattern == ExecutionPattern.SEQUENTIAL:
+                    metrics.correction_rounds += 1
+                    correction_prompt = (
+                        f"{json.dumps(_stage_input_payload(stage_input), default=str, ensure_ascii=False, sort_keys=True)}\n\n"
+                        "The sequential stage produced a validation failure. Rerun the complete sequential stage, "
+                        "preserve the original source context, and return the complete corrected structured result. "
+                        "Before returning, audit every evidence_ids, relationship_ids, input_ids, from_id, and "
+                        "to_id value against an ID declared in this payload or an authorized dependency; remove "
+                        "any reference without a matching record, and never invent, reuse, or guess an ID from "
+                        "another stage or prior run. "
+                        f"Validation issue identified at participant {participant_id or 'unknown'}: {error}"
+                    )
+                    continue
                 if pattern not in {ExecutionPattern.CONCURRENT, ExecutionPattern.DIRECT}:
                     raise _synthesis_error(
                         "UNSUPPORTED_RECOVERY",

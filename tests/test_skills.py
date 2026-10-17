@@ -135,6 +135,7 @@ def test_factory_documents_supported_data_analysis_operations():
 
     assert "operation kind must be one of aggregate, sum, mean" in captured["instructions"]
     assert "summary is unsupported" in captured["instructions"]
+    assert "pass exactly two column names" in captured["instructions"]
 
 
 def test_factory_documents_domain_validation_candidate_contract():
@@ -154,6 +155,7 @@ def test_factory_documents_domain_validation_candidate_contract():
     assert "do not pass scorecard weights" in captured["instructions"]
     assert "stage results" in captured["instructions"]
     assert "dependency_outputs" in captured["instructions"]
+    assert "Canonical stage-result validation is automatic" in captured["instructions"]
 
 
 def test_factory_documents_calculation_input_contract():

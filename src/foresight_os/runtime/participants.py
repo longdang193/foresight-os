@@ -77,7 +77,7 @@ class AgentFactory:
                 " For data_analysis, operation kind must be one of aggregate, sum, mean, scenario, "
                 "sensitivity, compare, join, nulls, missing, or duplicates; summary is unsupported. "
                 "Use value_column for aggregate, sum, mean, scenario, and sensitivity; use columns "
-                "for compare; use key_columns for duplicates."
+                "for compare, and pass exactly two column names in that list; use key_columns for duplicates."
             )
         if "document_read" in required_capabilities:
             instructions += (
@@ -97,7 +97,8 @@ class AgentFactory:
                 "acquisition_kind, retrieved_at, query, context, raw_result, and retrieval_proof; do not "
                 "pass scorecard weights, claims, recommendations, stage results, stage_id, objective, "
                 "decision_question, horizon, research_needs, relevant_constraints, dependency_outputs, "
-                "or other stage metadata as candidate fields."
+                "or other stage metadata as candidate fields. Canonical stage-result validation is automatic; "
+                "never call domain_validation with an analysis-stage-result payload."
             )
         if "calculation" in required_capabilities:
             instructions += (

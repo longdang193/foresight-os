@@ -133,6 +133,18 @@ def test_workbook_context_reuses_identical_views_without_reusing_different_selec
     assert context.stats.openpyxl_load_count == 4
 
 
+def test_workbook_context_normalizes_json_selection_before_cache_lookup(workbook_path: Path):
+    context = WorkbookContext()
+
+    selection = {"sheet_names": ["Demand"]}
+    first = context.read(workbook_path, selection)
+    result = context.read(workbook_path, selection)
+
+    assert result.sheets[0].name == "Demand"
+    assert result.tables[0].sheet == "Demand"
+    assert result.workbook_sha256 == first.workbook_sha256
+
+
 def test_workbook_context_warm_hit_skips_cache_and_authority_transactions(workbook_path: Path, monkeypatch):
     context = WorkbookContext()
     selection = SheetSelection(sheet_names=("Demand",), include_hidden=True, include_hidden_rows=True)

@@ -442,6 +442,7 @@ def test_native_sequential_reviewer_retains_original_stage_context(monkeypatch):
     assert "exact workbook path" in prompts[0]
     assert "exact workbook path" in prompts[1]
     assert "Review this proposal" in prompts[1]
+    assert "use a new record ID for any revised interpretation" in prompts[1]
 
 
 def test_dependency_records_include_referenced_canonical_ancestors():
@@ -832,6 +833,65 @@ def test_admitted_native_execution_validates_the_approved_recipe_snapshot():
     )
 
     assert result.outputs
+
+
+def test_sequential_validation_failure_retries_the_complete_stage():
+    stage = RecipeStage(
+        "stage-1",
+        ExecutionPattern.SEQUENTIAL,
+        ({"id": "analyst", "purpose": "analyze"}, {"id": "reviewer", "purpose": "review"}),
+        "typed-result",
+        "typed-result",
+        {},
+        synthesis_policy="aggregate-typed-results",
+    )
+    base = make_recipe(RecipeName.ANALYZE_REVIEW)
+    recipe = ExecutionRecipe(
+        base.name,
+        base.pattern,
+        base.roles,
+        base.max_agent_steps,
+        1,
+        12,
+        base.completion,
+        base.escalation,
+        base.partial_result,
+        stages=(stage,),
+    )
+    calls = []
+    attempts = 0
+    output = _typed_stage_result("stage-1", "evidence-one", "validated")
+
+    async def run_native_stage(pattern, prompt, client, roles, metrics, run_context):
+        calls.append(prompt)
+        return [output, output]
+
+    def committer(stage, current, context):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ValidationError("unknown reference", code="UNRESOLVED_REFERENCE", participant_index=0)
+        return CanonicalStageResult(("result-1",), (_canonical_result_hash(current),), current)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(workflow_module, "_run_native_stage", run_native_stage)
+    try:
+        result = asyncio.run(
+            run_recipe_async(
+                recipe,
+                "hello",
+                FakeChatClient(),
+                "sequential-correction",
+                {"canonical_result_committer": committer},
+            )
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert result.metrics.correction_rounds == 1
+    assert len(calls) == 2
+    assert "complete sequential stage" in calls[1]
+    assert "audit every evidence_ids" in calls[1]
 
 
 def test_stage_context_binds_recipe_contract_and_structured_output_mode():
