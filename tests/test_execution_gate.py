@@ -1,4 +1,5 @@
 import asyncio
+import json
 from dataclasses import replace
 from datetime import datetime, timezone
 
@@ -130,6 +131,94 @@ def test_admitted_execution_without_client_is_blocked(tmp_path):
 
     with pytest.raises(ExecutionAdmissionError, match="configured client"):
         asyncio.run(ExecutionGate(store).execute(prompt="Question"))
+
+
+def test_legacy_approved_recipe_without_analysis_domains_remains_admissible(tmp_path):
+    brief = create_work_brief("Question", investigation_id="legacy-recipe")
+    recipe = build_execution_recipe(brief).recipe
+    store = AnalysisStore(tmp_path / "legacy-recipe")
+    store.save_brief(brief)
+
+    legacy_recipe = recipe.to_dict()
+    for stage in legacy_recipe["stages"]:
+        stage.pop("analysis_domains")
+    store._atomic_write(store.execution_recipe_path, json.dumps(legacy_recipe, sort_keys=True, indent=2) + "\n")
+
+    package = build_approval_package(brief, legacy_recipe, AdaptationEnvelope())
+    store.save_execution_approval(ApprovalRecord(
+        brief.investigation_id,
+        ApprovalStatus.APPROVED,
+        package.projection,
+        package.fingerprint,
+        package.fingerprint,
+        canonical_json_hash(legacy_recipe),
+        "local_cli",
+        datetime.now(timezone.utc).isoformat(),
+    ))
+
+    admission = ExecutionGate(store).admit(prompt="Question")
+
+    assert admission.recipe.stages[0].analysis_domains == ()
+
+
+def test_legacy_approved_recipe_with_metadata_domains_remains_admissible(tmp_path):
+    brief = create_work_brief("Question", investigation_id="legacy-metadata")
+    recipe = build_execution_recipe(brief).recipe
+    store = AnalysisStore(tmp_path / "legacy-metadata")
+    store.save_brief(brief)
+
+    legacy_recipe = recipe.to_dict()
+    legacy_recipe["metadata"]["analysis_contract_domains"] = '{"stage-1": ["market"]}'
+    for stage in legacy_recipe["stages"]:
+        stage.pop("analysis_domains")
+    store._atomic_write(store.execution_recipe_path, json.dumps(legacy_recipe, sort_keys=True, indent=2) + "\n")
+
+    package = build_approval_package(brief, legacy_recipe, AdaptationEnvelope())
+    store.save_execution_approval(ApprovalRecord(
+        brief.investigation_id,
+        ApprovalStatus.APPROVED,
+        package.projection,
+        package.fingerprint,
+        package.fingerprint,
+        canonical_json_hash(legacy_recipe),
+        "local_cli",
+        datetime.now(timezone.utc).isoformat(),
+    ))
+
+    admission = ExecutionGate(store).admit(prompt="Question")
+
+    assert admission.recipe.stages[0].analysis_domains == ("market",)
+
+
+def test_legacy_approved_recipe_material_mutation_is_denied(tmp_path):
+    brief = create_work_brief("Question", investigation_id="legacy-mutation")
+    recipe = build_execution_recipe(brief).recipe
+    store = AnalysisStore(tmp_path / "legacy-mutation")
+    store.save_brief(brief)
+
+    legacy_recipe = recipe.to_dict()
+    legacy_recipe["metadata"]["analysis_contract_domains"] = '{"stage-1": ["market"]}'
+    for stage in legacy_recipe["stages"]:
+        stage.pop("analysis_domains")
+    store._atomic_write(store.execution_recipe_path, json.dumps(legacy_recipe, sort_keys=True, indent=2) + "\n")
+
+    package = build_approval_package(brief, legacy_recipe, AdaptationEnvelope())
+    store.save_execution_approval(ApprovalRecord(
+        brief.investigation_id,
+        ApprovalStatus.APPROVED,
+        package.projection,
+        package.fingerprint,
+        package.fingerprint,
+        canonical_json_hash(legacy_recipe),
+        "local_cli",
+        datetime.now(timezone.utc).isoformat(),
+    ))
+
+    legacy_recipe["max_agent_steps"] += 1
+    store._atomic_write(store.execution_recipe_path, json.dumps(legacy_recipe, sort_keys=True, indent=2) + "\n")
+
+    with pytest.raises(ExecutionAdmissionError, match="approved projection"):
+        ExecutionGate(store).admit(prompt="Question")
 
 
 def test_superseded_approval_blocks_dispatch(tmp_path):
