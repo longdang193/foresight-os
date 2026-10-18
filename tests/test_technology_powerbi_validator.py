@@ -12,8 +12,10 @@ from foresight_os.analysis.powerbi_strategic_portfolio import (
 from foresight_os.analysis.portfolio_resilience import analyze_portfolio_resilience
 from foresight_os.analysis.technology_radar import analyze_technology_radar, run_technology_radar_workflow
 from foresight_os.domain.challenge import derive_finding_views
+from foresight_os.domain.analysis_inputs import AnalysisInputContract
 from foresight_os.domain.models import WorkBrief
 from foresight_os.persistence.analysis_store import AnalysisStore
+from foresight_os.runtime.local_toolbelt import WorkbookContext
 
 
 ROOT = Path(__file__).parents[1]
@@ -67,6 +69,38 @@ def test_technology_workflow_persists_reviewed_report(tmp_path: Path):
     report = result.report_path.read_text(encoding="utf-8")
     for section in ["Signal quality", "Competing hypotheses", "Alternative futures", "Action category", "Signposts"]:
         assert section in report
+
+
+def test_technology_workflow_reuses_borrowed_workbook_context_across_contracts(tmp_path: Path):
+    source = EXERCISE / "04_Technology_Radar.xlsx"
+    store = AnalysisStore(tmp_path / "case")
+    context = WorkbookContext()
+    focused = AnalysisInputContract(domain="technology_radar", entity_scope=("SiC Power Electronics",))
+    broad = AnalysisInputContract(domain="technology_radar", entity_scope=("SiC Power Electronics", "Zonal Architecture"))
+
+    first = run_technology_radar_workflow(
+        store,
+        source,
+        human_decision="PENDING",
+        input_contract=focused,
+        workbook_context=context,
+    )
+    second = run_technology_radar_workflow(
+        store,
+        source,
+        human_decision="PENDING",
+        input_contract=broad,
+        workbook_context=context,
+    )
+
+    assert first.status == second.status == "pending"
+    assert first.technology is not None and second.technology is not None
+    assert first.technology.contract_fingerprint != second.technology.contract_fingerprint
+    assert len(first.technology.assessments) < len(second.technology.assessments)
+    assert context.stats.capture_count == 1
+    assert context.stats.xlsx_parse_count == 1
+    assert context.stats.cache_hits >= 1
+    context.ensure_open()
 
 
 def test_powerbi_recipe_reconciles_comparable_period_and_flags_model_risks():

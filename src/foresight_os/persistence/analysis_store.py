@@ -82,13 +82,6 @@ class StageReceipt:
             reuse_decision=str(value.get("reuse_decision", "reuse")),
         )
 
-
-@dataclass(frozen=True)
-class LoadedRecipe:
-    raw: dict[str, object]
-    recipe: ExecutionRecipe
-    persisted_fingerprint: str
-
     def reusable(self) -> bool:
         return self.status == "committed" and self.committed and self.provenance_complete and bool(self.result_references) and bool(self.result_hashes)
 
@@ -113,6 +106,13 @@ class LoadedRecipe:
             and self.authorization_scope_fingerprint == authorization_scope_fingerprint
             and (not result_hashes or self.result_hashes == tuple(result_hashes))
         )
+
+
+@dataclass(frozen=True)
+class LoadedRecipe:
+    raw: dict[str, object]
+    recipe: ExecutionRecipe
+    persisted_fingerprint: str
 
 
 class AnalysisStore:

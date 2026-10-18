@@ -782,11 +782,12 @@ def run_portfolio_resilience_workflow(
     human_decision: str = "REJECT",
     output_dir: Path | None = None,
     input_contract: AnalysisInputContract | dict[str, Any] | None = None,
+    workbook_context: Any | None = None,
 ) -> PortfolioWorkflowResult:
     try:
         if input_contract is None and store.brief_path.exists():
             input_contract = normalize_work_brief(store.load_brief()).contract_for_domain("portfolio_resilience")
-        portfolio = analyze_portfolio_resilience(Path(source), input_contract=input_contract)
+        portfolio = analyze_portfolio_resilience(Path(source), input_contract=input_contract, workbook_context=workbook_context)
         pending = store.save_pending(portfolio.state)
         review = review_analysis_state(pending)
         acceptance = review_and_accept_pending_analysis(store, pending, review, f"review-{pending.investigation_id}-{pending.revision}", human_decision=human_decision)

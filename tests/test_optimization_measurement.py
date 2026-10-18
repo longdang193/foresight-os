@@ -259,6 +259,32 @@ def test_repeat_comparator_requires_stable_group_chat_p95_and_metadata():
     assert "baseline/release revision is identical" in same_commit_result["stability"]["errors"]
 
 
+def test_comparator_reports_optimization_evidence_separately_from_regression_gate():
+    baseline = _receipt()
+    release = deepcopy(baseline)
+    release["revision"]["commit"] = "release-commit"
+    baseline["xlsx"]["workloads"]["public_workflow_context_reuse"] = {
+        "status": "VERIFIED",
+        "correctness": "VERIFIED",
+        "capture_count": 2,
+        "xlsx_parse_count": 2,
+    }
+    release["xlsx"]["workloads"]["public_workflow_context_reuse"] = {
+        "status": "VERIFIED",
+        "correctness": "VERIFIED",
+        "capture_count": 1,
+        "xlsx_parse_count": 1,
+    }
+
+    result = compare(baseline, release)
+
+    assert result["accepted"]
+    assert result["outcomes"]["correctness"]["status"] == "VERIFIED"
+    assert result["outcomes"]["regression_threshold"]["status"] == "VERIFIED"
+    assert result["outcomes"]["optimization_demonstrated"]["status"] == "VERIFIED"
+    assert result["outcomes"]["optimization_demonstrated"]["candidate"] == "public_workflow_context_reuse"
+
+
 def test_comparator_reports_unavailable_dimensions_without_treating_them_as_passes():
     baseline = _receipt()
     release = deepcopy(baseline)

@@ -36,6 +36,15 @@ MANDATORY_XLSX_WORKLOADS = (
     "multi_workbook",
     "blocking_cancellation",
 )
+DETERMINISTIC_XLSX_WORKLOADS = MANDATORY_XLSX_WORKLOADS + ("public_workflow_context_reuse",)
+SCENARIO_XLSX_WORKLOADS = (
+    "changed_brief",
+    "changed_selection",
+    "growing_analysis_history",
+    "correction",
+    "workbook_cancellation",
+    "synthesis_cancellation",
+)
 
 _TARGET_ROOT: Path | None = None
 _HARNESS_ROOT: Path | None = None
@@ -301,6 +310,8 @@ def build_receipt(
             "samples_per_process_run": 10,
             "limits": asdict(ToolbeltLimits()),
             "patterns": sorted(patterns),
+            "deterministic_workloads": list(DETERMINISTIC_XLSX_WORKLOADS),
+            "scenario_workloads": list(SCENARIO_XLSX_WORKLOADS),
         },
         "acceptance": thresholds,
         "accepted_finding_count": accepted_count,
@@ -320,5 +331,13 @@ def build_receipt(
                 "limitation": workbook.get("workloads", {}).get(name, {}).get("limitation"),
             }
             for name in MANDATORY_XLSX_WORKLOADS
+        },
+        "scenario_matrix": {
+            name: {
+                "status": workbook.get("scenario_workloads", {}).get(name, {}).get("status", "NOT_MEASURED"),
+                "correctness": workbook.get("scenario_workloads", {}).get(name, {}).get("correctness", "NOT_MEASURED"),
+                "limitation": workbook.get("scenario_workloads", {}).get(name, {}).get("limitation"),
+            }
+            for name in SCENARIO_XLSX_WORKLOADS
         },
     }

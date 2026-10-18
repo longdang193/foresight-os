@@ -221,11 +221,11 @@ def render_technology_report(technology: TechnologyAnalysis, state: AnalysisStat
     lines.extend(f"- `{item.target_id}`: {item.review_status}/{item.review_outcome}; accepted={item.accepted}; evidence={_citations(state, item.evidence_ids)}" for item in derive_finding_views(state))
     return "\n".join(lines) + "\n"
 
-def run_technology_radar_workflow(store: AnalysisStore, source: Path, *, human_decision: str = "REJECT", output_dir: Path | None = None, input_contract: AnalysisInputContract | dict[str, Any] | None = None) -> TechnologyWorkflowResult:
+def run_technology_radar_workflow(store: AnalysisStore, source: Path, *, human_decision: str = "REJECT", output_dir: Path | None = None, input_contract: AnalysisInputContract | dict[str, Any] | None = None, workbook_context: Any | None = None) -> TechnologyWorkflowResult:
     try:
         if input_contract is None and store.brief_path.exists():
             input_contract = normalize_work_brief(store.load_brief()).contract_for_domain("technology_radar")
-        technology = analyze_technology_radar(Path(source), input_contract=input_contract)
+        technology = analyze_technology_radar(Path(source), input_contract=input_contract, workbook_context=workbook_context)
         pending = store.save_pending(technology.state)
         review = review_analysis_state(pending)
         acceptance = review_and_accept_pending_analysis(store, pending, review, f"review-{pending.investigation_id}-{pending.revision}", human_decision=human_decision)

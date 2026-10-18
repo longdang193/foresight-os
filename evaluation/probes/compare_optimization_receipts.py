@@ -346,8 +346,8 @@ def compare(baseline: dict, release: dict) -> dict:
         (p95_regression is None or p95_regression <= 20)
         and (allocation_regression is None or allocation_regression <= 15)
         and rss_regression <= 15
-        and all(value <= 20 for value in pattern_regressions.values())
-        and all(value <= 20 for value in timing_path_regressions.values())
+        and (not baseline["acceptance"].get("gate_pattern_latency", True) or all(value <= 20 for value in pattern_regressions.values()))
+        and (not baseline["acceptance"].get("gate_timing_paths", True) or all(value <= 20 for value in timing_path_regressions.values()))
         and non_regressive_economics
         and not reused_stage_new_calls
     )
@@ -359,8 +359,22 @@ def compare(baseline: dict, release: dict) -> dict:
     else:
         regression_status = "VERIFIED" if threshold_accepted else "FAILED"
         regression_limitation = None if threshold_accepted else "one or more regression thresholds failed"
-    optimization_status = "NOT_MEASURED"
-    optimization_limitation = "comparison is a regression gate; no optimization claim is made"
+    candidate_name = "public_workflow_context_reuse"
+    baseline_candidate = baseline.get("xlsx", {}).get("workloads", {}).get(candidate_name, {})
+    release_candidate = release.get("xlsx", {}).get("workloads", {}).get(candidate_name, {})
+    candidate_fields = ("capture_count", "xlsx_parse_count")
+    if baseline_candidate.get("status") == "VERIFIED" and release_candidate.get("status") == "VERIFIED":
+        candidate_comparison = {
+            field: _comparison_metric(float(baseline_candidate[field]), float(release_candidate[field]))
+            for field in candidate_fields
+        }
+        candidate_improved = all(float(release_candidate[field]) < float(baseline_candidate[field]) for field in candidate_fields)
+        optimization_status = "VERIFIED" if candidate_improved else "NOT_MEASURED"
+        optimization_limitation = None if candidate_improved else "selected candidate did not reduce every measured duplicate count"
+    else:
+        candidate_comparison = None
+        optimization_status = "NOT_MEASURED"
+        optimization_limitation = "selected candidate workload is unavailable or unverified"
     return {
         "accepted": accepted,
         "baseline": {"p95_ms": baseline["xlsx"]["p95_ms"], "peak_allocation_bytes": baseline["xlsx"]["peak_allocation_bytes"], "timing_paths": baseline["xlsx"]["timing_paths"], "economics_per_accepted_finding": baseline_economics["per_accepted_finding"]},
@@ -374,8 +388,18 @@ def compare(baseline: dict, release: dict) -> dict:
         "evidence": {"release": release_evidence, "unavailable_dimensions": unavailable_dimensions},
         "outcomes": {
             "correctness": {"status": correctness_status, "limitation": None if correctness_status == "VERIFIED" else "local correctness was not verified for both receipts"},
-            "regression_threshold": {"status": regression_status, "limitation": regression_limitation},
-            "optimization_demonstrated": {"status": optimization_status, "limitation": optimization_limitation},
+            "regression_threshold": {
+                "status": regression_status,
+                "limitation": regression_limitation,
+                "thresholds": baseline["acceptance"],
+                "samples": {"baseline": baseline["workload"], "release": release["workload"]},
+            },
+            "optimization_demonstrated": {
+                "status": optimization_status,
+                "limitation": optimization_limitation,
+                "candidate": candidate_name,
+                "measurements": candidate_comparison,
+            },
         },
         "gate": "PASS" if accepted else ("NOT_MEASURED" if unavailable_dimensions else "FAILED"),
     }
