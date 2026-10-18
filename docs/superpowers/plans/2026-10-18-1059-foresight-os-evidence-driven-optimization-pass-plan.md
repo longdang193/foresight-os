@@ -1,7 +1,7 @@
 ---
 layer: change
 artifact_type: plan
-status: in_progress
+status: completed
 template_id: implementation-plan
 contract_version: "1"
 name: foresight-os-evidence-driven-optimization-pass
@@ -114,8 +114,8 @@ optimization improvement.
 - Branch: `codex/foresight-os-evidence-driven-optimization-pass`
 - Base commit: `7881831dc7785adb9a17b8b4378fee1f2260c1e`
 - Expected workspace: current checkout remains dirty and preserved; implementation worktree starts clean
-- Evidence anchors: base `7881831dc7785adb9a17b8b4378fee1f2260c1e`; compatibility `5a6669cea80d8ded049f94c69f460f30bdc41d4f`; baseline/release receipts and comparison under `work/optimization-{baseline,release}/`; selected optimization is public workflow `WorkbookContext` reuse; final-verification SHA pending
-- Next action: run final focused and repository verification, then reconcile the ledger from fresh output
+- Evidence anchors: base `7881831dc7785adb9a17b8b4378fee1f2260c1e`; compatibility `5a6669cea80d8ded049f94c69f460f30bdc41d4f`; implementation and final-verification SHA `1d41fcc1dbe6d8c2aa4acf4f5edd6d575f7f6344`; baseline/release receipts and comparison under `work/optimization-{baseline,release}/`; selected optimization is public workflow `WorkbookContext` reuse
+- Next action: push the verified branch, open the pull request, complete the bounded review cycles, and merge only after review completion
 - Blockers: none for implementation; MAF/timing-path latency remains diagnostic-only because repeated runs showed nondeterministic noise beyond the deterministic release gate
 
 | Task | State | Workspace | Executor | Depends On | Required Proof | Evidence |
@@ -124,7 +124,7 @@ optimization improvement.
 | Task 2 | `completed` | dedicated worktree | lead controller | Task 1 | compatibility and mutation regressions | commit `5a6669c`; focused recipe/gate/persistence tests passed |
 | Task 3 | `completed` | dedicated worktree | lead controller | Task 2 | repaired deterministic baseline and scenario evidence | baseline receipt `VERIFIED`; explicit phases/scenarios/retained bytes; comparison harness updated |
 | Task 4 | `completed` | dedicated worktree | lead controller | Task 3 | exactly one selected optimization with before/after proof | public workflow context reuse; comparison `PASS`; captures/parses `2 -> 1` |
-| Task 5 | `in_progress` | dedicated worktree | lead controller | Tasks 1-4 | full verification and handoff evidence | pending |
+| Task 5 | `completed` | dedicated worktree | lead controller | Tasks 1-4 | full verification and handoff evidence | focused suites, full pytest, compileall, receipt comparison, and diff check passed at `1d41fcc` |
 
 ## Task Breakdown
 
@@ -168,7 +168,7 @@ optimization improvement.
 - [x] Step 3: Apply the PR #33 reconciliation in the dedicated lane only if the PR remains the selected compatibility vehicle; otherwise record the immutable replacement decision and preserve the PR branch.
 
 **Verification:**
-- [ ] `git status --short --branch`, `git worktree list --porcelain`, `git merge-base --is-ancestor`, and `gh pr view 33 --json baseRefOid,headRefOid,state,mergedAt`
+- [x] `git status --short --branch`, `git worktree list --porcelain`, `git merge-base --is-ancestor`, and `gh pr view 33 --json baseRefOid,headRefOid,state,mergedAt`
 - Expected: clean implementation worktree, recorded base/head identity, and no unrelated file enters the lane.
 
 **Exit Criteria:**
@@ -211,10 +211,10 @@ optimization improvement.
 - Stop for: a need to rewrite approval records, broaden accepted fingerprint alternatives, change recipe schema semantics, or alter unrelated persistence contracts.
 
 **Steps:**
-- [ ] Step 1: Extract one pure `normalize_legacy_recipe_dict(raw_dict)` transformation at the recipe boundary; reuse it from canonical loading and approval projection normalization.
-- [ ] Step 2: Ensure explicit `analysis_domains=[]` is preserved, legacy values use the canonical string coercion, malformed metadata yields the documented deterministic empty result, and new serialization does not emit legacy metadata.
-- [ ] Step 3: Extend `AnalysisStore` with one load result that retains the raw persisted dictionary/fingerprint alongside the canonical `ExecutionRecipe`; update `ExecutionGate` to use that result and retain the immediate approval-currentness reread before dispatch only where it establishes a new race boundary.
-- [ ] Step 4: Add regressions for empty/no metadata, nonempty metadata, explicit empty override, malformed metadata, coercion, material mutation denial, and canonical serialization.
+- [x] Step 1: Extract one pure `normalize_legacy_recipe_dict(raw_dict)` transformation at the recipe boundary; reuse it from canonical loading and approval projection normalization.
+- [x] Step 2: Ensure explicit `analysis_domains=[]` is preserved, legacy values use the canonical string coercion, malformed metadata yields the documented deterministic empty result, and new serialization does not emit legacy metadata.
+- [x] Step 3: Extend `AnalysisStore` with one load result that retains the raw persisted dictionary/fingerprint alongside the canonical `ExecutionRecipe`; update `ExecutionGate` to use that result and retain the immediate approval-currentness reread before dispatch only where it establishes a new race boundary.
+- [x] Step 4: Add regressions for empty/no metadata, nonempty metadata, explicit empty override, malformed metadata, coercion, material mutation denial, and canonical serialization.
 
 **Verification:**
 - [x] `python -m pytest -q tests/test_approval_contract.py tests/test_execution_gate.py tests/test_approval_persistence.py`
@@ -361,15 +361,15 @@ optimization improvement.
 - Stop for: any stale proof, unrecorded scope, failed required command, unresolved plan task, or dirty lane state that affects the implementation.
 
 **Steps:**
-- [ ] Step 1: Run focused tests for each changed owner and the optimization receipt comparison.
-- [ ] Step 2: Run `python -m pytest -q` and `python -m compileall -q src tests evaluation`.
-- [ ] Step 3: Run deterministic repository checks and inspect `git diff --check` plus the final changed-file inventory.
-- [ ] Step 4: Record verification status, residual risks, deferred tasks, and the exact Git disposition needed next, anchored to the integration-base, compatibility-consolidation, baseline, selected-optimization, and final-verification SHAs.
+- [x] Step 1: Run focused tests for each changed owner and the optimization receipt comparison.
+- [x] Step 2: Run `python -m pytest -q` and `python -m compileall -q src tests evaluation`.
+- [x] Step 3: Run deterministic repository checks and inspect `git diff --check` plus the final changed-file inventory.
+- [x] Step 4: Record verification status, residual risks, deferred tasks, and the exact Git disposition needed next, anchored to the integration-base, compatibility-consolidation, baseline, selected-optimization, and final-verification SHAs.
 
 **Verification:**
-- [ ] `python -m pytest -q`
-- [ ] `python -m compileall -q src tests evaluation`
-- [ ] repository deterministic check defined by the current project contract
+- [x] `python -m pytest -q`
+- [x] `python -m compileall -q src tests evaluation`
+- [x] repository deterministic check defined by the current project contract
 - Expected: all required checks pass, or each failure is explicitly classified as unrelated, blocked external, or a plan defect with no false completion claim.
 
 **Exit Criteria:**
