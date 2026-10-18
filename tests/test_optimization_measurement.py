@@ -186,6 +186,15 @@ def test_comparator_rejects_unverified_mandatory_workloads():
     assert "xlsx.workloads.blocking_cancellation.status=VERIFIED" in result["missing_required_evidence"]["release"]
 
 
+def test_comparator_accepts_same_commit_with_distinct_worktree_digests():
+    baseline = _receipt()
+    release = deepcopy(baseline)
+    baseline["revision"]["source_tree_sha256"] = "baseline-tree"
+    release["revision"]["source_tree_sha256"] = "release-tree"
+
+    assert compare(baseline, release)["accepted"]
+
+
 def test_comparator_rejects_workload_pattern_and_resource_regressions():
     baseline = _receipt()
     release = deepcopy(baseline)

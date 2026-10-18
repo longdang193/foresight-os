@@ -155,6 +155,8 @@ class RecipeStage:
     result_contract: str = "analysis-stage-result/v1"
     synthesis_policy: str = "aggregate-typed-results"
     analysis_domains: tuple[str, ...] = ()
+    executor_kind: str = "agent"
+    analysis_contract_fingerprints: tuple[tuple[str, str], ...] = ()
 
     @property
     def typed_review_checks(self) -> tuple[str, ...]:
@@ -192,6 +194,8 @@ class RecipeStage:
             "result_contract": self.result_contract,
             "synthesis_policy": self.synthesis_policy,
              "analysis_domains": list(self.analysis_domains),
+             "executor_kind": self.executor_kind,
+             "analysis_contract_fingerprints": dict(self.analysis_contract_fingerprints),
         }
         return value
 
@@ -228,6 +232,11 @@ class RecipeStage:
             result_contract=str(value.get("result_contract", "analysis-stage-result/v1")),
             synthesis_policy=str(value.get("synthesis_policy", "aggregate-typed-results")),
             analysis_domains=tuple(str(item) for item in value.get("analysis_domains", ())),
+            executor_kind=str(value.get("executor_kind", "agent")),
+            analysis_contract_fingerprints=tuple(
+                (str(domain), str(fingerprint))
+                for domain, fingerprint in dict(value.get("analysis_contract_fingerprints", {})).items()
+            ),
         )
 
 

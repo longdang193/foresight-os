@@ -84,6 +84,21 @@ The vertical slice reads the workbook, performs the bounded analyst/reviewer
 sequence, persists `analysis.json`, and writes the report artifact. The
 `--accept` flag is the explicit human acceptance input for this fixture path.
 
+### Run an XLSX analysis
+
+XLSX analysis requires an explicit domain rather than filename or layout
+guessing:
+
+```text
+python -m foresight_os.cli analyze --workbook path/to/input.xlsx --work-dir work/xlsx-run --domain supplier_resilience --accept
+```
+
+Use one of `portfolio_resilience`, `supplier_resilience`,
+`ev_capacity_investment`, `technology_radar`, or
+`powerbi_strategic_portfolio`. If `--domain` is omitted, the work directory's
+`brief.md` must resolve exactly one supported domain. Missing or ambiguous
+selection returns `BLOCKED_INPUT`; CSV remains on the vertical-slice path.
+
 ## Inspect the state
 
 Inspect the persisted JSON with any local JSON viewer, or use Python:
@@ -141,6 +156,8 @@ separate from the CSV vertical slice.
 
 - **Workbook not found:** confirm the path is relative to the repository root
   and that `evaluation/cases/case-001/workbook.csv` exists.
+- **XLSX domain blocked:** pass `--domain` or create a `brief.md` with exactly
+  one supported analysis domain; the CLI does not infer domains from filenames.
 - **Invalid work directory:** use a disposable directory under `work/`; the
   store creates its files and locks there.
 - **Provider unavailable:** provider-backed capabilities are optional for this

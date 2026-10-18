@@ -9,7 +9,9 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
-from foresight_os.analysis.workbook_inputs import apply_table_column_mappings, read_workbook, require_row_columns, require_table, row_evidence, table_rows
+from foresight_os.analysis.workbook_inputs import MaterialView, apply_table_column_mappings, read_workbook, require_row_columns, require_table, row_evidence, table_rows
+from foresight_os.analysis.workbook_engine import DomainAnalysis
+from foresight_os.analysis.workbook_runner import WorkbookWorkflowRunner, merge_input_contract
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
@@ -116,7 +118,7 @@ def analyze_ev_capacity_investment(source: Path, input_contract: AnalysisInputCo
         if selected_period.granularity != "year" or selected_period.is_cross_year:
             raise ValueError("unsupported period granularity for ev_capacity_investment: year required")
         selected_year = selected_period.start_year
-    workbook = read_workbook(source, SheetSelection(sheet_names=sheets, include_hidden=True, include_hidden_rows=True), workbook_context=workbook_context)
+    workbook = workbook_context if isinstance(workbook_context, MaterialView) else read_workbook(source, SheetSelection(sheet_names=sheets, include_hidden=True, include_hidden_rows=True), workbook_context=workbook_context)
     digest = workbook.workbook_sha256
     tables = {name: _table(workbook, name) for name in sheets}
     selected_regions = set(contract.entity_scope)
@@ -264,22 +266,32 @@ def write_ev_report(path: Path, ev: EVAnalysis, state: AnalysisState | None = No
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_ev_report(ev, state), encoding="utf-8")
 
+
+def _analyze_ev_material(material: MaterialView, contract: AnalysisInputContract) -> DomainAnalysis:
+    value = analyze_ev_capacity_investment(Path(material.source), contract, workbook_context=material)
+    return DomainAnalysis(result=value, state=value.state)
+
 def run_ev_capacity_investment_workflow(store: AnalysisStore, source: Path, *, human_decision: str = "REJECT", output_dir: Path | None = None, input_contract: AnalysisInputContract | dict[str, Any] | None = None, workbook_context: Any | None = None) -> EVWorkflowResult:
     try:
         if input_contract is None and store.brief_path.exists():
             input_contract = normalize_work_brief(store.load_brief()).contract_for_domain("ev_capacity_investment")
-        ev = analyze_ev_capacity_investment(Path(source), input_contract=input_contract, workbook_context=workbook_context)
-        pending = store.save_pending(ev.state)
-        review = review_analysis_state(pending)
-        acceptance = review_and_accept_pending_analysis(store, pending, review, f"review-{pending.investigation_id}-{pending.revision}", human_decision=human_decision)
-        if acceptance.status == "pending":
-            return EVWorkflowResult("pending", acceptance.state, replace(ev, state=acceptance.state), review, None, acceptance.failure)
-        if acceptance.status != "accepted":
-            return EVWorkflowResult("rejected", acceptance.state, replace(ev, state=acceptance.state), review, None, acceptance.failure)
-        committed = acceptance.state
-        final = replace(ev, state=committed)
-        report_path = (Path(output_dir) if output_dir is not None else store.root / "artifacts") / "executive-report.md"
-        write_ev_report(report_path, final, committed)
-        return EVWorkflowResult("accepted", committed, final, review, report_path)
+        contract = merge_input_contract(AnalysisInputContract(
+            domain="ev_capacity_investment",
+            required_tables=("Brief", "Demand_History", "Demand_Scenarios", "Capacity", "Infrastructure", "Policy_Signals", "Strategic_Options", "Reported_KPIs"),
+            periods=("2025", "2026", "2030"),
+            scenarios=("Low", "Base", "High"),
+            units="units",
+            compatibility_assumption="legacy workbook scenario defaults",
+        ), input_contract)
+        result = WorkbookWorkflowRunner(store).run(
+            Path(source),
+            contract,
+            _analyze_ev_material,
+            workbook_context=workbook_context,
+            human_decision=human_decision,
+            output_dir=output_dir,
+            render_report=lambda path, value, state: write_ev_report(path, value, state),
+        )
+        return EVWorkflowResult(result.status, result.state, result.domain_result, result.review, result.report_path, result.failure)
     except Exception as error:
         return EVWorkflowResult("failed", None, None, None, None, f"{type(error).__name__}: {error}")

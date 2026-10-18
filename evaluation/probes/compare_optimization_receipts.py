@@ -11,6 +11,17 @@ except ImportError:
 SCHEMA_VERSION = 2
 REQUIRED_PATTERNS = {"DIRECT", "ANALYZE", "CONCURRENT", "HANDOFF", "CHALLENGE_RECOMMENDATION"}
 REQUIRED_TIMING_PATHS = ("cold_workbook", "same_view_repeat", "repeated_investigation", "analyst_validator_reuse")
+
+
+def _same_revision_snapshot(left: dict, right: dict) -> bool:
+    """Treat differing uncommitted worktree digests as distinct revisions."""
+    left_revision = left.get("revision", {})
+    right_revision = right.get("revision", {})
+    if left_revision.get("commit") != right_revision.get("commit"):
+        return False
+    left_digest = left_revision.get("source_tree_sha256")
+    right_digest = right_revision.get("source_tree_sha256")
+    return not (left_digest and right_digest and left_digest != right_digest)
 ECONOMIC_FIELDS = (
     "model_calls",
     "tool_calls_total",
@@ -255,10 +266,7 @@ def validate_stability(baseline_repeat: list[dict], release_repeat: list[dict]) 
             errors.append("baseline/release environment differs")
         if baseline_repeat[0].get("harness") != release_repeat[0].get("harness"):
             errors.append("baseline/release harness differs")
-        if (
-            baseline_repeat[0].get("revision", {}).get("commit")
-            == release_repeat[0].get("revision", {}).get("commit")
-        ):
+        if _same_revision_snapshot(baseline_repeat[0], release_repeat[0]):
             errors.append("baseline/release revision is identical")
     return {"accepted": not errors, "errors": errors}
 
@@ -280,15 +288,7 @@ def compare(baseline: dict, release: dict) -> dict:
         return {"accepted": False, "missing_required_evidence": {"baseline": missing_baseline, "release": missing_release}}
 
     mismatches: list[str] = []
-    baseline_revision = baseline.get("revision", {})
-    release_revision = release.get("revision", {})
-    if (
-        baseline_revision.get("commit") == release_revision.get("commit")
-        or (
-            baseline_revision.get("source_tree_sha256")
-            and baseline_revision.get("source_tree_sha256") == release_revision.get("source_tree_sha256")
-        )
-    ):
+    if _same_revision_snapshot(baseline, release):
         mismatches.append("revision")
     if baseline.get("harness") != release.get("harness"):
         mismatches.append("harness")

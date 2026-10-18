@@ -1,0 +1,124 @@
+from dataclasses import dataclass
+from pathlib import Path
+
+import openpyxl
+
+from foresight_os.analysis.workbook_engine import DomainAnalysis
+from foresight_os.analysis.workbook_runner import WorkbookWorkflowRunner
+from foresight_os.domain.analysis_inputs import AnalysisInputContract
+from foresight_os.domain.models import AnalysisState, Revision, RevisionStatus
+from foresight_os.persistence.analysis_store import AnalysisStore
+from tests.test_review_records import make_state
+
+
+@dataclass(frozen=True)
+class _DomainOutput:
+    state: AnalysisState
+
+
+def _source(tmp_path: Path) -> Path:
+    source = tmp_path / "runner.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Data"
+    sheet.append(["Entity", "Value"])
+    sheet.append(["North", 10])
+    workbook.save(source)
+    return source
+
+
+def _contract() -> AnalysisInputContract:
+    return AnalysisInputContract(domain="runner", required_tables=("Data",))
+
+
+def _analyzer(material, contract):
+    state = make_state()
+    return DomainAnalysis(result=_DomainOutput(state), state=state)
+
+
+def test_runner_publishes_reviews_accepts_and_renders_only_after_acceptance(tmp_path):
+    store = AnalysisStore(tmp_path / "accepted")
+    report_calls = []
+
+    def render(path, result, state):
+        report_calls.append((path, state.revision_status))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("accepted", encoding="utf-8")
+
+    outcome = WorkbookWorkflowRunner(store).run(
+        _source(tmp_path),
+        _contract(),
+        _analyzer,
+        human_decision="ACCEPT",
+        render_report=render,
+    )
+
+    assert outcome.status == "accepted"
+    assert outcome.state is not None
+    assert outcome.state.revision_status == RevisionStatus.ACCEPTED
+    assert outcome.report_path is not None and outcome.report_path.exists()
+    assert report_calls == [(outcome.report_path, RevisionStatus.ACCEPTED)]
+    assert outcome.metrics["review_calls"] == 1
+    assert outcome.metrics["acceptance_status"] == 1
+    assert not store.pending_analysis_path.exists()
+
+
+def test_runner_keeps_pending_state_without_rendering(tmp_path):
+    store = AnalysisStore(tmp_path / "pending")
+    report_calls = []
+    outcome = WorkbookWorkflowRunner(store).run(
+        _source(tmp_path),
+        _contract(),
+        _analyzer,
+        human_decision="PENDING",
+        render_report=lambda *args: report_calls.append(args),
+    )
+
+    assert outcome.status == "pending"
+    assert outcome.state is not None
+    assert outcome.state.revision_status == RevisionStatus.PENDING_REVIEW
+    assert report_calls == []
+    assert store.pending_analysis_path.exists()
+
+
+def test_runner_rejects_without_rendering(tmp_path):
+    store = AnalysisStore(tmp_path / "rejected")
+    report_calls = []
+    outcome = WorkbookWorkflowRunner(store).run(
+        _source(tmp_path),
+        _contract(),
+        _analyzer,
+        human_decision="REJECT",
+        render_report=lambda *args: report_calls.append(args),
+    )
+
+    assert outcome.status == "rejected"
+    assert outcome.state is not None
+    assert outcome.state.revision_status == RevisionStatus.REJECTED
+    assert report_calls == []
+    assert not store.pending_analysis_path.exists()
+
+
+def test_runner_maps_engine_failures_without_persisting(tmp_path):
+    store = AnalysisStore(tmp_path / "blocked")
+    outcome = WorkbookWorkflowRunner(store).run(
+        _source(tmp_path),
+        AnalysisInputContract(domain="runner", required_tables=("Missing",)),
+        _analyzer,
+    )
+
+    assert outcome.status == "blocked_input"
+    assert outcome.state is None
+    assert not store.pending_analysis_path.exists()
+
+
+def test_runner_reuses_existing_lifecycle_for_repeated_source_and_contract(tmp_path):
+    store = AnalysisStore(tmp_path / "repeat")
+    source = _source(tmp_path)
+    first = WorkbookWorkflowRunner(store).run(source, _contract(), _analyzer, human_decision="ACCEPT")
+    second = WorkbookWorkflowRunner(store).run(source, _contract(), _analyzer, human_decision="ACCEPT")
+
+    assert first.status == second.status == "accepted"
+    assert first.source_fingerprint == second.source_fingerprint
+    assert first.contract_fingerprint == second.contract_fingerprint
+    assert second.state is not None and second.state.revision > first.state.revision
