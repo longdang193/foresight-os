@@ -39,6 +39,10 @@ def _is_number(value: object) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def _is_nonnegative_count(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
 def _validate_measurement_receipt(receipt: dict) -> list[str]:
     missing: list[str] = []
     required = (
@@ -163,6 +167,13 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
             missing.append(f"xlsx.workloads.{name}.status=not_failed")
         elif status != "VERIFIED" and not isinstance(item.get("limitation"), str):
             missing.append(f"xlsx.workloads.{name}.limitation")
+    candidate = workloads.get("public_workflow_context_reuse")
+    if isinstance(candidate, dict):
+        for field in ("capture_count", "xlsx_parse_count"):
+            if not _is_nonnegative_count(candidate.get(field)):
+                missing.append(f"xlsx.workloads.public_workflow_context_reuse.{field}>=0")
+    else:
+        missing.append("xlsx.workloads.public_workflow_context_reuse")
     timing_paths = workbook.get("timing_paths")
     if not isinstance(timing_paths, dict):
         missing.append("xlsx.timing_paths")
@@ -390,7 +401,9 @@ def compare(baseline: dict, release: dict) -> dict:
             field: _comparison_metric(float(baseline_candidate[field]), float(release_candidate[field]))
             for field in candidate_fields
         }
-        candidate_improved = all(float(release_candidate[field]) < float(baseline_candidate[field]) for field in candidate_fields)
+        candidate_improved = candidate_correctness and all(
+            float(release_candidate[field]) < float(baseline_candidate[field]) for field in candidate_fields
+        )
         optimization_status = "VERIFIED" if candidate_improved else "NOT_MEASURED"
         optimization_limitation = None if candidate_improved else "selected candidate did not reduce every measured duplicate count"
     else:

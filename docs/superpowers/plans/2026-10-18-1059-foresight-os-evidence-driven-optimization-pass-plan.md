@@ -114,8 +114,8 @@ optimization improvement.
 - Branch: `codex/foresight-os-evidence-driven-optimization-pass`
 - Base commit: `7881831dc7785adb9a17b8b4378fee1f2260c1e`
 - Expected workspace: current checkout remains dirty and preserved; implementation worktree starts clean
-- Evidence anchors: base `7881831dc7785adb9a17b8b4378fee1f2260c1e`; compatibility `5a6669cea80d8ded049f94c69f460f30bdc41d4f`; prior implementation/final-verification SHA `1d41fcc1dbe6d8c2aa4acf4f5edd6d575f7f6344`; review cycle 1 head `55576decd3bef704b6f072b6a576c3a199c39581`; cross-revision baseline/release receipts under `work/optimization-review-{baseline,release}/`; selected optimization is public workflow `WorkbookContext` reuse
-- Next action: commit and push the review corrections, rerun the bounded review cycle, and merge only after review completion
+- Evidence anchors: base `7881831dc7785adb9a17b8b4378fee1f2260c1e`; compatibility `5a6669cea80d8ded049f94c69f460f30bdc41d4f`; prior implementation/final-verification SHA `1d41fcc1dbe6d8c2aa4acf4f5edd6d575f7f6344`; review cycle 1 head `55576decd3bef704b6f072b6a576c3a199c39581`; review cycle 2 head `fe8fdb23d6eaadcfa69b37fab9b6961378bc1243`; cross-revision baseline/release receipts under `work/optimization-review-{baseline,release}/`; selected optimization is public workflow `WorkbookContext` reuse
+- Next action: commit and push the final comparator hardening, run the third and final bounded review cycle, and merge only after review completion
 - Blockers: none for implementation; MAF/timing-path latency remains diagnostic-only because repeated runs showed nondeterministic noise beyond the deterministic release gate
 
 | Task | State | Workspace | Executor | Depends On | Required Proof | Evidence |
@@ -124,7 +124,7 @@ optimization improvement.
 | Task 2 | `completed` | dedicated worktree | lead controller | Task 1 | compatibility and mutation regressions | commit `5a6669c`; focused recipe/gate/persistence tests passed |
 | Task 3 | `completed` | dedicated worktree | lead controller | Task 2 | repaired deterministic baseline and scenario evidence | baseline receipt `VERIFIED`; explicit phases/scenarios/retained bytes; comparison harness updated |
 | Task 4 | `completed` | dedicated worktree | lead controller | Task 3 | exactly one selected optimization with before/after proof | public workflow context reuse; comparison `PASS`; captures/parses `2 -> 1` |
-| Task 5 | `in_progress` | dedicated worktree | lead controller | Tasks 1-4 | full verification and handoff evidence | prior verification passed; review cycle 1 found benchmark revision-identity and collapsed-result gate defects; fixes verified locally, final SHA pending |
+| Task 5 | `in_progress` | dedicated worktree | lead controller | Tasks 1-4 | full verification and handoff evidence | review cycles 1-2 found and corrected benchmark identity, collapsed-result, and candidate-counter gate defects; full suite, compileall, and diff checks pass; final SHA pending |
 
 ## Task Breakdown
 

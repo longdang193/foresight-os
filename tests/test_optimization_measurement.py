@@ -349,6 +349,28 @@ def test_comparator_rejects_collapsed_brief_results_as_incorrect():
 
     assert not result["accepted"]
     assert result["outcomes"]["correctness"]["status"] == "FAILED"
+    assert result["outcomes"]["optimization_demonstrated"]["status"] == "NOT_MEASURED"
+
+
+def test_comparator_rejects_malformed_candidate_counters():
+    baseline = _receipt()
+    release = deepcopy(baseline)
+    release["revision"]["commit"] = "release-commit"
+    baseline["xlsx"]["workloads"]["public_workflow_context_reuse"]["capture_count"] = -1
+
+    negative = compare(baseline, release)
+
+    assert not negative["accepted"]
+    assert "xlsx.workloads.public_workflow_context_reuse.capture_count>=0" in negative["missing_required_evidence"]["baseline"]
+
+    release = deepcopy(baseline)
+    release["revision"]["commit"] = "release-commit"
+    del release["xlsx"]["workloads"]["public_workflow_context_reuse"]["xlsx_parse_count"]
+
+    missing = compare(_receipt(), release)
+
+    assert not missing["accepted"]
+    assert "xlsx.workloads.public_workflow_context_reuse.xlsx_parse_count>=0" in missing["missing_required_evidence"]["release"]
 
 
 def test_comparator_reports_unavailable_dimensions_without_treating_them_as_passes():
