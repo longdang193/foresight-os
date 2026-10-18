@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from contextlib import contextmanager
+import hashlib
+import inspect
 import json
 import os
 import shutil
@@ -14,6 +17,7 @@ import time
 import tracemalloc
 from collections.abc import Mapping
 from pathlib import Path
+from unittest.mock import patch
 
 
 def _cli_path(name: str) -> Path | None:
@@ -396,55 +400,97 @@ def _retained_bytes(context: WorkbookContext) -> int:
     )
 
 
+@contextmanager
+def _count_workbook_reads():
+    from foresight_os.analysis import workbook_inputs
+    from foresight_os.runtime import local_toolbelt
+
+    counts = {"capture_count": 0, "xlsx_parse_count": 0}
+    original_capture = local_toolbelt.SourceSnapshot.capture
+    original_spreadsheet_read = local_toolbelt.spreadsheet_read
+
+    def counted_capture(cls, *args, **kwargs):
+        counts["capture_count"] += 1
+        return original_capture(*args, **kwargs)
+
+    def counted_spreadsheet_read(*args, **kwargs):
+        counts["xlsx_parse_count"] += 1
+        return original_spreadsheet_read(*args, **kwargs)
+
+    with (
+        patch.object(local_toolbelt.SourceSnapshot, "capture", classmethod(counted_capture)),
+        patch.object(local_toolbelt, "spreadsheet_read", counted_spreadsheet_read),
+        patch.object(workbook_inputs, "spreadsheet_read", counted_spreadsheet_read),
+    ):
+        yield counts
+
+
+def _technology_result_fingerprint(result: object) -> str:
+    technology = getattr(result, "technology", None)
+    assessments = getattr(technology, "assessments", ()) if technology is not None else ()
+    signature = tuple(repr(assessment) for assessment in assessments)
+    return hashlib.sha256(repr(signature).encode("utf-8")).hexdigest()
+
+
 def _public_workflow_context_reuse(mode: str) -> dict[str, object]:
     source = TARGET_ROOT / "tests" / "fixtures" / "exercise" / "04_Technology_Radar.xlsx"
     focused = AnalysisInputContract(domain="technology_radar", entity_scope=("SiC Power Electronics",))
     broad = AnalysisInputContract(domain="technology_radar", entity_scope=("SiC Power Electronics", "Zonal Architecture"))
-    contexts = [WorkbookContext(), WorkbookContext()] if mode == "baseline" else [WorkbookContext()]
+    workflow_supports_context = "workbook_context" in inspect.signature(run_technology_radar_workflow).parameters
+    context = WorkbookContext() if workflow_supports_context else None
     results = []
     started = time.perf_counter()
-    with tempfile.TemporaryDirectory(prefix="foresight-public-workflow-") as temporary_dir:
-        for index, contract in enumerate((focused, broad)):
-            context = contexts[index] if mode == "baseline" else contexts[0]
-            result = run_technology_radar_workflow(
-                AnalysisStore(Path(temporary_dir) / f"case-{index}"),
-                source,
-                human_decision="PENDING",
-                input_contract=contract,
-                workbook_context=context,
-            )
-            results.append((result, context))
+    with _count_workbook_reads() as read_counts:
+        with tempfile.TemporaryDirectory(prefix="foresight-public-workflow-") as temporary_dir:
+            for index, contract in enumerate((focused, broad)):
+                workflow_kwargs = {
+                    "human_decision": "PENDING",
+                    "input_contract": contract,
+                }
+                if context is not None:
+                    workflow_kwargs["workbook_context"] = context
+                result = run_technology_radar_workflow(
+                    AnalysisStore(Path(temporary_dir) / f"case-{index}"),
+                    source,
+                    **workflow_kwargs,
+                )
+                results.append(result)
     elapsed_ms = (time.perf_counter() - started) * 1000
-    statuses = [result.status for result, _context in results]
-    fingerprints = [result.technology.contract_fingerprint for result, _context in results if result.technology is not None]
-    assessment_counts = [len(result.technology.assessments) for result, _context in results if result.technology is not None]
-    capture_count = sum(context.stats.capture_count for context in contexts)
-    parse_count = sum(context.stats.xlsx_parse_count for context in contexts)
-    retained_bytes = max((_retained_bytes(context) for context in contexts), default=0)
-    caller_contexts_open = all(not context._closed for context in contexts)
+    statuses = [result.status for result in results]
+    fingerprints = [result.technology.contract_fingerprint for result in results if result.technology is not None]
+    result_fingerprints = [_technology_result_fingerprint(result) for result in results if result.technology is not None]
+    capture_count = read_counts["capture_count"]
+    parse_count = read_counts["xlsx_parse_count"]
+    retained_bytes = _retained_bytes(context) if context is not None else 0
+    caller_context_open = context is None or not context._closed
+    distinct_brief_results = len(result_fingerprints) == 2 and len(set(result_fingerprints)) == 2
+    expected_read_count = 1 if workflow_supports_context else 2
     correct = (
         statuses == ["pending", "pending"]
         and len(fingerprints) == 2
         and len(set(fingerprints)) == 2
-        and assessment_counts == sorted(assessment_counts)
-        and capture_count == (2 if mode == "baseline" else 1)
-        and parse_count == (2 if mode == "baseline" else 1)
-        and caller_contexts_open
+        and distinct_brief_results
+        and capture_count == expected_read_count
+        and parse_count == expected_read_count
+        and caller_context_open
     )
-    for context in contexts:
+    if context is not None:
         context.clear()
     return {
         "executed": True,
         "status": "VERIFIED" if correct else "FAILED",
         "correctness": "VERIFIED" if correct else "FAILED",
         "mode": mode,
+        "implementation_variant": "context_forwarding" if workflow_supports_context else "legacy_workflow_context",
         "wall_time_ms": round(elapsed_ms, 3),
         "capture_count": capture_count,
         "xlsx_parse_count": parse_count,
         "contract_fingerprint_count": len(set(fingerprints)),
         "distinct_contracts": len(set(fingerprints)) == 2,
-        "distinct_brief_results": len(assessment_counts) == 2 and assessment_counts[0] != assessment_counts[1],
-        "caller_context_open_before_cleanup": caller_contexts_open,
+        "result_fingerprint_count": len(set(result_fingerprints)),
+        "distinct_brief_results": distinct_brief_results,
+        "caller_context_supported": workflow_supports_context,
+        "caller_context_open_before_cleanup": caller_context_open,
         "retained_bytes": retained_bytes,
         "limitation": None,
     }

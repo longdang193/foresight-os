@@ -6,10 +6,10 @@
   },
   "failures": [],
   "leak_control_detected": true,
-  "memory_growth_bytes": 1493,
+  "memory_growth_bytes": 1556,
   "memory_growth_exceeded": false,
-  "memory_max": 14774086,
-  "memory_min": 14772593,
+  "memory_max": 14775631,
+  "memory_min": 14774075,
   "mode": "anomaly",
   "monotonic_handle_accumulation": false,
   "resource_leak_samples": [],
@@ -19,14 +19,14 @@
       "after": {
         "child_processes": 0,
         "handles": 156,
-        "memory_bytes": 14772593,
+        "memory_bytes": 14774075,
         "open_files": 1,
         "unfinished_tasks": 1
       },
       "before": {
         "child_processes": 0,
         "handles": 156,
-        "memory_bytes": 14781667,
+        "memory_bytes": 14783079,
         "open_files": 1,
         "unfinished_tasks": 1
       }
@@ -35,14 +35,14 @@
       "after": {
         "child_processes": 0,
         "handles": 156,
-        "memory_bytes": 14773009,
+        "memory_bytes": 14774491,
         "open_files": 1,
         "unfinished_tasks": 1
       },
       "before": {
         "child_processes": 0,
         "handles": 156,
-        "memory_bytes": 14773005,
+        "memory_bytes": 14774487,
         "open_files": 1,
         "unfinished_tasks": 1
       }
@@ -51,14 +51,14 @@
       "after": {
         "child_processes": 0,
         "handles": 156,
-        "memory_bytes": 14774086,
+        "memory_bytes": 14775631,
         "open_files": 1,
         "unfinished_tasks": 1
       },
       "before": {
         "child_processes": 0,
         "handles": 156,
-        "memory_bytes": 14773389,
+        "memory_bytes": 14774871,
         "open_files": 1,
         "unfinished_tasks": 1
       }

@@ -269,6 +269,16 @@ def compare(baseline: dict, release: dict) -> dict:
         return {"accepted": False, "missing_required_evidence": {"baseline": missing_baseline, "release": missing_release}}
 
     mismatches: list[str] = []
+    baseline_revision = baseline.get("revision", {})
+    release_revision = release.get("revision", {})
+    if (
+        baseline_revision.get("commit") == release_revision.get("commit")
+        or (
+            baseline_revision.get("source_tree_sha256")
+            and baseline_revision.get("source_tree_sha256") == release_revision.get("source_tree_sha256")
+        )
+    ):
+        mismatches.append("revision")
     if baseline.get("harness") != release.get("harness"):
         mismatches.append("harness")
     if baseline.get("workload") != release.get("workload"):
@@ -362,6 +372,18 @@ def compare(baseline: dict, release: dict) -> dict:
     candidate_name = "public_workflow_context_reuse"
     baseline_candidate = baseline.get("xlsx", {}).get("workloads", {}).get(candidate_name, {})
     release_candidate = release.get("xlsx", {}).get("workloads", {}).get(candidate_name, {})
+    candidate_correctness = all(
+        candidate.get("status") == "VERIFIED"
+        and candidate.get("correctness") == "VERIFIED"
+        and candidate.get("distinct_brief_results") is True
+        for candidate in (baseline_candidate, release_candidate)
+    )
+    correctness_status = (
+        "VERIFIED"
+        if correctness_status == "VERIFIED" and candidate_correctness
+        else "FAILED"
+    )
+    accepted = accepted and correctness_status == "VERIFIED"
     candidate_fields = ("capture_count", "xlsx_parse_count")
     if baseline_candidate.get("status") == "VERIFIED" and release_candidate.get("status") == "VERIFIED":
         candidate_comparison = {

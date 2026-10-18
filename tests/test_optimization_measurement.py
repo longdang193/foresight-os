@@ -72,8 +72,18 @@ def _receipt() -> dict:
                 for name in ("cold_workbook", "same_view_repeat", "repeated_investigation", "analyst_validator_reuse")
             },
             "workloads": {
-                name: {"executed": True, "status": "VERIFIED", "correctness": "VERIFIED", "limitation": None}
-                for name in MANDATORY_XLSX_WORKLOADS
+                **{
+                    name: {"executed": True, "status": "VERIFIED", "correctness": "VERIFIED", "limitation": None}
+                    for name in MANDATORY_XLSX_WORKLOADS
+                },
+                "public_workflow_context_reuse": {
+                    "executed": True,
+                    "status": "VERIFIED",
+                    "correctness": "VERIFIED",
+                    "capture_count": 1,
+                    "xlsx_parse_count": 1,
+                    "distinct_brief_results": True,
+                },
             },
         },
         "workload": {"fixture_sha256": "same", "warmups": 2, "measured_runs": 10, "patterns": list(PATTERNS)},
@@ -146,6 +156,7 @@ def test_comparator_rejects_missing_or_mismatched_harness_identity():
 
     release = deepcopy(baseline)
     release["harness"]["source_tree_sha256"] = "different-harness"
+    release["revision"]["commit"] = "release-commit"
 
     mismatched = compare(baseline, release)
     assert mismatched == {"accepted": False, "mismatched_comparison_inputs": ["harness"]}
@@ -179,11 +190,13 @@ def test_comparator_rejects_workload_pattern_and_resource_regressions():
     baseline = _receipt()
     release = deepcopy(baseline)
     release["workload"]["fixture_sha256"] = "different"
+    release["revision"]["commit"] = "release-commit"
     assert compare(baseline, release) == {"accepted": False, "mismatched_comparison_inputs": ["workload"]}
 
     release = deepcopy(baseline)
     release["maf_patterns"]["CONCURRENT"]["latency"]["wall_time_ms_p95"] = 13
     release["soak"]["monotonic_growth"] = True
+    release["revision"]["commit"] = "release-commit"
     result = compare(baseline, release)
     assert not result["accepted"]
     assert "soak.monotonic_growth=false" in result["missing_required_evidence"]["release"]
@@ -192,6 +205,7 @@ def test_comparator_rejects_workload_pattern_and_resource_regressions():
 def test_comparator_rejects_large_warm_and_repeated_timing_path_regressions():
     baseline = _receipt()
     release = deepcopy(baseline)
+    release["revision"]["commit"] = "release-commit"
     release["xlsx"]["timing_paths"]["same_view_repeat"]["wall_time_ms"] = 25
     release["xlsx"]["timing_paths"]["repeated_investigation"]["wall_time_ms"] = 25
 
@@ -205,6 +219,7 @@ def test_comparator_rejects_large_warm_and_repeated_timing_path_regressions():
 def test_comparator_rejects_new_calls_for_reused_stage():
     baseline = _receipt()
     release = deepcopy(baseline)
+    release["revision"]["commit"] = "release-commit"
     release["stage_metrics"][0]["reused_stages"] = 1
     release["stage_metrics"][0]["model_calls"] = 1
 
@@ -268,12 +283,14 @@ def test_comparator_reports_optimization_evidence_separately_from_regression_gat
         "correctness": "VERIFIED",
         "capture_count": 2,
         "xlsx_parse_count": 2,
+        "distinct_brief_results": True,
     }
     release["xlsx"]["workloads"]["public_workflow_context_reuse"] = {
         "status": "VERIFIED",
         "correctness": "VERIFIED",
         "capture_count": 1,
         "xlsx_parse_count": 1,
+        "distinct_brief_results": True,
     }
 
     result = compare(baseline, release)
@@ -283,6 +300,55 @@ def test_comparator_reports_optimization_evidence_separately_from_regression_gat
     assert result["outcomes"]["regression_threshold"]["status"] == "VERIFIED"
     assert result["outcomes"]["optimization_demonstrated"]["status"] == "VERIFIED"
     assert result["outcomes"]["optimization_demonstrated"]["candidate"] == "public_workflow_context_reuse"
+
+
+def test_comparator_rejects_improvement_claim_from_identical_revision():
+    baseline = _receipt()
+    release = deepcopy(baseline)
+    baseline["xlsx"]["workloads"]["public_workflow_context_reuse"] = {
+        "status": "VERIFIED",
+        "correctness": "VERIFIED",
+        "capture_count": 2,
+        "xlsx_parse_count": 2,
+        "distinct_brief_results": True,
+    }
+    release["xlsx"]["workloads"]["public_workflow_context_reuse"] = {
+        "status": "VERIFIED",
+        "correctness": "VERIFIED",
+        "capture_count": 1,
+        "xlsx_parse_count": 1,
+        "distinct_brief_results": True,
+    }
+
+    result = compare(baseline, release)
+
+    assert not result["accepted"]
+    assert result["mismatched_comparison_inputs"] == ["revision"]
+
+
+def test_comparator_rejects_collapsed_brief_results_as_incorrect():
+    baseline = _receipt()
+    release = deepcopy(baseline)
+    release["revision"]["commit"] = "release-commit"
+    baseline["xlsx"]["workloads"]["public_workflow_context_reuse"] = {
+        "status": "VERIFIED",
+        "correctness": "VERIFIED",
+        "capture_count": 2,
+        "xlsx_parse_count": 2,
+        "distinct_brief_results": True,
+    }
+    release["xlsx"]["workloads"]["public_workflow_context_reuse"] = {
+        "status": "VERIFIED",
+        "correctness": "VERIFIED",
+        "capture_count": 1,
+        "xlsx_parse_count": 1,
+        "distinct_brief_results": False,
+    }
+
+    result = compare(baseline, release)
+
+    assert not result["accepted"]
+    assert result["outcomes"]["correctness"]["status"] == "FAILED"
 
 
 def test_comparator_reports_unavailable_dimensions_without_treating_them_as_passes():
