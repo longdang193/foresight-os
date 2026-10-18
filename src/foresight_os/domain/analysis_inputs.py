@@ -34,6 +34,7 @@ ANALYSIS_INPUT_CONTRACT_FIELDS = frozenset(
         "validation_checks",
         "assumptions",
         "compatibility_assumption",
+        "workbook_selection",
     }
 )
 GLOBAL_SCOPE = "GLOBAL_SCOPE"
@@ -129,6 +130,7 @@ class AnalysisInputContract:
     required_validation_checks: tuple[str, ...] = ()
     assumptions: tuple[str, ...] = ()
     compatibility_assumption: str | None = None
+    workbook_selection: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -143,6 +145,7 @@ class AnalysisInputContract:
             object.__setattr__(self, field_name, _tuple(getattr(self, field_name)))
         object.__setattr__(self, "column_mappings", MappingProxyType({str(key): str(value) for key, value in self.column_mappings.items()}))
         object.__setattr__(self, "conversion_rates", MappingProxyType({str(key): float(value) for key, value in self.conversion_rates.items()}))
+        object.__setattr__(self, "workbook_selection", MappingProxyType(_canonical(dict(self.workbook_selection))))
         self.validate()
 
     @classmethod
@@ -173,6 +176,7 @@ class AnalysisInputContract:
             required_validation_checks=_tuple(data.get("required_validation_checks", data.get("validation_checks", ()))),
             assumptions=_tuple(data.get("assumptions", ())),
             compatibility_assumption=(str(data["compatibility_assumption"]) if data.get("compatibility_assumption") is not None else None),
+            workbook_selection=dict(data.get("workbook_selection", {})),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -195,6 +199,7 @@ class AnalysisInputContract:
             "required_validation_checks": list(self.required_validation_checks),
             "assumptions": list(self.assumptions),
             **({"compatibility_assumption": self.compatibility_assumption} if self.compatibility_assumption else {}),
+            **({"workbook_selection": _canonical(self.workbook_selection)} if self.workbook_selection else {}),
         }
 
     @property

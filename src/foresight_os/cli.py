@@ -22,6 +22,12 @@ from foresight_os.runtime.capabilities import CapabilityUnavailableError
 from foresight_os.persistence.recovery import continue_investigation
 from foresight_os.clients.first_client_adapter import LocalClient
 from foresight_os.analysis.powerbi import read_powerbi_project
+from foresight_os.analysis.portfolio_resilience import run_portfolio_resilience_workflow
+from foresight_os.analysis.supplier_resilience import run_supplier_resilience_workflow
+from foresight_os.analysis.ev_capacity_investment import run_ev_capacity_investment_workflow
+from foresight_os.analysis.technology_radar import run_technology_radar_workflow
+from foresight_os.analysis.powerbi_strategic_portfolio import run_powerbi_strategic_portfolio_workflow
+from foresight_os.domain.analysis_inputs import normalize_work_brief
 from foresight_os.vertical_slice import run_vertical_slice
 
 
@@ -32,6 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     analyze = subparsers.add_parser("analyze")
     analyze.add_argument("--workbook", type=Path, required=True)
     analyze.add_argument("--work-dir", type=Path, required=True)
+    analyze.add_argument("--domain", choices=("portfolio_resilience", "supplier_resilience", "ev_capacity_investment", "technology_radar", "powerbi_strategic_portfolio"))
     analyze.add_argument("--accept", action="store_true")
 
     brief = subparsers.add_parser("brief")
@@ -92,9 +99,57 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "analyze":
-        outcome = run_vertical_slice(args.workbook, args.work_dir, args.accept)
-        print(json.dumps({"accepted": outcome.accepted, "status": outcome.status}))
-        return 0 if outcome.accepted else 2
+        if args.workbook.suffix.lower() == ".csv":
+            outcome = run_vertical_slice(args.workbook, args.work_dir, args.accept)
+            print(json.dumps({"accepted": outcome.accepted, "status": outcome.status}))
+            return 0 if outcome.accepted else 2
+        if args.workbook.suffix.lower() not in {".xlsx", ".xlsm"}:
+            print(json.dumps({"status": "BLOCKED_INPUT", "error": "analyze supports CSV or XLSX workbooks"}))
+            return 2
+        store = AnalysisStore(args.work_dir)
+        domain = args.domain
+        contract = None
+        if domain is None and store.brief_path.exists():
+            try:
+                normalized = normalize_work_brief(store.load_brief())
+                candidates = [item.domain for item in normalized.contracts if item.stage_id is None and item.domain in {
+                    "portfolio_resilience",
+                    "supplier_resilience",
+                    "ev_capacity_investment",
+                    "technology_radar",
+                    "powerbi_strategic_portfolio",
+                }]
+            except (OSError, ValueError) as error:
+                print(json.dumps({"status": "BLOCKED_INPUT", "error": str(error)}))
+                return 2
+            if len(candidates) != 1:
+                detail = "missing" if not candidates else "ambiguous"
+                print(json.dumps({"status": "BLOCKED_INPUT", "error": f"XLSX analysis domain is {detail}; pass --domain"}))
+                return 2
+            domain = candidates[0]
+        if domain is None:
+            print(json.dumps({"status": "BLOCKED_INPUT", "error": "XLSX analysis requires --domain or one resolvable domain in brief.md"}))
+            return 2
+        if store.brief_path.exists():
+            try:
+                brief_contract = normalize_work_brief(store.load_brief()).contract_for_domain(domain)
+                contract = brief_contract
+            except (OSError, ValueError) as error:
+                print(json.dumps({"status": "BLOCKED_INPUT", "error": str(error)}))
+                return 2
+        workflows = {
+            "portfolio_resilience": run_portfolio_resilience_workflow,
+            "supplier_resilience": run_supplier_resilience_workflow,
+            "ev_capacity_investment": run_ev_capacity_investment_workflow,
+            "technology_radar": run_technology_radar_workflow,
+            "powerbi_strategic_portfolio": run_powerbi_strategic_portfolio_workflow,
+        }
+        outcome = workflows[domain](store, args.workbook, human_decision="ACCEPT" if args.accept else "PENDING", input_contract=contract)
+        payload = {"accepted": outcome.status == "accepted", "status": outcome.status}
+        if outcome.failure:
+            payload["error"] = outcome.failure
+        print(json.dumps(payload))
+        return 0 if outcome.status == "accepted" else 2
     if args.command == "brief":
         print(render_work_brief_markdown(AnalysisStore(args.work_dir).load_brief()), end="")
         return 0

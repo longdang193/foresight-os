@@ -56,6 +56,19 @@ The report command writes:
 work/docs-quickstart/artifacts/executive-report.md
 ```
 
+For an XLSX source, select the domain explicitly; the CLI never infers a
+domain from a filename or workbook layout:
+
+```text
+python -m foresight_os.cli analyze --workbook path/to/input.xlsx --work-dir work/xlsx-run --domain portfolio_resilience --accept
+```
+
+The supported domains are `portfolio_resilience`, `supplier_resilience`,
+`ev_capacity_investment`, `technology_radar`, and
+`powerbi_strategic_portfolio`. If `--domain` is omitted, `brief.md` must contain
+exactly one resolvable domain contract or the command returns `BLOCKED_INPUT`.
+CSV continues to use the provider-free `run_vertical_slice` path.
+
 The CLI also supports `inspect-powerbi` for metadata-only project inspection,
 `challenge` for recording a review challenge, and `scope-change` for recording
 a changed decision scope. Use each command’s `--help` output for the current

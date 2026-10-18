@@ -128,7 +128,17 @@ The optimization probe is the release-level measurement entry point. It records
 baseline/release receipts, stage and resource metrics, tool-call economics,
 accepted-finding-normalized values, and a no-growth soak. Comparisons fail
 closed on missing evidence, schema or workload mismatch, zero denominators,
-resource growth, or threshold regressions.
+resource growth, or threshold regressions. Correctness, resource safety,
+lifecycle settlement, and optimization claims remain separate evidence
+dimensions; a latency regression cannot be converted into an optimization
+claim. Baseline and release receipts may come from worktrees sharing the same
+Git `HEAD` when their measured source-tree digests differ; the comparison still
+requires the harness, fixture, workload, and limits to match.
+
+The local XLSX path is provider-free and structurally verifiable. A receipt can
+prove source/layout/contract identity, provenance retention, review and
+acceptance settlement, and cleanup observations without proving model quality,
+strategic usefulness, or human acceptance beyond the recorded boundary.
 
 Run structural evaluation and release measurement through the scripts documented
 in `evaluation/README.md` and `.github/workflows/evidence.yml`. Keep provider

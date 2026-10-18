@@ -71,6 +71,23 @@ Source-grounded validation is a separate host-facing procedure under
 checks, review records, dependency invalidation, and human acceptance owners;
 it does not add a second validator or durable status hierarchy.
 
+### Workbook input path
+
+The local XLSX path has one ephemeral input composition boundary:
+`WorkbookContext` captures or reuses bounded source snapshots, resolves a
+`ResolvedWorkbookLayout` from a domain-owned `WorkbookLayoutSpec`, and builds a
+provenance-preserving `MaterialView` for the selected contract scope.
+`WorkbookAnalysisEngine` invokes the domain analyzer without persistence or
+acceptance side effects. `WorkbookWorkflowRunner` then delegates pending-state
+writes, review, acceptance, invalidation metadata, report gating, and lifecycle
+status conversion to the existing owners. Recipe execution uses the engine
+directly so stage receipts and analytical acceptance are not nested or
+duplicated.
+
+The public `analyze` command dispatches CSV to the existing vertical slice and
+dispatches XLSX only through an explicit domain or one unambiguous domain in
+`brief.md`. Missing or ambiguous XLSX domain selection is `BLOCKED_INPUT`.
+
 ### 2. Controller and recipe
 
 The controller resolves policy into an `ExecutionRecipe`. A recipe names the

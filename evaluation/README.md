@@ -142,12 +142,12 @@ provider-backed evaluation is a separate manual job using the protected
 `provider-evidence` environment. Missing provider configuration remains
 `BLOCKED_EXTERNAL` rather than becoming a passing result.
 
-The repository's `scheduled-evidence` workflow runs the structural skill
-evaluation, clean-wheel smoke, and release optimization probe on a weekly
-schedule or manual dispatch. Its `run_provider` input defaults to `false`; the
-provider-backed evaluation is a separate manual job using the protected
-`provider-evidence` environment. Missing provider configuration remains
-`BLOCKED_EXTERNAL` rather than becoming a passing result.
+The public `analyze` command keeps CSV on the provider-free vertical-slice path.
+XLSX requires `--domain` or exactly one supported domain in `brief.md`; missing
+or ambiguous selection returns `BLOCKED_INPUT` rather than guessing from a
+filename or workbook layout. The five supported XLSX domains are
+`portfolio_resilience`, `supplier_resilience`, `ev_capacity_investment`,
+`technology_radar`, and `powerbi_strategic_portfolio`.
 
 ## Optimization pass evidence
 
@@ -170,6 +170,12 @@ hashes, contract fingerprints, selected inputs, and structural outcome
 assertions. It does not measure provider quality or human acceptance.
 
 `run_optimization_probe.py` is the release-level measurement entry point. It compares cold/warm XLSX reads and all five native MAF patterns, proves a credential-free native Streamable HTTP MCP discovery path, records separate model/local/MCP/external economics, token counters, accepted-finding-normalized values, per-pattern latency components, portable RSS/resource snapshots, and runs a 100-run resource soak. The XLSX receipt requires the same eight workloads on both revisions: `cold_workbook`, `same_view_repeat`, `different_selection`, `analyst_validator_reuse`, `repeated_investigation`, `large_retained_context`, `multi_workbook`, and `blocking_cancellation`. Baseline and release receipts share the schema owned by `optimization_measurement.py`; missing required evidence, workload/schema mismatches, zero denominators, resource growth, or threshold regressions fail comparison closed. Freeze the harness outside both worktrees when comparing revisions so the base revision does not provide a different probe implementation.
+
+The comparator treats differing measured source-tree digests as distinct
+worktree revisions even when both worktrees share the same Git `HEAD`. A
+failed latency or resource threshold does not authorize an optimization claim;
+record the regression and defer the optimization until matched evidence proves
+it safe and material.
 
 `run_selective_reuse_probe.py` validates fresh-process reuse and sidecar receipt provenance. `run_strategic_exercise.py` stages participant-visible workbooks without the validator key and proves filesystem scope denial. `run_clean_wheel_smoke.py` builds and installs only the new wheel in a disposable environment outside the repository tree.
 

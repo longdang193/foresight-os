@@ -1,9 +1,55 @@
 from pathlib import Path
+import json
+
+from types import SimpleNamespace
+
+import openpyxl
 
 from foresight_os.cli import main
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.runtime.capabilities import CapabilityUnavailableError
 from foresight_os.wayfinding import create_work_brief
+
+
+def _xlsx(path: Path) -> None:
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Value"])
+    workbook.save(path)
+
+
+def test_analyze_xlsx_requires_explicit_or_single_brief_domain(tmp_path: Path, capsys):
+    workbook = tmp_path / "input.xlsx"
+    _xlsx(workbook)
+
+    assert main(["analyze", "--workbook", str(workbook), "--work-dir", str(tmp_path / "case")]) == 2
+    assert json.loads(capsys.readouterr().out)["status"] == "BLOCKED_INPUT"
+
+
+def test_analyze_xlsx_dispatches_explicit_domain_without_filename_guessing(tmp_path: Path, capsys, monkeypatch):
+    workbook = tmp_path / "arbitrary-name.xlsx"
+    _xlsx(workbook)
+    seen = {}
+
+    def fake_workflow(store, source, **kwargs):
+        seen.update({"source": source, **kwargs})
+        return SimpleNamespace(status="accepted", failure=None)
+
+    monkeypatch.setattr("foresight_os.cli.run_portfolio_resilience_workflow", fake_workflow)
+
+    assert main([
+        "analyze",
+        "--workbook",
+        str(workbook),
+        "--work-dir",
+        str(tmp_path / "case"),
+        "--domain",
+        "portfolio_resilience",
+        "--accept",
+    ]) == 0
+    assert json.loads(capsys.readouterr().out) == {"accepted": True, "status": "accepted"}
+    assert seen["source"] == workbook
+    assert seen["human_decision"] == "ACCEPT"
 
 
 def test_brief_command_renders_only_human_body_without_creating_state(tmp_path: Path, capsys):

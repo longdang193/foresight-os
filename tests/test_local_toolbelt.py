@@ -21,6 +21,7 @@ from foresight_os.runtime.local_toolbelt import (
     SourceSnapshot,
     ToolbeltLimits,
     ToolbeltError,
+    MissingWorkbookInputError,
     TypedTable,
     TypedMeasurement,
     WorkbookContext,
@@ -1218,4 +1219,23 @@ def test_xlsx_reader_rejects_malformed_selection_shapes(selection, message, tmp_
     workbook.save(source)
 
     with pytest.raises(ToolbeltError, match=message):
+        spreadsheet_read(source, selection)
+
+
+@pytest.mark.parametrize(
+    ("selection", "message"),
+    [
+        (SheetSelection(sheet_names=("Missing",)), "missing workbook sheet"),
+        (SheetSelection(ranges=(("Data", "not-a-range"),)), "missing workbook range"),
+        (SheetSelection(tables=(("Data", "MissingTable"),)), "missing workbook table"),
+    ],
+)
+def test_xlsx_reader_fails_closed_for_missing_explicit_inputs(selection, message, tmp_path):
+    source = tmp_path / "missing-selection.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Value"])
+    workbook.save(source)
+
+    with pytest.raises(MissingWorkbookInputError, match=message):
         spreadsheet_read(source, selection)

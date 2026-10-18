@@ -13,6 +13,7 @@ from agent_framework import FunctionExecutor, WorkflowBuilder, WorkflowContext
 from foresight_os.controller.recipes import ExecutionPattern, ExecutionRecipe, StageInput
 from foresight_os.runtime.executors import (
     AnalystExecutor,
+    DeterministicLocalExecutor,
     ReviewerExecutor,
     _ReservedChatClient,
     _ReservedProviderCallMiddleware,
@@ -826,7 +827,7 @@ def _stage_fingerprints(
     skill_ids: tuple[str, ...],
     selected_skills_by_participant: Mapping[str, tuple[object, ...]] | None = None,
 ) -> tuple[str, str]:
-    participant_configs = tuple(_stage_participants(stage))
+    participant_configs = () if str(getattr(stage, "executor_kind", "agent")) == "deterministic_local" else tuple(_stage_participants(stage))
     participants = tuple(participant.id for participant in participant_configs)
     if selected_skills_by_participant is None:
         skill_plan = tuple(
@@ -1000,7 +1001,8 @@ async def run_recipe_async(
     if "max_rounds" in context and context["max_rounds"] is not None:
         run_max_rounds = _positive_limit(context["max_rounds"], label="max_rounds")
     budget = BudgetState(recipe.max_agent_steps, recipe.max_correction_rounds, recipe.max_total_agent_calls, max_rounds=run_max_rounds)
-    factory = AgentFactory(client) if client is not None else None
+    has_external_stage = any(str(getattr(stage, "executor_kind", "agent")) != "deterministic_local" for stage in recipe.stages or ())
+    factory = AgentFactory(client) if client is not None and has_external_stage else None
     context.setdefault("skill_registry", SkillRegistry())
     receipt_store = context.get("analysis_store") or context.get("stage_receipt_store")
     if isinstance(receipt_store, AnalysisStore):
@@ -1066,6 +1068,9 @@ async def run_recipe_async(
     required_capabilities: set[str] = set()
     selected_skills_by_stage: dict[str, dict[str, tuple[object, ...]]] = {}
     for stage in recipe.stages or ():
+        if str(getattr(stage, "executor_kind", "agent")) == "deterministic_local":
+            selected_skills_by_stage[getattr(stage, "stage_id", "stage")] = {}
+            continue
         stage_skill_ids = tuple(getattr(stage, "skill_ids", ()))
         stage_plan: dict[str, tuple[object, ...]] = {}
         for participant in _stage_participants(stage):
@@ -1121,7 +1126,8 @@ async def run_recipe_async(
         ensure_not_cancelled()
         pattern = ExecutionPattern(stage.pattern)
         stage_skill_ids = tuple(getattr(stage, "skill_ids", ()))
-        participants = list(_stage_participants(stage))
+        executor_kind = str(getattr(stage, "executor_kind", "agent"))
+        participants = [] if executor_kind == "deterministic_local" else list(_stage_participants(stage))
         selected_skills_by_participant = dict(
             context.get("selected_skills_by_stage", {}).get(getattr(stage, "stage_id", ""), {})
         )
@@ -1251,7 +1257,8 @@ async def run_recipe_async(
             raise BudgetExceededError("maximum agent steps exceeded before dispatch")
         if not budget.step():
             raise BudgetExceededError("maximum agent steps exceeded before dispatch")
-        metrics.participant_invocations += len(participants) or 1
+        if executor_kind != "deterministic_local":
+            metrics.participant_invocations += len(participants) or 1
         if pattern == ExecutionPattern.CONCURRENT:
             branch_count = len(participants) or 2
             if limits.get("max_branches") is not None and branch_count > int(limits["max_branches"]):
@@ -1260,6 +1267,9 @@ async def run_recipe_async(
                 raise BudgetExceededError("maximum concurrent branches exceeded before dispatch")
         async def invoke(stage_prompt: str | None = None) -> tuple[list[object], object]:
             ensure_not_cancelled()
+            if str(getattr(stage, "executor_kind", "agent")) == "deterministic_local":
+                output = await DeterministicLocalExecutor(stage, stage_input, stage_context).execute()
+                return [output], output
             prompt_value = stage_prompt or str(stage_input)
             if stage_context.get("correction_participant_ids") and client is not None and pattern != ExecutionPattern.DIRECT:
                 raise _synthesis_error("UNSUPPORTED_RECOVERY", "native orchestration cannot expose participant-local correction state")

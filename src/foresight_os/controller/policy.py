@@ -272,14 +272,10 @@ def _recipe_for_patterns(
     intent = getattr(brief, "execution_intent", None)
     required_capabilities = tuple(
         str(item)
-        for item in (normalized_intent.required_capabilities if normalized_intent is not None else getattr(intent, "required_capabilities", ()))
+        for item in getattr(intent, "required_capabilities", ())
         if str(item) not in {item.value for item in ReviewCheckKind}
     )
-    required_participants = tuple(
-        str(item)
-        for item in (normalized_intent.required_participants if normalized_intent is not None else getattr(intent, "required_participants", ()))
-        if str(item)
-    )
+    required_participants = tuple(str(item) for item in getattr(intent, "required_participants", ()) if str(item))
 
     def stage_requirements(stage: object) -> tuple[tuple[str, ...], tuple[str, ...]]:
         stage_intent = getattr(stage, "execution_intent", None)
@@ -410,6 +406,13 @@ def _recipe_for_patterns(
         domains.extend(contract.domain for contract in contracts if contract.stage_id == stage_id)
         return tuple(dict.fromkeys(domains))
 
+    def stage_contract_fingerprints(stage: object, index: int) -> tuple[tuple[str, str], ...]:
+        if not contracts:
+            return ()
+        stage_id = str(getattr(stage, "stage_id", f"stage-{index}"))
+        selected = [contract for contract in contracts if contract.stage_id is None or contract.stage_id == stage_id]
+        return tuple((contract.domain, contract.fingerprint) for contract in selected)
+
     stages = tuple(
         RecipeStage(
             getattr(work_stages[index - 1], "stage_id", f"stage-{index}") if index <= len(work_stages) else f"stage-{index}",
@@ -481,6 +484,8 @@ def _recipe_for_patterns(
             partial_result_rule="preserve completed evidence and mark incomplete stage explicitly",
             adaptation_policy=("bounded_retry", "reduced_concurrency", "dependency_safe_topology_reduction"),
             analysis_domains=stage_analysis_domains(work_stages[index - 1] if index <= len(work_stages) else object(), index),
+            executor_kind="deterministic_local" if stage_analysis_domains(work_stages[index - 1] if index <= len(work_stages) else object(), index) else "agent",
+            analysis_contract_fingerprints=stage_contract_fingerprints(work_stages[index - 1] if index <= len(work_stages) else object(), index),
         )
         for index in range(1, stage_count + 1)
     )

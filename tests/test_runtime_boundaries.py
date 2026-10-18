@@ -15,6 +15,7 @@ from foresight_os.runtime.capabilities import CapabilityBinding, CapabilityBindi
 from foresight_os.controller.budgets import BudgetState
 from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
 from foresight_os.runtime.executors import AnalystExecutor, ReviewerExecutor, _toolless_retry_agent, run_agent_with_tool_fallback
+from foresight_os.analysis.workbook_engine import DomainAnalysis
 from foresight_os.runtime.workflow import run_recipe_async
 from foresight_os.runtime.local_toolbelt import AnalysisOperation, data_analysis, spreadsheet_read
 
@@ -110,6 +111,101 @@ def test_run_recipe_returns_typed_metrics_and_real_executor_calls():
     assert result.metrics.runtime_status == "SETTLED"
     assert result.metrics.persistence_status == "NOT_STARTED"
     assert result.metrics.analysis_status == "NOT_STARTED"
+
+
+def test_deterministic_local_stage_uses_workbook_engine_without_agent_setup(tmp_path):
+    import openpyxl
+
+    source = tmp_path / "local.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Value"])
+    workbook.active.append([42])
+    workbook.save(source)
+    base = make_recipe(RecipeName.DIRECT)
+    stage = RecipeStage(
+        "local",
+        ExecutionPattern.DIRECT,
+        (),
+        "workbook",
+        "typed-result",
+        {},
+        analysis_domains=("test",),
+        executor_kind="deterministic_local",
+    )
+    recipe = ExecutionRecipe(
+        base.name,
+        base.pattern,
+        base.roles,
+        base.max_agent_steps,
+        base.max_correction_rounds,
+        base.max_total_agent_calls,
+        base.completion,
+        base.escalation,
+        base.partial_result,
+        stages=(stage,),
+    )
+    calls = []
+
+    class ExplodingClient:
+        def as_agent(self, **kwargs):
+            raise AssertionError("deterministic-local stages must not construct agents")
+
+    result = asyncio.run(
+        run_recipe_async(
+            recipe,
+            "local workbook",
+            ExplodingClient(),
+            run_context={
+                "workbook_source": source,
+                "analysis_contracts": {"test": {"domain": "test", "required_tables": ["Data"]}},
+                "workbook_analyzers": {
+                    "test": lambda material, contract: DomainAnalysis(result=material.table("Data").rows[0][0])
+                },
+            },
+        )
+    )
+
+    assert result.outputs == (42,)
+    assert result.metrics.model_calls == 0
+    assert result.metrics.participant_invocations == 0
+
+
+def test_deterministic_local_dispatch_callback_is_typed_and_isolated():
+    base = make_recipe(RecipeName.DIRECT)
+    stage = RecipeStage(
+        "local",
+        ExecutionPattern.DIRECT,
+        (("id", "ignored"),),
+        "workbook",
+        "typed-result",
+        {},
+        analysis_domains=("test",),
+        executor_kind="deterministic_local",
+    )
+    recipe = ExecutionRecipe(
+        base.name,
+        base.pattern,
+        base.roles,
+        base.max_agent_steps,
+        base.max_correction_rounds,
+        base.max_total_agent_calls,
+        base.completion,
+        base.escalation,
+        base.partial_result,
+        stages=(stage,),
+    )
+    seen = []
+
+    def dispatch(current_stage, stage_input, context):
+        seen.append((current_stage.stage_id, context.get("stage_id")))
+        return {"status": "completed", "source": "deterministic"}
+
+    result = asyncio.run(run_recipe_async(recipe, "local", object(), run_context={"deterministic_local_dispatch": dispatch}))
+
+    assert result.outputs == ({"status": "completed", "source": "deterministic"},)
+    assert seen == [("local", "local")]
+    assert result.metrics.model_calls == 0
 
 
 def test_tool_result_fallback_reserves_retry_call_budget():
