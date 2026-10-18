@@ -352,6 +352,21 @@ def test_comparator_rejects_collapsed_brief_results_as_incorrect():
     assert result["outcomes"]["optimization_demonstrated"]["status"] == "NOT_MEASURED"
 
 
+def test_comparator_does_not_claim_optimization_when_overall_correctness_fails():
+    baseline = _receipt()
+    release = deepcopy(baseline)
+    release["revision"]["commit"] = "release-commit"
+    baseline["xlsx"]["workloads"]["public_workflow_context_reuse"]["capture_count"] = 2
+    baseline["xlsx"]["workloads"]["public_workflow_context_reuse"]["xlsx_parse_count"] = 2
+    release["evidence"]["correctness"] = {"status": "FAILED", "limitation": "analytical result mismatch"}
+
+    result = compare(baseline, release)
+
+    assert not result["accepted"]
+    assert result["outcomes"]["correctness"]["status"] == "FAILED"
+    assert result["outcomes"]["optimization_demonstrated"]["status"] == "NOT_MEASURED"
+
+
 def test_comparator_rejects_malformed_candidate_counters():
     baseline = _receipt()
     release = deepcopy(baseline)

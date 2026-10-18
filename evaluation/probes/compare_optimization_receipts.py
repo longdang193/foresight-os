@@ -401,7 +401,7 @@ def compare(baseline: dict, release: dict) -> dict:
             field: _comparison_metric(float(baseline_candidate[field]), float(release_candidate[field]))
             for field in candidate_fields
         }
-        candidate_improved = candidate_correctness and all(
+        candidate_improved = correctness_status == "VERIFIED" and candidate_correctness and all(
             float(release_candidate[field]) < float(baseline_candidate[field]) for field in candidate_fields
         )
         optimization_status = "VERIFIED" if candidate_improved else "NOT_MEASURED"
