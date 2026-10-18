@@ -8,7 +8,9 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
-from foresight_os.analysis.workbook_inputs import apply_table_column_mappings, read_workbook, require_row_columns, require_table, row_evidence, table_rows
+from foresight_os.analysis.workbook_inputs import MaterialView, apply_table_column_mappings, read_workbook, require_row_columns, require_table, row_evidence, table_rows
+from foresight_os.analysis.workbook_engine import DomainAnalysis
+from foresight_os.analysis.workbook_runner import WorkbookWorkflowRunner, merge_input_contract
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
@@ -122,7 +124,7 @@ def analyze_supplier_resilience(source: Path, input_contract: AnalysisInputContr
         compatibility_assumption="legacy supplier workbook FX map: EUR=1.0, USD=0.92, CNY=0.13",
     )
     contract.validate()
-    workbook = read_workbook(source, SheetSelection(sheet_names=("Brief", "Supplier_Master", "Incidents", "Scenario_Assumptions", "Mitigation_Options"), include_hidden=True, include_hidden_rows=True), workbook_context=workbook_context)
+    workbook = workbook_context if isinstance(workbook_context, MaterialView) else read_workbook(source, SheetSelection(sheet_names=("Brief", "Supplier_Master", "Incidents", "Scenario_Assumptions", "Mitigation_Options"), include_hidden=True, include_hidden_rows=True), workbook_context=workbook_context)
     digest = workbook.workbook_sha256
     brief, supplier_table, incident_table, scenario_table, option_table = [_table(workbook, name) for name in ("Brief", "Supplier_Master", "Incidents", "Scenario_Assumptions", "Mitigation_Options")]
     conversion_rates = contract.conversion_rates
@@ -289,22 +291,32 @@ def write_supplier_report(path: Path, supplier: SupplierAnalysis, state: Analysi
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_supplier_report(supplier, state), encoding="utf-8")
 
+
+def _analyze_supplier_material(material: MaterialView, contract: AnalysisInputContract) -> DomainAnalysis:
+    value = analyze_supplier_resilience(Path(material.source), contract, workbook_context=material)
+    return DomainAnalysis(result=value, state=value.state)
+
 def run_supplier_resilience_workflow(store: AnalysisStore, source: Path, *, human_decision: str = "REJECT", output_dir: Path | None = None, input_contract: AnalysisInputContract | dict[str, Any] | None = None, workbook_context: Any | None = None) -> SupplierWorkflowResult:
     try:
         if input_contract is None and store.brief_path.exists():
             input_contract = normalize_work_brief(store.load_brief()).contract_for_domain("supplier_resilience")
-        supplier = analyze_supplier_resilience(Path(source), input_contract=input_contract, workbook_context=workbook_context)
-        pending = store.save_pending(supplier.state)
-        review = review_analysis_state(pending)
-        acceptance = review_and_accept_pending_analysis(store, pending, review, f"review-{pending.investigation_id}-{pending.revision}", human_decision=human_decision)
-        if acceptance.status == "pending":
-            return SupplierWorkflowResult("pending", acceptance.state, replace(supplier, state=acceptance.state), review, None, acceptance.failure)
-        if acceptance.status != "accepted":
-            return SupplierWorkflowResult("rejected", acceptance.state, replace(supplier, state=acceptance.state), review, None, acceptance.failure)
-        committed = acceptance.state
-        final = replace(supplier, state=committed)
-        report_path = (Path(output_dir) if output_dir is not None else store.root / "artifacts") / "executive-report.md"
-        write_supplier_report(report_path, final, committed)
-        return SupplierWorkflowResult("accepted", committed, final, review, report_path)
+        contract = merge_input_contract(AnalysisInputContract(
+            domain="supplier_resilience",
+            required_tables=("Brief", "Supplier_Master", "Incidents", "Scenario_Assumptions", "Mitigation_Options"),
+            units="EUR",
+            reporting_currency="EUR",
+            conversion_rates={"EUR": 1.0, "USD": 0.92, "CNY": 0.13},
+            compatibility_assumption="legacy supplier workbook FX map: EUR=1.0, USD=0.92, CNY=0.13",
+        ), input_contract)
+        result = WorkbookWorkflowRunner(store).run(
+            Path(source),
+            contract,
+            _analyze_supplier_material,
+            workbook_context=workbook_context,
+            human_decision=human_decision,
+            output_dir=output_dir,
+            render_report=lambda path, value, state: write_supplier_report(path, value, state),
+        )
+        return SupplierWorkflowResult(result.status, result.state, result.domain_result, result.review, result.report_path, result.failure)
     except Exception as error:
         return SupplierWorkflowResult("failed", None, None, None, None, f"{type(error).__name__}: {error}")

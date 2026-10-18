@@ -30,6 +30,10 @@ class ToolbeltError(ValueError):
     pass
 
 
+class MissingWorkbookInputError(ToolbeltError):
+    """Raised when an explicit workbook selection cannot be resolved."""
+
+
 class CancellationRequested(ToolbeltError):
     pass
 
@@ -1266,6 +1270,31 @@ def _implicit_xlsx_bounds(ws) -> tuple[int, int, int, int] | None:
     )
 
 
+def _validate_xlsx_selection(workbook, selection: SheetSelection | None) -> None:
+    if selection is None:
+        return
+    sheets = {ws.title: ws for ws in workbook.worksheets}
+    requested_sheets = set(selection.sheet_names)
+    requested_sheets.update(sheet for sheet, _ in selection.ranges)
+    requested_sheets.update(sheet for sheet, _ in selection.tables)
+    for sheet in sorted(requested_sheets):
+        ws = sheets.get(sheet)
+        if ws is None:
+            raise MissingWorkbookInputError(f"missing workbook sheet: {sheet}")
+        if ws.sheet_state != "visible" and not selection.include_hidden:
+            raise MissingWorkbookInputError(f"workbook sheet is hidden: {sheet}")
+    for sheet, table_name in selection.tables:
+        ws = sheets[sheet]
+        if table_name not in ws.tables:
+            raise MissingWorkbookInputError(f"missing workbook table: {sheet}!{table_name}")
+    for sheet, cell_range in selection.ranges:
+        ws = sheets[sheet]
+        try:
+            _range_bounds(cell_range)
+        except ToolbeltError as error:
+            raise MissingWorkbookInputError(f"missing workbook range: {sheet}!{cell_range}") from error
+
+
 def _check_cancel(cancel_check: Callable[[], bool] | None) -> None:
     if cancel_check and cancel_check():
         raise CancellationRequested("cancelled")
@@ -1442,6 +1471,12 @@ def spreadsheet_read(
     if _workbook_context is not None:
         return _workbook_context.read(source, selection, limits, cancel_check=cancel_check)
     selection = _coerce_sheet_selection(selection)
+    if selection is not None:
+        for sheet, cell_range in selection.ranges:
+            try:
+                _range_bounds(cell_range)
+            except ToolbeltError as error:
+                raise MissingWorkbookInputError(f"missing workbook range: {sheet}!{cell_range}") from error
     limits = _coerce_toolbelt_limits(limits)
     if limits.max_cells > _AUTHORITATIVE_RECORD_LIMIT:
         raise ToolbeltError("workbook cell limit exceeds authoritative retention capacity")
@@ -1501,6 +1536,7 @@ def spreadsheet_read(
         cached = openpyxl.load_workbook(io.BytesIO(snapshot.content), data_only=True, read_only=True)
         if _stats is not None:
             _stats.openpyxl_load_count += 1
+        _validate_xlsx_selection(workbook, selection)
         sheets: list[SheetSummary] = []
         tables: list[TypedTable] = []
         measurements: list[TypedMeasurement] = []

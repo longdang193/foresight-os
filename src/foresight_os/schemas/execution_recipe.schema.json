@@ -66,6 +66,8 @@
           "adaptation_policy": { "type": "array", "items": { "type": "string" } }
           ,"synthesis_policy": { "type": "string", "enum": ["single-output", "aggregate-typed-results"] }
           ,"analysis_domains": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+          ,"executor_kind": { "type": "string", "enum": ["agent", "deterministic_local"] }
+          ,"analysis_contract_fingerprints": { "type": "object", "additionalProperties": { "type": "string" } }
         }
       }
     }

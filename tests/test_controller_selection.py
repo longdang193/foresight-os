@@ -210,6 +210,31 @@ def test_stage_execution_intent_is_carried_into_recipe():
     assert any(item["id"] == "stage-specialist" for item in recipe.stages[0].participants)
 
 
+def test_stage_requirements_do_not_leak_into_sibling_stages():
+    brief = WorkBrief(
+        "stage-requirements",
+        "review",
+        [],
+        ["answer"],
+        [],
+        [],
+        "assess",
+        "execute",
+        stages=[
+            WorkStage("first", "first", execution_intent=ExecutionIntent(required_participants=("first-specialist",), required_capabilities=("first-capability",))),
+            WorkStage("second", "second", execution_intent=ExecutionIntent(required_participants=("second-specialist",), required_capabilities=("second-capability",))),
+        ],
+    )
+
+    recipe = select_recipe(brief)
+
+    assert "first-capability" in recipe.stages[0].capabilities
+    assert "second-capability" not in recipe.stages[0].capabilities
+    assert "second-capability" in recipe.stages[1].capabilities
+    assert {item["id"] for item in recipe.stages[0].participants} >= {"first-specialist"}
+    assert "second-specialist" not in {item["id"] for item in recipe.stages[0].participants}
+
+
 def test_brief_requirements_without_stages_or_deliverables_are_not_dropped():
     brief = WorkBrief(
         "brief-requirements",

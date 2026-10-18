@@ -236,6 +236,42 @@ class AnalystExecutor:
 
 
 @dataclass
+class DeterministicLocalExecutor:
+    """Run a declared workbook analysis without constructing an agent."""
+
+    stage: Any
+    stage_input: Any
+    run_context: Mapping[str, Any]
+
+    async def execute(self) -> Any:
+        callback = self.run_context.get("deterministic_local_dispatch")
+        if callback is not None:
+            result = callback(self.stage, self.stage_input, self.run_context)
+            return await result if inspect.isawaitable(result) else result
+
+        domains = tuple(str(item) for item in getattr(self.stage, "analysis_domains", ()))
+        analyzers = self.run_context.get("workbook_analyzers", {})
+        source = self.run_context.get("workbook_source")
+        contracts = self.run_context.get("analysis_contracts", {})
+        if len(domains) != 1 or source is None or not isinstance(analyzers, Mapping):
+            raise ValueError("deterministic-local stage requires one workbook domain, source, and analyzer")
+        domain = domains[0]
+        analyzer = analyzers.get(domain)
+        contract = contracts.get(domain) if isinstance(contracts, Mapping) else None
+        if analyzer is None or contract is None:
+            raise ValueError(f"deterministic-local stage is not bound to workbook domain: {domain}")
+        from foresight_os.analysis.workbook_engine import WorkbookAnalysisEngine
+
+        engine = self.run_context.get("workbook_engine") or WorkbookAnalysisEngine(
+            context=self.run_context.get("workbook_context")
+        )
+        result = engine.run(source, contract, analyzer, cancel_check=self.run_context.get("cancel_check"))
+        if result.status != "completed" or result.domain_result is None:
+            raise ValueError(result.failure or f"deterministic workbook analysis {result.status}")
+        return result.domain_result.result
+
+
+@dataclass
 class ReviewerExecutor:
     client: Any | None = None
     factory: AgentFactory | None = None
