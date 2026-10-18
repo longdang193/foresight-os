@@ -1,10 +1,9 @@
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import StrEnum
-import json
 from typing import Any
 
-from foresight_os.controller.recipes import ExecutionRecipe
+from foresight_os.controller.recipes import ExecutionRecipe, normalize_legacy_recipe_dict
 from foresight_os.domain.models import WorkBrief
 from foresight_os.persistence.ids import canonical_json_hash
 
@@ -83,17 +82,7 @@ class ApprovalProjection:
         material = ApprovalProjection.material_projection(value)
         recipe = material.get("recipe")
         if isinstance(recipe, dict):
-            metadata = recipe.get("metadata", {})
-            try:
-                legacy_analysis_domains = json.loads(metadata.get("analysis_contract_domains", "{}")) if isinstance(metadata, dict) else {}
-            except (TypeError, ValueError):
-                legacy_analysis_domains = {}
-            stages = recipe.get("stages", ())
-            if isinstance(stages, list):
-                for stage in stages:
-                    if not isinstance(stage, dict) or "analysis_domains" in stage:
-                        continue
-                    stage["analysis_domains"] = list(legacy_analysis_domains.get(str(stage.get("stage_id", "")), ()))
+            material["recipe"] = normalize_legacy_recipe_dict(recipe)
         return material
 
     @classmethod

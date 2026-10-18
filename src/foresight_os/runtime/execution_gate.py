@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-import json
 import os
 from pathlib import Path
 import tempfile
@@ -117,7 +116,8 @@ class ExecutionGate:
             if not self.store.execution_recipe_path.exists():
                 raise ExecutionAdmissionError("execution requires a persisted ExecutionRecipe")
             brief = self.store.load_brief()
-            recipe = self.store.load_recipe()
+            loaded_recipe = self.store.load_recipe_bundle()
+            recipe = loaded_recipe.recipe
             approval = self.store.load_execution_approval()
             if approval is None:
                 raise ExecutionAdmissionError("execution requires an approved ApprovalRecord")
@@ -126,9 +126,7 @@ class ExecutionGate:
             envelope = AdaptationEnvelope.from_dict(approval.projection.adaptation_envelope)
             current = approval_projection(brief, recipe, envelope)
             recipe_fingerprint = canonical_json_hash(recipe.to_dict())
-            persisted_recipe_fingerprint = canonical_json_hash(
-                json.loads(self.store.execution_recipe_path.read_text(encoding="utf-8"))
-            )
+            persisted_recipe_fingerprint = loaded_recipe.persisted_fingerprint
             if current.fingerprint != approval.projection_fingerprint:
                 current_compatibility_fingerprint = ApprovalProjection.compatibility_fingerprint_for_dict(current.to_dict())
                 approved_compatibility_fingerprint = ApprovalProjection.compatibility_fingerprint_for_dict(approval.projection.to_dict())

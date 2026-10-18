@@ -3,7 +3,7 @@ from copy import deepcopy
 
 import pytest
 
-from foresight_os.controller.recipes import RecipeName, make_recipe
+from foresight_os.controller.recipes import RecipeName, make_recipe, normalize_legacy_recipe_dict
 from foresight_os.domain.approval import AdaptationEnvelope, ApprovalProjection, ApprovalRecord, ApprovalStatus
 from foresight_os.domain.models import ExecutionIntent, MethodProvenance, WorkBrief
 from foresight_os.domain.validation import ValidationError, validate_approval_record, validate_execution_recipe
@@ -50,6 +50,37 @@ def test_legacy_analysis_contract_domains_are_loaded_into_stage_scope():
     restored = make_recipe(RecipeName.DIRECT).from_dict(recipe)
 
     assert restored.stages[0].analysis_domains == ("market",)
+
+
+def test_legacy_analysis_domains_do_not_override_explicit_empty_stage_scope():
+    recipe = make_recipe(RecipeName.DIRECT).to_dict()
+    recipe["metadata"]["analysis_contract_domains"] = '{"stage-1": ["market"]}'
+    recipe["stages"][0]["analysis_domains"] = []
+
+    restored = make_recipe(RecipeName.DIRECT).from_dict(recipe)
+
+    assert restored.stages[0].analysis_domains == ()
+
+
+def test_malformed_legacy_analysis_domains_are_deterministically_empty():
+    recipe = make_recipe(RecipeName.DIRECT).to_dict()
+    recipe["metadata"]["analysis_contract_domains"] = "not-json"
+    recipe["stages"][0].pop("analysis_domains")
+
+    restored = make_recipe(RecipeName.DIRECT).from_dict(recipe)
+
+    assert restored.stages[0].analysis_domains == ()
+
+
+def test_legacy_analysis_domains_use_canonical_string_coercion_and_are_not_serialized():
+    recipe = make_recipe(RecipeName.DIRECT).to_dict()
+    recipe["metadata"]["analysis_contract_domains"] = '{"stage-1": [7, "market"]}'
+    recipe["stages"][0].pop("analysis_domains")
+
+    restored = make_recipe(RecipeName.DIRECT).from_dict(recipe)
+
+    assert restored.stages[0].analysis_domains == ("7", "market")
+    assert "analysis_contract_domains" not in restored.to_dict()["metadata"]
 
 
 def test_recipe_rejects_global_call_budget_below_stage_count():

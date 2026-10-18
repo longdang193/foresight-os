@@ -2,6 +2,7 @@ import asyncio
 import json
 from dataclasses import replace
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -85,6 +86,24 @@ def test_admitted_execution_passes_immutable_context(monkeypatch, tmp_path):
     assert seen["fallback_on_stale_reuse"] == "stop"
     assert seen["require_structured_output"] is True
     assert seen["canonical_result_committer"]
+
+
+def test_admission_reads_the_persisted_recipe_once(monkeypatch, tmp_path):
+    store = prepared_store(tmp_path)
+    original_read_text = Path.read_text
+    reads = 0
+
+    def counted_read_text(path, *args, **kwargs):
+        nonlocal reads
+        if path == store.execution_recipe_path:
+            reads += 1
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counted_read_text)
+
+    ExecutionGate(store).admit(prompt="Question")
+
+    assert reads == 1
 
 
 def test_admitted_execution_forwards_persisted_analysis_contract_identity(monkeypatch, tmp_path):
