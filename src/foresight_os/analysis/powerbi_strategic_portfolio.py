@@ -304,11 +304,11 @@ def render_powerbi_report(powerbi: PowerBIAnalysis, state: AnalysisState | None 
     lines.extend(f"- `{item.target_id}`: {item.review_status}/{item.review_outcome}; accepted={item.accepted}; evidence={_citations(state, item.evidence_ids)}" for item in derive_finding_views(state))
     return "\n".join(lines) + "\n"
 
-def run_powerbi_strategic_portfolio_workflow(store: AnalysisStore, source: Path, *, human_decision: str = "REJECT", output_dir: Path | None = None, input_contract: AnalysisInputContract | dict[str, Any] | None = None) -> PowerBIWorkflowResult:
+def run_powerbi_strategic_portfolio_workflow(store: AnalysisStore, source: Path, *, human_decision: str = "REJECT", output_dir: Path | None = None, input_contract: AnalysisInputContract | dict[str, Any] | None = None, workbook_context: Any | None = None) -> PowerBIWorkflowResult:
     try:
         if input_contract is None and store.brief_path.exists():
             input_contract = normalize_work_brief(store.load_brief()).contract_for_domain("powerbi_strategic_portfolio")
-        powerbi = analyze_powerbi_strategic_portfolio(Path(source), input_contract=input_contract)
+        powerbi = analyze_powerbi_strategic_portfolio(Path(source), input_contract=input_contract, workbook_context=workbook_context)
         pending = store.save_pending(powerbi.state)
         review = review_analysis_state(pending)
         acceptance = review_and_accept_pending_analysis(store, pending, review, f"review-{pending.investigation_id}-{pending.revision}", human_decision=human_decision)

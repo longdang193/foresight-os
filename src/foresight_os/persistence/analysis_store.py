@@ -38,6 +38,7 @@ from foresight_os.artifacts.brief import render_work_brief_markdown
 from foresight_os.controller.recipes import ExecutionRecipe
 from foresight_os.domain.challenge import ChallengeObjection, ObjectionDisposition, ReviewCheckResult, ReviewOutcome, ReviewRecord, ReviewSlotStatus
 from foresight_os.domain.validation import migrate_analysis_dict, validate_analysis, validate_approval_record, validate_execution_recipe, validate_work_brief
+from foresight_os.persistence.ids import canonical_json_hash
 
 
 @dataclass(frozen=True)
@@ -105,6 +106,13 @@ class StageReceipt:
             and self.authorization_scope_fingerprint == authorization_scope_fingerprint
             and (not result_hashes or self.result_hashes == tuple(result_hashes))
         )
+
+
+@dataclass(frozen=True)
+class LoadedRecipe:
+    raw: dict[str, object]
+    recipe: ExecutionRecipe
+    persisted_fingerprint: str
 
 
 class AnalysisStore:
@@ -220,8 +228,16 @@ class AnalysisStore:
             self._atomic_write(self.execution_recipe_path, json.dumps(value, sort_keys=True, indent=2, default=str) + "\n")
 
     def load_recipe(self) -> ExecutionRecipe:
-        value = validate_execution_recipe(json.loads(self.execution_recipe_path.read_text(encoding="utf-8")))
-        return ExecutionRecipe.from_dict(value)
+        return self.load_recipe_bundle().recipe
+
+    def load_recipe_bundle(self) -> LoadedRecipe:
+        raw = json.loads(self.execution_recipe_path.read_text(encoding="utf-8"))
+        value = validate_execution_recipe(raw)
+        return LoadedRecipe(
+            raw=raw,
+            recipe=ExecutionRecipe.from_dict(value),
+            persisted_fingerprint=canonical_json_hash(raw),
+        )
 
     def save_execution_approval(self, approval: ApprovalRecord) -> None:
         value = validate_approval_record(approval)

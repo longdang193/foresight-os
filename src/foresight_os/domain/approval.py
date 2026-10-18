@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
-from foresight_os.controller.recipes import ExecutionRecipe
+from foresight_os.controller.recipes import ExecutionRecipe, normalize_legacy_recipe_dict
 from foresight_os.domain.models import WorkBrief
 from foresight_os.persistence.ids import canonical_json_hash
 
@@ -76,6 +76,18 @@ class ApprovalProjection:
         brief.pop("producer", None)
         material["brief"] = brief
         return material
+
+    @staticmethod
+    def compatibility_material_projection(value: dict[str, Any]) -> dict[str, Any]:
+        material = ApprovalProjection.material_projection(value)
+        recipe = material.get("recipe")
+        if isinstance(recipe, dict):
+            material["recipe"] = normalize_legacy_recipe_dict(recipe)
+        return material
+
+    @classmethod
+    def compatibility_fingerprint_for_dict(cls, value: dict[str, Any]) -> str:
+        return canonical_json_hash(cls.compatibility_material_projection(value))
 
     @classmethod
     def fingerprint_for_dict(cls, value: dict[str, Any]) -> str:

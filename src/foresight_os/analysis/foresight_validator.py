@@ -489,6 +489,7 @@ def run_validator_workflow(
     human_decision: str = "REJECT",
     output_dir: Path | None = None,
     input_contract: AnalysisInputContract | dict[str, Any] | None = None,
+    workbook_context: Any | None = None,
 ) -> ValidatorWorkflowResult:
     try:
         if input_contract is None and store.brief_path.exists():
@@ -496,7 +497,7 @@ def run_validator_workflow(
                 contract.domain: contract.to_dict()
                 for contract in normalize_work_brief(store.load_brief()).contracts
             }
-        result = validate_exercises(Path(validator_source), Path(exercise_dir), input_contract=input_contract)
+        result = validate_exercises(Path(validator_source), Path(exercise_dir), input_contract=input_contract, workbook_context=workbook_context)
         pending = store.save_pending(result.state)
         review = review_analysis_state(pending)
         decision = human_decision.upper()

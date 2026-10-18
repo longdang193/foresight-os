@@ -1,4 +1,5 @@
-from dataclasses import dataclass, field, replace
+from copy import deepcopy
+from dataclasses import dataclass, field
 from enum import StrEnum
 import json
 from typing import Any
@@ -61,6 +62,37 @@ def _normalize_role(value: object) -> object:
     ):
         if key in normalized:
             normalized[key] = tuple(normalized[key])
+    return normalized
+
+
+def normalize_legacy_recipe_dict(raw_dict: dict[str, Any]) -> dict[str, Any]:
+    normalized = deepcopy(raw_dict)
+    metadata = normalized.get("metadata")
+    legacy_analysis_domains: dict[str, object] = {}
+    if isinstance(metadata, dict):
+        raw_domains = metadata.pop("analysis_contract_domains", "{}")
+        if isinstance(raw_domains, str):
+            try:
+                parsed_domains = json.loads(raw_domains)
+            except (TypeError, ValueError):
+                parsed_domains = {}
+        else:
+            parsed_domains = raw_domains
+        if isinstance(parsed_domains, dict):
+            legacy_analysis_domains = parsed_domains
+
+    stages = normalized.get("stages")
+    if isinstance(stages, list):
+        for stage in stages:
+            if not isinstance(stage, dict) or "analysis_domains" in stage:
+                continue
+            raw_stage_domains = legacy_analysis_domains.get(str(stage.get("stage_id", ())), ())
+            if isinstance(raw_stage_domains, (list, tuple)):
+                stage["analysis_domains"] = [str(item) for item in raw_stage_domains]
+            elif raw_stage_domains is None:
+                stage["analysis_domains"] = []
+            else:
+                stage["analysis_domains"] = [str(raw_stage_domains)]
     return normalized
 
 
@@ -271,23 +303,9 @@ class ExecutionRecipe:
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "ExecutionRecipe":
+        value = normalize_legacy_recipe_dict(value)
         metadata = dict(value.get("metadata", {}))
-        try:
-            legacy_analysis_domains = json.loads(metadata.get("analysis_contract_domains", "{}"))
-        except (TypeError, ValueError):
-            legacy_analysis_domains = {}
         stages = tuple(RecipeStage.from_dict(stage) for stage in value.get("stages", ()))
-        stages = tuple(
-            replace(
-                stage,
-                analysis_domains=(
-                    tuple(str(item) for item in value["stages"][index].get("analysis_domains", ()))
-                    if "analysis_domains" in value["stages"][index]
-                    else tuple(str(item) for item in legacy_analysis_domains.get(stage.stage_id, ()))
-                ),
-            )
-            for index, stage in enumerate(stages)
-        )
         return cls(
             name=RecipeName(value["name"]),
             pattern=str(value["pattern"]),
