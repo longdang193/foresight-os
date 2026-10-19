@@ -163,6 +163,13 @@ def test_analysis_store_records_validation_load_and_commit_write_metrics(tmp_pat
     assert store.stats.committed_write_count == 1
     assert store.stats.committed_write_bytes > 0
     assert store.stats.committed_write_time_ms >= 0
+    assert store.stats.lock_wait_count >= 1
+    assert store.stats.raw_read_count >= 1
+    assert store.stats.json_decode_count >= 1
+    assert store.stats.hydration_count >= 1
+    assert store.stats.serialization_count >= 1
+    assert store.stats.write_count >= 1
+    assert store.stats.fsync_count >= 1
 
 
 def test_two_processes_commit_one_revision_and_one_conflict(tmp_path: Path):

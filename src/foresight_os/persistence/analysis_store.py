@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
@@ -127,12 +128,26 @@ class LoadedRecipe:
 
 @dataclass
 class AnalysisStoreStats:
+    lock_wait_count: int = 0
+    lock_wait_time_ms: float = 0.0
     load_count: int = 0
     load_time_ms: float = 0.0
+    raw_read_count: int = 0
+    raw_read_time_ms: float = 0.0
+    json_decode_count: int = 0
+    json_decode_time_ms: float = 0.0
+    hydration_count: int = 0
+    hydration_time_ms: float = 0.0
     merge_count: int = 0
     merge_time_ms: float = 0.0
     validation_count: int = 0
     validation_time_ms: float = 0.0
+    serialization_count: int = 0
+    serialization_time_ms: float = 0.0
+    write_count: int = 0
+    write_time_ms: float = 0.0
+    fsync_count: int = 0
+    fsync_time_ms: float = 0.0
     pending_write_count: int = 0
     pending_write_bytes: int = 0
     pending_write_time_ms: float = 0.0
@@ -181,6 +196,18 @@ class AnalysisStore:
     @property
     def lock_path(self) -> Path:
         return self.root / ".analysis.lock"
+
+    @contextmanager
+    def _locked(self):
+        lock = FileLock(str(self.lock_path))
+        started = perf_counter()
+        lock.acquire()
+        self.stats.lock_wait_count += 1
+        self.stats.lock_wait_time_ms += (perf_counter() - started) * 1000
+        try:
+            yield
+        finally:
+            lock.release()
 
     def save_brief(self, brief: WorkBrief) -> None:
         value = validate_work_brief(brief)
@@ -255,7 +282,7 @@ class AnalysisStore:
 
     def save_recipe(self, recipe: ExecutionRecipe) -> None:
         value = validate_execution_recipe(recipe)
-        with FileLock(str(self.lock_path)):
+        with self._locked():
             self._atomic_write(self.execution_recipe_path, json.dumps(value, sort_keys=True, indent=2, default=str) + "\n")
 
     def load_recipe(self) -> ExecutionRecipe:
@@ -272,7 +299,7 @@ class AnalysisStore:
 
     def save_execution_approval(self, approval: ApprovalRecord) -> None:
         value = validate_approval_record(approval)
-        with FileLock(str(self.lock_path)):
+        with self._locked():
             self._atomic_write(self.execution_approval_path, json.dumps(value, sort_keys=True, indent=2, default=str) + "\n")
 
     def load_execution_approval(self) -> ApprovalRecord | None:
@@ -291,7 +318,7 @@ class AnalysisStore:
         started = perf_counter()
         if receipt.status == "committed" and not receipt.reusable():
             raise ValueError("committed stage receipt requires canonical result references, hashes, and complete provenance")
-        with FileLock(str(self.lock_path)):
+        with self._locked():
             receipts = self.load_stage_receipts()
             receipts[receipt.stage_id] = receipt
             self._atomic_write(
@@ -303,11 +330,11 @@ class AnalysisStore:
 
     def save_analysis(self, state: AnalysisState) -> None:
         value = self._validate_analysis(state)
-        with FileLock(str(self.lock_path)):
+        with self._locked():
             self._write_validated(value)
 
     def capture_revision_snapshot(self) -> dict[str, bytes | None]:
-        with FileLock(str(self.lock_path)):
+        with self._locked():
             return self._revision_snapshot_unlocked()
 
     def restore_revision_snapshot(
@@ -321,7 +348,7 @@ class AnalysisStore:
             "pending": self.pending_analysis_path,
             "pending_tokens": self.pending_tokens_path,
         }
-        with FileLock(str(self.lock_path)):
+        with self._locked():
             current = self._revision_snapshot_unlocked()
             current_pending_token = self._pending_token_from_bytes(current.get("pending"))
             snapshot_pending_token = self._pending_token_from_bytes(snapshot.get("pending"))
@@ -352,7 +379,7 @@ class AnalysisStore:
         state: AnalysisState,
         expected_snapshot: Mapping[str, bytes | None],
     ) -> tuple[AnalysisState, dict[str, bytes | None]]:
-        with FileLock(str(self.lock_path)):
+        with self._locked():
             if self._revision_snapshot_unlocked() != dict(expected_snapshot):
                 raise ValueError("concurrent analysis mutation detected before pending publication")
             pending = self._save_pending_unlocked(state)
@@ -360,7 +387,7 @@ class AnalysisStore:
 
     def save_delivery_receipt(self, artifact_id: str, receipt: dict[str, object]) -> AnalysisState:
         started = perf_counter()
-        with FileLock(str(self.lock_path)):
+        with self._locked():
             if self.pending_analysis_path.exists():
                 raise ValueError("cannot persist delivery receipt while a pending analysis revision exists")
             state = self.load_accepted()
@@ -388,7 +415,7 @@ class AnalysisStore:
             return updated
 
     def commit_revision(self, state: AnalysisState, expected_revision: int, accepted: bool) -> AnalysisState:
-        with FileLock(str(self.lock_path)):
+        with self._locked():
             current = self._load_path(self.analysis_path) if self.analysis_path.exists() else None
             pending = self._load_path(self.pending_analysis_path) if self.pending_analysis_path.exists() else None
             if pending is not None and state.revision != expected_revision:
@@ -435,7 +462,7 @@ class AnalysisStore:
             return committed
 
     def save_pending(self, state: AnalysisState) -> AnalysisState:
-        with FileLock(str(self.lock_path)):
+        with self._locked():
             return self._save_pending_unlocked(state)
 
     def _save_pending_unlocked(self, state: AnalysisState) -> AnalysisState:
@@ -501,7 +528,7 @@ class AnalysisStore:
     def update_pending(self, state: AnalysisState) -> AnalysisState:
         if state.revision_status != RevisionStatus.PENDING_REVIEW or not state.pending_token:
             raise ValueError("pending update requires a pending review state")
-        with FileLock(str(self.lock_path)):
+        with self._locked():
             pending = self._load_path(self.pending_analysis_path) if self.pending_analysis_path.exists() else None
             if pending is None:
                 raise ValueError("no pending analysis to update")
@@ -526,8 +553,17 @@ class AnalysisStore:
     def _load_path(self, path: Path) -> AnalysisState:
         started = perf_counter()
         self.stats.load_count += 1
-        value = migrate_analysis_dict(json.loads(path.read_text(encoding="utf-8")))
+        read_started = perf_counter()
+        content = path.read_text(encoding="utf-8")
+        self.stats.raw_read_count += 1
+        self.stats.raw_read_time_ms += (perf_counter() - read_started) * 1000
+        decode_started = perf_counter()
+        raw = json.loads(content)
+        self.stats.json_decode_count += 1
+        self.stats.json_decode_time_ms += (perf_counter() - decode_started) * 1000
+        value = migrate_analysis_dict(raw)
         value = self._validate_analysis(value)
+        hydration_started = perf_counter()
         evidence = [
             Evidence(
                 item["id"],
@@ -651,6 +687,8 @@ class AnalysisStore:
             pending_token=value.get("pending_token"),
             review_records=review_records,
         )
+        self.stats.hydration_count += 1
+        self.stats.hydration_time_ms += (perf_counter() - hydration_started) * 1000
         self.stats.load_time_ms += (perf_counter() - started) * 1000
         return result
 
@@ -664,7 +702,10 @@ class AnalysisStore:
     def _write_validated(self, value: dict, path: Path | None = None) -> None:
         target = path or self.analysis_path
         started = perf_counter()
+        serialization_started = perf_counter()
         content = json.dumps(value, indent=2) + "\n"
+        self.stats.serialization_count += 1
+        self.stats.serialization_time_ms += (perf_counter() - serialization_started) * 1000
         self._atomic_write(target, content)
         elapsed_ms = (perf_counter() - started) * 1000
         if target == self.pending_analysis_path:
@@ -728,15 +769,20 @@ class AnalysisStore:
             invalidation=current.invalidation,
         )
 
-    @staticmethod
-    def _atomic_write(path: Path, content: str) -> None:
+    def _atomic_write(self, path: Path, content: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent, text=True)
         try:
             with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+                write_started = perf_counter()
                 handle.write(content)
                 handle.flush()
+                self.stats.write_count += 1
+                self.stats.write_time_ms += (perf_counter() - write_started) * 1000
+                fsync_started = perf_counter()
                 os.fsync(handle.fileno())
+                self.stats.fsync_count += 1
+                self.stats.fsync_time_ms += (perf_counter() - fsync_started) * 1000
             Path(temporary).replace(path)
         finally:
             temporary_path = Path(temporary)

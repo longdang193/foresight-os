@@ -246,6 +246,42 @@ async def _cancelled_read_workload(path: Path) -> dict[str, object]:
     }
 
 
+def _persistence_metrics(store_stats: object | None) -> dict[str, object]:
+    return {
+        "instrumentation_available": store_stats is not None,
+        "lock_wait_count": int(getattr(store_stats, "lock_wait_count", 0)),
+        "lock_wait_time_ms": round(float(getattr(store_stats, "lock_wait_time_ms", 0.0) or 0.0), 3),
+        "load_count": int(getattr(store_stats, "load_count", 0)),
+        "load_time_ms": round(float(getattr(store_stats, "load_time_ms", 0.0) or 0.0), 3),
+        "raw_read_count": int(getattr(store_stats, "raw_read_count", 0)),
+        "raw_read_time_ms": round(float(getattr(store_stats, "raw_read_time_ms", 0.0) or 0.0), 3),
+        "json_decode_count": int(getattr(store_stats, "json_decode_count", 0)),
+        "json_decode_time_ms": round(float(getattr(store_stats, "json_decode_time_ms", 0.0) or 0.0), 3),
+        "hydration_count": int(getattr(store_stats, "hydration_count", 0)),
+        "hydration_time_ms": round(float(getattr(store_stats, "hydration_time_ms", 0.0) or 0.0), 3),
+        "merge_count": int(getattr(store_stats, "merge_count", 0)),
+        "merge_time_ms": round(float(getattr(store_stats, "merge_time_ms", 0.0) or 0.0), 3),
+        "validation_count": int(getattr(store_stats, "validation_count", 0)),
+        "validation_time_ms": round(float(getattr(store_stats, "validation_time_ms", 0.0) or 0.0), 3),
+        "serialization_count": int(getattr(store_stats, "serialization_count", 0)),
+        "serialization_time_ms": round(float(getattr(store_stats, "serialization_time_ms", 0.0) or 0.0), 3),
+        "write_count": int(getattr(store_stats, "write_count", 0)),
+        "write_time_ms": round(float(getattr(store_stats, "write_time_ms", 0.0) or 0.0), 3),
+        "fsync_count": int(getattr(store_stats, "fsync_count", 0)),
+        "fsync_time_ms": round(float(getattr(store_stats, "fsync_time_ms", 0.0) or 0.0), 3),
+        "pending_write_count": int(getattr(store_stats, "pending_write_count", 0)),
+        "pending_write_bytes": int(getattr(store_stats, "pending_write_bytes", 0)),
+        "pending_write_time_ms": round(float(getattr(store_stats, "pending_write_time_ms", 0.0) or 0.0), 3),
+        "committed_write_count": int(getattr(store_stats, "committed_write_count", 0)),
+        "committed_write_bytes": int(getattr(store_stats, "committed_write_bytes", 0)),
+        "committed_write_time_ms": round(float(getattr(store_stats, "committed_write_time_ms", 0.0) or 0.0), 3),
+        "review_attach_count": int(getattr(store_stats, "review_attach_count", 0)),
+        "review_attach_time_ms": round(float(getattr(store_stats, "review_attach_time_ms", 0.0) or 0.0), 3),
+        "receipt_write_count": int(getattr(store_stats, "receipt_write_count", 0)),
+        "receipt_write_time_ms": round(float(getattr(store_stats, "receipt_write_time_ms", 0.0) or 0.0), 3),
+    }
+
+
 def _repeated_workflow_once(path: Path) -> dict[str, object]:
     from foresight_os.analysis.evidence_workflow import run_xlsx_finding_workflow
     from foresight_os.persistence.analysis_store import AnalysisStore
@@ -306,25 +342,7 @@ def _repeated_workflow_once(path: Path) -> dict[str, object]:
         "retained_read_result_bytes": context.stats.retained_read_result_bytes,
         "retained_analysis_result_bytes": context.stats.retained_analysis_result_bytes,
         "retained_authority_record_bytes": context.stats.retained_authority_record_bytes,
-        "persistence": {
-            "instrumentation_available": store_stats is not None,
-            "load_count": int(getattr(store_stats, "load_count", 0)),
-            "load_time_ms": round(float(getattr(store_stats, "load_time_ms", 0.0) or 0.0), 3),
-            "merge_count": int(getattr(store_stats, "merge_count", 0)),
-            "merge_time_ms": round(float(getattr(store_stats, "merge_time_ms", 0.0) or 0.0), 3),
-            "validation_count": int(getattr(store_stats, "validation_count", 0)),
-            "validation_time_ms": round(float(getattr(store_stats, "validation_time_ms", 0.0) or 0.0), 3),
-            "pending_write_count": int(getattr(store_stats, "pending_write_count", 0)),
-            "pending_write_bytes": int(getattr(store_stats, "pending_write_bytes", 0)),
-            "pending_write_time_ms": round(float(getattr(store_stats, "pending_write_time_ms", 0.0) or 0.0), 3),
-            "committed_write_count": int(getattr(store_stats, "committed_write_count", 0)),
-            "committed_write_bytes": int(getattr(store_stats, "committed_write_bytes", 0)),
-            "committed_write_time_ms": round(float(getattr(store_stats, "committed_write_time_ms", 0.0) or 0.0), 3),
-            "review_attach_count": int(getattr(store_stats, "review_attach_count", 0)),
-            "review_attach_time_ms": round(float(getattr(store_stats, "review_attach_time_ms", 0.0) or 0.0), 3),
-            "receipt_write_count": int(getattr(store_stats, "receipt_write_count", 0)),
-            "receipt_write_time_ms": round(float(getattr(store_stats, "receipt_write_time_ms", 0.0) or 0.0), 3),
-        },
+        "persistence": _persistence_metrics(store_stats),
         "limitation": None,
     }
 
@@ -720,6 +738,7 @@ def _history_workload(path: Path, history_size: int) -> dict[str, object]:
             "load_count": int(getattr(stats, "load_count", 0)),
             "validation_count": int(getattr(stats, "validation_count", 0)),
             "merge_count": int(getattr(stats, "merge_count", 0)),
+            "persistence": _persistence_metrics(stats),
             "milestones": milestones,
             "limitation": None,
         }
