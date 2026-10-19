@@ -65,6 +65,22 @@ def _source_tree_digest(repo_root: Path, *, revision: str | None = None) -> str:
         check=True,
         capture_output=True,
     ).stdout.split(b"\0")
+    if revision is None:
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        if not dirty:
+            revision = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo_root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
     digest = hashlib.sha256()
     for raw_path in sorted(item for item in tracked_paths if item):
         relative_path = raw_path.decode()

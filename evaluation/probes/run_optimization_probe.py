@@ -536,7 +536,7 @@ def _changed_brief_workload(mode: str) -> dict[str, object]:
     with _count_workbook_reads() as read_counts:
         with tempfile.TemporaryDirectory(prefix="foresight-public-workflow-") as temporary_dir:
             store = AnalysisStore(Path(temporary_dir) / "case")
-            for brief, contract in zip(normalized_briefs, (focused, broad), strict=True):
+            for _brief, contract in zip(normalized_briefs, (focused, broad), strict=True):
                 workflow_kwargs = {
                     "human_decision": "PENDING",
                     "input_contract": contract,
@@ -861,7 +861,7 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
             "warm_2_plus": {"p95_ms": workloads["warm_2_plus"].get("p95_ms"), "sample_count": workloads["warm_2_plus"].get("sample_count")},
             "repeated_investigation": {"wall_time_ms": workloads["repeated_investigation"].get("wall_time_ms"), "sample_count": workloads["repeated_investigation"].get("sample_count", 0)},
             "analyst_validator_reuse": {"wall_time_ms": workloads["analyst_validator_reuse"].get("wall_time_ms"), "sample_count": workloads["analyst_validator_reuse"].get("sample_count", 0)},
-            "changed_brief": {"wall_time_ms": workloads["changed_brief"].get("wall_time_ms_ms", workloads["changed_brief"].get("wall_time_ms", 0)), "sample_count": 3},
+            "changed_brief": {"wall_time_ms": workloads["changed_brief"].get("wall_time_ms", 0), "sample_count": 3},
             "history-10": {"wall_time_ms": workloads["history-10"].get("wall_time_ms_p95", 0), "sample_count": workloads["history-10"].get("sample_count", 0)},
             "history-100": {"wall_time_ms": workloads["history-100"].get("wall_time_ms_p95", 0), "sample_count": workloads["history-100"].get("sample_count", 0)},
             "selected_sheet_stress": {"wall_time_ms": workloads.get("different_selection", {}).get("wall_time_ms", 0), "sample_count": workloads.get("different_selection", {}).get("sample_count", 0)},
