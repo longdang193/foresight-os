@@ -4,6 +4,7 @@ from enum import StrEnum
 from typing import Any
 
 from foresight_os.controller.recipes import ExecutionRecipe, normalize_legacy_recipe_dict
+from foresight_os.domain.analysis_inputs import canonicalize_analysis_inputs
 from foresight_os.domain.models import WorkBrief
 from foresight_os.persistence.ids import canonical_json_hash
 
@@ -80,6 +81,9 @@ class ApprovalProjection:
     @staticmethod
     def compatibility_material_projection(value: dict[str, Any]) -> dict[str, Any]:
         material = ApprovalProjection.material_projection(value)
+        brief = material.get("brief")
+        if isinstance(brief, dict) and "analysis_inputs" in brief:
+            brief["analysis_inputs"] = canonicalize_analysis_inputs(brief["analysis_inputs"])
         recipe = material.get("recipe")
         if isinstance(recipe, dict):
             material["recipe"] = normalize_legacy_recipe_dict(recipe)

@@ -120,6 +120,20 @@ class AnalysisInputDeclaration:
         return AnalysisInputContract.from_dict(self.to_dict())
 
 
+def canonicalize_analysis_inputs(value: Any) -> list[dict[str, Any]]:
+    contracts_value = value or {}
+    expanded: list[tuple[Mapping[str, Any], str | None]] = []
+    if isinstance(contracts_value, Mapping):
+        for domain, contract in contracts_value.items():
+            values = contract if isinstance(contract, (list, tuple)) else (contract,)
+            for item in values:
+                expanded.append((dict(item) if isinstance(item, Mapping) else {}, str(domain)))
+    else:
+        for item in contracts_value:
+            expanded.append((dict(item) if isinstance(item, Mapping) else {}, None))
+    return [AnalysisInputDeclaration.from_dict(item, domain=domain).to_dict() for item, domain in expanded]
+
+
 @dataclass(frozen=True)
 class _PeriodSpec:
     raw: str
@@ -351,10 +365,21 @@ class NormalizedIntent:
     def resolve_contract_for_domain(self, domain: str, stage_id: str) -> AnalysisInputContract:
         return self._resolve_contract(domain, stage_id, required=True)
 
+    def effective_contract_for_domain(self, domain: str, stage_id: str | None = None) -> AnalysisInputContract:
+        declaration = self.resolve_declared_contract_for_domain(domain, stage_id)
+        try:
+            from foresight_os.analysis.workbook_inputs import resolve_workbook_contract
+
+            return resolve_workbook_contract(domain, declaration)
+        except ValueError as error:
+            if not str(error).startswith("unsupported workbook analysis domain:"):
+                raise
+            return declaration.resolve()
+
     def declared_contract_for_domain(self, domain: str, stage_id: str | None = None) -> AnalysisInputDeclaration | None:
         return self._resolve_declaration(domain, stage_id, required=False)
 
-    def resolve_declared_contract_for_domain(self, domain: str, stage_id: str) -> AnalysisInputDeclaration:
+    def resolve_declared_contract_for_domain(self, domain: str, stage_id: str | None = None) -> AnalysisInputDeclaration:
         declaration = self._resolve_declaration(domain, stage_id, required=True)
         assert declaration is not None
         return declaration
@@ -426,18 +451,7 @@ def contract_for_domain(
 
 def normalize_work_brief(brief: Any) -> NormalizedIntent:
     value = brief.to_dict() if hasattr(brief, "to_dict") else dict(brief)
-    contracts_value = value.get("analysis_inputs") or {}
-    if isinstance(contracts_value, Mapping):
-        expanded: list[Mapping[str, Any]] = []
-        for domain, contract in contracts_value.items():
-            if isinstance(contract, (list, tuple)):
-                expanded.extend(
-                    {**dict(item), "domain": str(domain)} if isinstance(item, Mapping) else {"domain": str(domain)}
-                    for item in contract
-                )
-            else:
-                expanded.append({**dict(contract), "domain": str(domain)} if isinstance(contract, Mapping) else {"domain": str(domain)})
-        contracts_value = expanded
+    contracts_value = canonicalize_analysis_inputs(value.get("analysis_inputs"))
     stages = tuple(dict(stage) for stage in value.get("stages", ()))
     stage_ids = {str(stage.get("stage_id", "")) for stage in stages}
     declarations = tuple(AnalysisInputDeclaration.from_dict(item) for item in contracts_value)

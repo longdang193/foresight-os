@@ -64,15 +64,15 @@ class WorkbookAnalysisEngine:
         cancel_check: Callable[[], bool] | None = None,
         materialize_scope: bool = True,
     ) -> WorkbookEngineResult:
-        try:
-            normalized_contract = resolve_workbook_contract(
-                contract.domain if isinstance(contract, AnalysisInputContract) else str(dict(contract).get("domain", "")),
-                contract,
-            )
-        except ValueError as error:
-            if not str(error).startswith("unsupported workbook analysis domain:"):
-                raise
-            normalized_contract = AnalysisInputContract.from_dict(contract)
+        if isinstance(contract, AnalysisInputContract):
+            normalized_contract = contract
+        else:
+            try:
+                normalized_contract = resolve_workbook_contract(str(dict(contract).get("domain", "")), contract)
+            except ValueError as error:
+                if not str(error).startswith("unsupported workbook analysis domain:"):
+                    raise
+                normalized_contract = AnalysisInputContract.from_dict(contract)
         active_context = context or self.context or WorkbookContext()
         spec = layout_spec or WorkbookLayoutSpec.from_contract(normalized_contract)
         selection = spec.selection

@@ -141,14 +141,14 @@ introduced by this plan.
 - Branch: `codex/foresight-os-consolidated-verdict-follow-up`
 - Base commit: `5ae8069543ad55f82e451f56554ca09b0435c61f`
 - Expected workspace: `clean execution worktree from base; current main dirty changes preserved separately`
-- Next action: `implement Task 2 effective-contract identity, approval compatibility, and capability guardrails`
+- Next action: `repair Task 3 benchmark workloads, timing-noise measurement, and source-identifiable receipts`
 - Blockers: `none; current workspace is not a safe execution workspace until isolated`
 
 | Task | State | Workspace | Executor | Depends On | Required Proof | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | Task 1 | `completed` | dedicated clean worktree | `lead controller` | none | focused contract tests | `tests/test_analysis_input_contract.py`, `tests/test_work_brief_compatibility.py`, `tests/test_analysis_schema.py` pass |
-| Task 2 | `active` | dedicated clean worktree | `lead controller` | Task 1 | identity, approval, and capability boundary proof | pending |
-| Task 3 | `pending` | dedicated clean worktree | `lead controller` | Task 2 | verified benchmark checkpoint | pending |
+| Task 2 | `completed` | dedicated clean worktree | `lead controller` | Task 1 | identity, approval, and capability boundary proof | focused Task 2 suite passes; persisted alias admission and material-change rejection pass |
+| Task 3 | `active` | dedicated clean worktree | `lead controller` | Task 2 | verified benchmark checkpoint | pending |
 | Task 4 | `pending` | dedicated clean worktree | `lead controller` | Task 3 | instrumentation checkpoint, history proof, conditional candidate | pending |
 | Task 5 | `pending` | dedicated clean worktree | `lead controller` | Task 3 | reader parity and resource evidence, or explicit deferral | pending |
 
@@ -281,27 +281,27 @@ introduced by this plan.
 - Stop for: `changing persisted approval compatibility policy, receipt schema, or public contract shape without recording the explicit migration decision in this plan`
 
 **Steps:**
-- [ ] Step 1: Make `NormalizedIntent` retain declarations as the authoritative
+- [x] Step 1: Make `NormalizedIntent` retain declarations as the authoritative
   input while deriving effective contracts by stage/domain.
-- [ ] Step 2: Move compatibility resolution to one boundary and remove
+- [x] Step 2: Move compatibility resolution to one boundary and remove
   internal second-pass resolution, retaining only a narrow public compatibility
   helper where required by existing callers.
-- [ ] Step 3: Update controller policy and recipe construction so planning,
+- [x] Step 3: Update controller policy and recipe construction so planning,
   recipe-stage identity, approved execution, materialization, analyzer output,
   stage receipts, and review provenance use the same effective fingerprint.
-- [ ] Step 4: Preserve the explicit shadow rule for stage/global declarations,
+- [x] Step 4: Preserve the explicit shadow rule for stage/global declarations,
   including empty stage-specific values.
-- [ ] Step 5: Verify direct, persisted, and approved execution produce the same
+- [x] Step 5: Verify direct, persisted, and approved execution produce the same
   effective fingerprint, selected material, source identity, and result identity.
-- [ ] Step 6: Test approval compatibility: equivalent canonicalization keeps a
+- [x] Step 6: Test approval compatibility: equivalent canonicalization keeps a
   valid persisted approval usable, while a material effective-contract change
   requires invalidation or reapproval.
-- [ ] Step 7: Add capability admission/activation lifecycle tests covering
+- [x] Step 7: Add capability admission/activation lifecycle tests covering
   metadata-only admission, one activation, one settlement, unavailable
   resources, failure, cancellation, and retry.
 
 **Verification:**
-- [ ] `python -m pytest -q tests/test_analysis_input_contract.py tests/test_workbook_runner.py tests/test_workbook_engine.py tests/test_execution_gate.py tests/test_brief_portability.py tests/test_stage_inputs.py tests/test_approval_persistence.py tests/test_capabilities.py tests/test_external_signals.py tests/test_runtime_boundaries.py`
+- [x] `python -m pytest -q tests/test_analysis_input_contract.py tests/test_workbook_runner.py tests/test_workbook_engine.py tests/test_execution_gate.py tests/test_brief_portability.py tests/test_stage_inputs.py tests/test_approval_persistence.py tests/test_capabilities.py tests/test_external_signals.py tests/test_runtime_boundaries.py`
 - Expected: one effective contract reaches materialization and analysis; direct
   and approved paths agree; invalidated receipts are not reused; approval
   compatibility and lazy capability lifecycle behavior are proven.

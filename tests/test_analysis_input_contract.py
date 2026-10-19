@@ -127,6 +127,19 @@ def test_sparse_declaration_conflicting_name_and_domain_fail_closed():
         AnalysisInputDeclaration.from_dict({"domain": "supplier_resilience", "name": "portfolio_resilience"})
 
 
+def test_effective_contract_resolution_applies_domain_defaults_once():
+    normalized = normalize_work_brief({
+        "decision_question": "Question",
+        "stages": [{"stage_id": "stage-a", "objective": "Assess A"}],
+        "analysis_inputs": [{"domain": "supplier_resilience", "stage_id": "stage-a", "entity_scope": []}],
+    })
+
+    effective = normalized.effective_contract_for_domain("supplier_resilience", "stage-a")
+
+    assert effective.entity_scope == ()
+    assert effective.required_tables
+
+
 def test_analysis_input_contract_freezes_mappings_and_validates_periods():
     contract = AnalysisInputContract(
         domain="supplier_resilience",
