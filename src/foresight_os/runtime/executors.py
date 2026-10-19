@@ -282,6 +282,13 @@ class DeterministicLocalExecutor:
 
             workbook_context = WorkbookContext()
             scope.workbook_context = workbook_context
+        snapshot = self.run_context.get("workbook_snapshot")
+        if snapshot is not None:
+            if workbook_context is None:
+                from foresight_os.runtime.local_toolbelt import WorkbookContext
+
+                workbook_context = WorkbookContext()
+            workbook_context.adopt_snapshot(snapshot)
         engine = self.run_context.get("workbook_engine") or WorkbookAnalysisEngine(context=workbook_context)
         cancel_event = threading.Event()
         original_cancel_check = self.run_context.get("cancel_check")

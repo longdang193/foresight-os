@@ -185,7 +185,7 @@ claims and require an installation smoke test.
 | --- | --- | --- | --- | --- | --- |
 | 1 | `completed` | lead | none | clean dedicated worktree and baseline receipts | `work/optimization-baseline/baseline-receipt.json`; pytest, isolated compile, Markdown links, and baseline probe verified |
 | 2 | `completed` | lead | 1 | source-aware identity, contract resolution, and period tests pass | `PYTHONPATH=src python -m pytest -q tests/test_analysis_input_contract.py tests/test_selective_reuse.py tests/test_workbook_engine.py tests/test_runtime_boundaries.py tests/test_execution_gate.py` passed: 119 tests; isolated `python -m compileall -q src tests evaluation` passed |
-| 3A | `pending` | lead | 2 | one authoritative snapshot and safe lock ownership | pending |
+| 3A | `completed` | lead | 2 | one authoritative snapshot and safe lock ownership | `PYTHONPATH=src python -m pytest -q tests/test_local_toolbelt.py tests/test_execution_gate.py` passed: 90 tests; source mutation, adopted snapshot, capture limits, cancellation, and lock-scope proof included |
 | 3B | `pending` | lead | 3A | public/runtime/CLI path parity | pending |
 | 3C | `pending` | lead | 3B | cancellation settlement and artifact retry behavior | pending |
 | 4 | `pending` | lead | 1-3C | behavior-neutral instrumentation and workload gates | pending |

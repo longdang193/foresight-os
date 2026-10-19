@@ -858,6 +858,26 @@ class WorkbookContext:
             cancel_check=cancel_check,
         )
 
+    def adopt_snapshot(self, snapshot: SourceSnapshot, *, max_bytes: int | None = None) -> SourceSnapshot:
+        """Register a run-owned snapshot without reading the source path again."""
+        self.ensure_open()
+        if max_bytes is not None and snapshot.byte_count > max_bytes:
+            raise ToolbeltError("workbook exceeds byte limit")
+
+        def adopt() -> SourceSnapshot:
+            key = str(Path(snapshot.source).resolve())
+            existing = self.snapshots.get(key)
+            if existing is not None and existing.sha256 != snapshot.sha256:
+                raise ToolbeltError("workbook context already has a different source snapshot")
+            if existing is None:
+                self.snapshots[key] = snapshot
+                self.stats.capture_count += 1
+                self.stats.capture_hash_count += 1
+                self.stats.snapshot_bytes += snapshot.byte_count
+            return existing or snapshot
+
+        return self._run_transaction(adopt)
+
     def _capture_in_transaction(
         self,
         source: str | Path,

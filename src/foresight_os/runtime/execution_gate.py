@@ -14,7 +14,7 @@ from foresight_os.domain.analysis_inputs import GLOBAL_SCOPE, normalize_work_bri
 from foresight_os.analysis.workbook_inputs import workbook_analyzer_fingerprint
 from foresight_os.persistence.ids import canonical_json_hash
 from foresight_os.runtime.capabilities import CapabilityUnavailableError, admit_capability_context
-from foresight_os.runtime.local_toolbelt import SourceSnapshot, ToolbeltError
+from foresight_os.runtime.local_toolbelt import SourceSnapshot, ToolbeltError, ToolbeltLimits
 from foresight_os.runtime.workflow import run_recipe_async
 
 
@@ -57,7 +57,7 @@ def _preflight_recipe(
     recipe: ExecutionRecipe,
     run_context: dict[str, Any],
     workbook_source: Path | None = None,
-) -> str:
+) -> SourceSnapshot | None:
     _assert_store_writable(store)
     for stage in recipe.stages:
         contract = str(getattr(stage, "result_contract", ""))
@@ -90,7 +90,7 @@ def _preflight_recipe(
         if workbook_source.suffix.lower() not in {".xlsx", ".xlsm"} or not workbook_source.is_file():
             raise ExecutionAdmissionError(f"BLOCKED_INPUT: invalid workbook source: {workbook_source}")
         try:
-            return SourceSnapshot.capture(workbook_source).sha256
+            return SourceSnapshot.capture(workbook_source, max_bytes=ToolbeltLimits().max_bytes)
         except (OSError, ToolbeltError) as exc:
             raise ExecutionAdmissionError(f"BLOCKED_INPUT: cannot capture workbook source: {exc}") from exc
     return ""
@@ -122,6 +122,7 @@ class ApprovedExecution:
     recipe: ExecutionRecipe
     workbook_source: Path | None = None
     workbook_source_sha256: str = ""
+    workbook_snapshot: SourceSnapshot | None = None
 
 
 class ExecutionGate:
@@ -165,26 +166,27 @@ class ExecutionGate:
             if approval.investigation_id != brief.investigation_id:
                 raise ExecutionAdmissionError("approval investigation does not match the WorkBrief")
             source_path = Path(workbook_source).resolve() if workbook_source is not None else None
-            source_sha256 = _preflight_recipe(
-                self.store,
-                recipe,
-                _local_capability_context(self.store, run_context),
-                source_path,
-            )
-            return ApprovedExecution(
-                work_dir=self.store.root,
-                prompt=prompt,
-                run_id=run_id or f"run-{brief.investigation_id}",
-                recipe_fingerprint=recipe_fingerprint,
-                approval_fingerprint=approval.projection_fingerprint,
-                run_decisions={
-                    **dict(approval.run_decisions),
-                    "fallback_on_stale_reuse": envelope.fallback_on_stale_reuse,
-                },
-                recipe=recipe,
-                workbook_source=source_path,
-                workbook_source_sha256=source_sha256,
-            )
+        source_snapshot = _preflight_recipe(
+            self.store,
+            recipe,
+            _local_capability_context(self.store, run_context),
+            source_path,
+        )
+        return ApprovedExecution(
+            work_dir=self.store.root,
+            prompt=prompt,
+            run_id=run_id or f"run-{brief.investigation_id}",
+            recipe_fingerprint=recipe_fingerprint,
+            approval_fingerprint=approval.projection_fingerprint,
+            run_decisions={
+                **dict(approval.run_decisions),
+                "fallback_on_stale_reuse": envelope.fallback_on_stale_reuse,
+            },
+            recipe=recipe,
+            workbook_source=source_path,
+            workbook_source_sha256=source_snapshot.sha256 if source_snapshot else "",
+            workbook_snapshot=source_snapshot,
+        )
 
     async def execute(
         self,
@@ -228,6 +230,7 @@ class ExecutionGate:
             "normalized_intent": normalized_intent,
             "workbook_source": admission.workbook_source,
             "workbook_source_sha256": admission.workbook_source_sha256,
+            "workbook_snapshot": admission.workbook_snapshot,
             "source_revision": admission.workbook_source_sha256,
             "analysis_contracts": {
                 f"{contract.stage_id}:{contract.domain}" if contract.stage_id else f"{GLOBAL_SCOPE}:{contract.domain}": contract.to_dict()

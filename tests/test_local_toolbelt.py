@@ -138,6 +138,23 @@ def test_workbook_context_reuses_identical_views_without_reusing_different_selec
     assert context.stats.openpyxl_load_count == 4
 
 
+def test_workbook_context_reads_from_adopted_snapshot_after_source_mutation(tmp_path: Path):
+    source = tmp_path / "authoritative.csv"
+    source.write_text("Region,Value\nNorth,10\n", encoding="utf-8")
+    snapshot = SourceSnapshot.capture(source)
+    context = WorkbookContext()
+
+    context.adopt_snapshot(snapshot)
+    source.write_text("Region,Value\nNorth,99\n", encoding="utf-8")
+
+    result = context.read(source)
+
+    assert result.workbook_sha256 == snapshot.sha256
+    assert result.tables[0].rows == (("North", 10),)
+    assert context.stats.capture_count == 1
+    assert context.stats.capture_hash_count == 1
+
+
 def test_workbook_context_normalizes_json_selection_before_cache_lookup(workbook_path: Path):
     context = WorkbookContext()
 
