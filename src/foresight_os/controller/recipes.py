@@ -107,6 +107,7 @@ class StageInput:
     research_needs: tuple[object, ...] = ()
     analysis_contract_fingerprints: tuple[tuple[str, str], ...] = ()
     analysis_analyzer_fingerprints: tuple[tuple[str, str], ...] = ()
+    workbook_source_sha256: str = ""
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -119,6 +120,7 @@ class StageInput:
             "research_needs": self.research_needs,
             "analysis_contract_fingerprints": dict(self.analysis_contract_fingerprints),
             "analysis_analyzer_fingerprints": dict(self.analysis_analyzer_fingerprints),
+            "workbook_source_sha256": self.workbook_source_sha256,
         }
 
     def __str__(self) -> str:

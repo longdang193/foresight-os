@@ -144,6 +144,30 @@ def test_scope_requires_applicable_dimensions_and_filters_period_and_units(tmp_p
     }
 
 
+def test_period_scope_requires_full_containment_and_rejects_coarse_rows(tmp_path):
+    source = tmp_path / "periods.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Data"
+    sheet.append(["Period", "Value"])
+    sheet.append(["2025", 1])
+    sheet.append(["2025-Q1", 2])
+    sheet.append(["2025-02", 3])
+    workbook.save(source)
+    contract = AnalysisInputContract(
+        domain="test",
+        required_tables=("Data",),
+        periods=("2025-01:2025-03",),
+        workbook_selection={"sheet": "Data", "required_scope_dimensions": {"Data": ["period"]}},
+    )
+
+    result = WorkbookAnalysisEngine().run(source, contract, lambda material, normalized: material)
+
+    assert result.status == "completed"
+    assert result.material_view is not None
+    assert result.material_view.table("Data").rows == (("2025-Q1", 2), ("2025-02", 3))
+
+
 def test_declared_table_alias_compiles_physical_selection(tmp_path):
     source = tmp_path / "aliased.xlsx"
     workbook = openpyxl.Workbook()

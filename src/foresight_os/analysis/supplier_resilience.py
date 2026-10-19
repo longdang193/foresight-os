@@ -8,9 +8,9 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
-from foresight_os.analysis.workbook_inputs import MaterialView, apply_table_column_mappings, default_workbook_contract, read_workbook, require_row_columns, require_table, row_evidence, table_rows
+from foresight_os.analysis.workbook_inputs import MaterialView, apply_table_column_mappings, read_workbook, require_row_columns, require_table, resolve_workbook_contract, row_evidence, table_rows
 from foresight_os.analysis.workbook_engine import DomainAnalysis
-from foresight_os.analysis.workbook_runner import WorkbookWorkflowRunner, merge_input_contract
+from foresight_os.analysis.workbook_runner import WorkbookWorkflowRunner
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
@@ -115,7 +115,7 @@ def _record(record_id: str, statement: str, evidence_ids: list[str], assumptions
 
 def analyze_supplier_resilience(source: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None, *, workbook_context: Any | None = None) -> SupplierAnalysis:
     source = Path(source)
-    contract = default_workbook_contract("supplier_resilience") if input_contract is None else AnalysisInputContract.from_dict(input_contract)
+    contract = resolve_workbook_contract("supplier_resilience", input_contract)
     contract.validate()
     workbook = workbook_context if isinstance(workbook_context, MaterialView) else read_workbook(source, SheetSelection(sheet_names=("Brief", "Supplier_Master", "Incidents", "Scenario_Assumptions", "Mitigation_Options"), include_hidden=True, include_hidden_rows=True), workbook_context=workbook_context)
     digest = workbook.workbook_sha256
@@ -288,7 +288,7 @@ def write_supplier_report(path: Path, supplier: SupplierAnalysis, state: Analysi
 def _analyze_supplier_material(material: MaterialView, contract: AnalysisInputContract) -> DomainAnalysis:
     value = analyze_supplier_resilience(
         Path(material.source),
-        merge_input_contract(default_workbook_contract("supplier_resilience"), contract),
+        resolve_workbook_contract("supplier_resilience", contract),
         workbook_context=material,
     )
     return DomainAnalysis(result=value, state=value.state)
@@ -297,7 +297,7 @@ def run_supplier_resilience_workflow(store: AnalysisStore, source: Path, *, huma
     try:
         if input_contract is None and store.brief_path.exists():
             input_contract = normalize_work_brief(store.load_brief()).contract_for_domain("supplier_resilience")
-        contract = merge_input_contract(default_workbook_contract("supplier_resilience"), input_contract)
+        contract = resolve_workbook_contract("supplier_resilience", input_contract)
         result = WorkbookWorkflowRunner(store).run(
             Path(source),
             contract,

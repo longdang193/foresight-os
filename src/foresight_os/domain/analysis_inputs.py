@@ -92,20 +92,35 @@ class _PeriodSpec:
 
 def _parse_period(value: str) -> _PeriodSpec:
     raw = str(value)
-    match = re.fullmatch(r"(\d{4})(?:-(\d{2}))?(?::(\d{4})(?:-(\d{2}))?)?", raw)
+    match = re.fullmatch(r"(\d{4})(?:(?:-(\d{2}))|(?:-Q([1-4])))?(?::(\d{4})(?:(?:-(\d{2}))|(?:-Q([1-4])))?)?", raw)
     if match is None:
         raise ValueError(f"invalid period syntax: {raw}")
+
     start_year = int(match.group(1))
     start_month = int(match.group(2)) if match.group(2) is not None else None
-    end_year = int(match.group(3) or match.group(1))
-    end_month = int(match.group(4)) if match.group(4) is not None else None
+    start_quarter = int(match.group(3)) if match.group(3) is not None else None
+    end_year = int(match.group(4) or start_year)
+    end_month = int(match.group(5)) if match.group(5) is not None else None
+    end_quarter = int(match.group(6)) if match.group(6) is not None else None
     for month in (start_month, end_month):
         if month is not None and not 1 <= month <= 12:
             raise ValueError(f"invalid period month: {raw}")
-    if (start_year, start_month or 1) > (end_year, end_month or 12):
+
+    start_key = (start_year, (start_quarter - 1) * 3 + 1 if start_quarter else start_month or 1)
+    if end_quarter:
+        end_key = (end_year, end_quarter * 3)
+    elif end_month:
+        end_key = (end_year, end_month)
+    elif start_quarter:
+        end_key = (end_year, start_quarter * 3)
+    elif start_month:
+        end_key = (end_year, start_month)
+    else:
+        end_key = (end_year, 12)
+    if start_key > end_key:
         raise ValueError(f"invalid period range: {raw}")
-    granularity = "range" if ":" in raw else "month" if start_month is not None else "year"
-    return _PeriodSpec(raw, start_year, start_month, end_year, end_month, granularity)
+    granularity = "range" if ":" in raw else "quarter" if start_quarter else "month" if start_month else "year"
+    return _PeriodSpec(raw, start_year, start_key[1], end_year, end_key[1], granularity)
 
 
 @dataclass(frozen=True)
@@ -278,26 +293,38 @@ class NormalizedIntent:
         return hashlib.sha256(json.dumps(_canonical(payload), sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
     def contract_for_domain(self, domain: str, stage_id: str | None = None) -> AnalysisInputContract | None:
+        return self._resolve_contract(domain, stage_id, required=False)
+
+    def resolve_contract_for_domain(self, domain: str, stage_id: str) -> AnalysisInputContract:
+        return self._resolve_contract(domain, stage_id, required=True)
+
+    def _resolve_contract(
+        self,
+        domain: str,
+        stage_id: str | None,
+        *,
+        required: bool,
+    ) -> AnalysisInputContract | None:
         wanted = str(domain).lower()
-        if stage_id is not None:
-            scoped = next(
-                (
-                    contract
-                    for contract in self.contracts
-                    if contract.stage_id == str(stage_id) and contract.domain.lower() == wanted
-                ),
-                None,
-            )
-            if scoped is not None:
-                return scoped
-        return next(
-            (
-                contract
-                for contract in self.contracts
-                if contract.stage_id is None and contract.domain.lower() == wanted
-            ),
-            None,
-        )
+        scoped = [
+            contract
+            for contract in self.contracts
+            if stage_id is not None and contract.stage_id == str(stage_id) and contract.domain.lower() == wanted
+        ]
+        global_matches = [
+            contract
+            for contract in self.contracts
+            if contract.stage_id is None and contract.domain.lower() == wanted
+        ]
+        candidates = scoped or global_matches
+        if len(candidates) > 1:
+            scope = str(stage_id) if scoped else GLOBAL_SCOPE
+            raise ValueError(f"ambiguous analysis input contract: {scope}:{domain}")
+        if candidates:
+            return candidates[0]
+        if required:
+            raise ValueError(f"missing analysis input contract: {stage_id}:{domain}")
+        return None
 
 
 def contract_for_domain(

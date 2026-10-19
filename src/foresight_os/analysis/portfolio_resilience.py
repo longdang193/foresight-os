@@ -9,9 +9,9 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
-from foresight_os.analysis.workbook_inputs import MaterialView, apply_table_column_mappings, default_workbook_contract, read_workbook, require_row_columns, require_table, row_evidence, table_rows
+from foresight_os.analysis.workbook_inputs import MaterialView, apply_table_column_mappings, read_workbook, require_row_columns, require_table, resolve_workbook_contract, row_evidence, table_rows
 from foresight_os.analysis.workbook_engine import DomainAnalysis
-from foresight_os.analysis.workbook_runner import WorkbookWorkflowRunner, merge_input_contract
+from foresight_os.analysis.workbook_runner import WorkbookWorkflowRunner
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import (
@@ -187,7 +187,7 @@ def _record(
 
 def analyze_portfolio_resilience(source: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None, *, workbook_context: Any | None = None) -> PortfolioAnalysis:
     source = Path(source)
-    contract = default_workbook_contract("portfolio_resilience") if input_contract is None else AnalysisInputContract.from_dict(input_contract)
+    contract = resolve_workbook_contract("portfolio_resilience", input_contract)
     contract.validate()
     period_by_raw = {spec.raw: spec for spec in contract.period_specs}
     selected_spec = period_by_raw.get(contract.baseline_period or "") or (contract.period_specs[-1] if contract.period_specs else None)
@@ -770,7 +770,7 @@ def write_portfolio_report(path: Path, portfolio: PortfolioAnalysis, state: Anal
 def _analyze_portfolio_material(material: MaterialView, contract: AnalysisInputContract) -> DomainAnalysis:
     value = analyze_portfolio_resilience(
         Path(material.source),
-        merge_input_contract(default_workbook_contract("portfolio_resilience"), contract),
+        resolve_workbook_contract("portfolio_resilience", contract),
         workbook_context=material,
     )
     return DomainAnalysis(result=value, state=value.state)
@@ -788,7 +788,7 @@ def run_portfolio_resilience_workflow(
     try:
         if input_contract is None and store.brief_path.exists():
             input_contract = normalize_work_brief(store.load_brief()).contract_for_domain("portfolio_resilience")
-        contract = merge_input_contract(default_workbook_contract("portfolio_resilience"), input_contract)
+        contract = resolve_workbook_contract("portfolio_resilience", input_contract)
         result = WorkbookWorkflowRunner(store).run(
             Path(source),
             contract,

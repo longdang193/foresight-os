@@ -94,6 +94,7 @@ class StageReceipt:
         self,
         *,
         input_fingerprint: str,
+        source_revision: str | None = None,
         execution_policy_fingerprint: str = "",
         skill_hashes: tuple[str, ...] = (),
         capability_fingerprints: tuple[str, ...] = (),
@@ -111,6 +112,7 @@ class StageReceipt:
             and self.model_config_fingerprint == model_config_fingerprint
             and self.authorization_scope_fingerprint == authorization_scope_fingerprint
             and self.analyzer_fingerprints == tuple(analyzer_fingerprints)
+            and (source_revision in (None, "") or self.source_revision == source_revision)
             and (not result_hashes or self.result_hashes == tuple(result_hashes))
         )
 

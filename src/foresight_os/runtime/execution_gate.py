@@ -230,9 +230,10 @@ class ExecutionGate:
             "workbook_source_sha256": admission.workbook_source_sha256,
             "source_revision": admission.workbook_source_sha256,
             "analysis_contracts": {
-                contract.domain: contract.to_dict()
+                f"{contract.stage_id}:{contract.domain}" if contract.stage_id else f"{GLOBAL_SCOPE}:{contract.domain}": contract.to_dict()
                 for contract in normalized_intent.contracts
             },
+            "analysis_contract_resolver": normalized_intent.resolve_contract_for_domain,
             "analysis_contract_fingerprints": {
                 key: contract.fingerprint
                 for contract in normalized_intent.contracts

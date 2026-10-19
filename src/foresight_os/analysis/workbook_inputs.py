@@ -7,7 +7,7 @@ from datetime import date
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
 
-from foresight_os.domain.analysis_inputs import AnalysisInputContract
+from foresight_os.domain.analysis_inputs import AnalysisInputContract, _parse_period
 from foresight_os.domain.models import Evidence, SourceLocator
 from foresight_os.runtime.local_toolbelt import (
     CellProvenance,
@@ -71,6 +71,26 @@ def default_workbook_contract(domain: str) -> AnalysisInputContract:
         return defaults[str(domain)]
     except KeyError as exc:
         raise ValueError(f"unsupported workbook analysis domain: {domain}") from exc
+
+
+def resolve_workbook_contract(
+    domain: str,
+    declared_contract: AnalysisInputContract | Mapping[str, Any] | None,
+) -> AnalysisInputContract:
+    """Resolve compatibility defaults once at the workbook input boundary."""
+    default = default_workbook_contract(domain)
+    if declared_contract is None:
+        return default
+    if isinstance(declared_contract, AnalysisInputContract):
+        overrides = declared_contract.to_dict()
+        if not declared_contract.required_tables:
+            overrides.pop("required_tables", None)
+    else:
+        overrides = dict(declared_contract)
+        overrides.pop("domain", None)
+        if "required_tables" not in overrides and "tables" not in overrides:
+            overrides.pop("required_tables", None)
+    return AnalysisInputContract.from_dict({**default.to_dict(), **overrides, "domain": domain})
 
 
 _WORKBOOK_ANALYZER_VERSIONS = {
@@ -273,19 +293,11 @@ def _scope_value(row: Mapping[str, Any], names: tuple[str, ...]) -> Any:
 
 
 def _period_interval(value: Any) -> tuple[tuple[int, int], tuple[int, int]] | None:
-    text = str(value).strip()
-    match = re.fullmatch(r"(\d{4})(?:-Q([1-4])|-(\d{2}))?(?::(\d{4})(?:-Q([1-4])|-(\d{2}))?)?", text)
-    if match is None:
+    try:
+        period = _parse_period(str(value).strip())
+    except ValueError:
         return None
-    start_year = int(match.group(1))
-    start_quarter = int(match.group(2)) if match.group(2) else None
-    start_month = int(match.group(3)) if match.group(3) else None
-    end_year = int(match.group(4) or start_year)
-    end_quarter = int(match.group(5)) if match.group(5) else None
-    end_month = int(match.group(6)) if match.group(6) else None
-    start_key = (start_year, (start_quarter - 1) * 3 + 1 if start_quarter else start_month or 1)
-    end_key = (end_year, end_quarter * 3 if end_quarter else end_month or 12)
-    return start_key, end_key
+    return period.start_key, period.end_key
 
 
 def _scope_matches(value: Any, allowed: tuple[str, ...], label: str) -> bool:
@@ -303,7 +315,7 @@ def _scope_matches(value: Any, allowed: tuple[str, ...], label: str) -> bool:
             if permitted_interval is None:
                 continue
             permitted_start, permitted_end = permitted_interval
-            if permitted_start <= observed_end and observed_start <= permitted_end:
+            if permitted_start <= observed_start and observed_end <= permitted_end:
                 return True
     return False
 

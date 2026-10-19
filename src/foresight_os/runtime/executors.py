@@ -10,6 +10,7 @@ from agent_framework import Agent, ChatMiddleware
 from agent_framework._tools import FunctionInvocationLayer
 
 from foresight_os.analysis.result_committer import decode_stage_output
+from foresight_os.domain.analysis_inputs import GLOBAL_SCOPE
 from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
 from foresight_os.runtime.metrics import BudgetExceededError
 
@@ -260,7 +261,14 @@ class DeterministicLocalExecutor:
             raise ValueError("deterministic-local stage requires one workbook domain, source, and analyzer")
         domain = domains[0]
         analyzer = analyzers.get(domain)
-        contract = contracts.get(domain) if isinstance(contracts, Mapping) else None
+        contract = None
+        if isinstance(contracts, Mapping):
+            stage_id = str(getattr(self.stage, "stage_id", "stage"))
+            contract = contracts.get(f"{stage_id}:{domain}") or contracts.get(f"{GLOBAL_SCOPE}:{domain}") or contracts.get(domain)
+        if contract is None:
+            resolver = self.run_context.get("analysis_contract_resolver")
+            if resolver is not None:
+                contract = resolver(domain, str(getattr(self.stage, "stage_id", "stage"))).to_dict()
         if analyzer is None or contract is None:
             raise ValueError(f"deterministic-local stage is not bound to workbook domain: {domain}")
         from foresight_os.analysis.workbook_engine import WorkbookAnalysisEngine

@@ -869,8 +869,8 @@ def _stage_fingerprints(
         "horizon": input_payload.get("horizon", ""),
         "relevant_constraints": input_payload.get("relevant_constraints", ()),
         "analysis_contract_fingerprints": input_payload.get("analysis_contract_fingerprints", {}),
-            "analysis_analyzer_fingerprints": input_payload.get("analysis_analyzer_fingerprints", {}),
         "analysis_analyzer_fingerprints": input_payload.get("analysis_analyzer_fingerprints", {}),
+        "workbook_source_sha256": input_payload.get("workbook_source_sha256", ""),
         "dependency_result_hashes": {
             stage_id: _canonical_result_hash(output)
             for stage_id, output in dict(dependency_outputs).items()
@@ -1217,6 +1217,7 @@ async def run_recipe_async(
                 model_config_fingerprint=str(context.get("model_config_fingerprint", "")),
                 authorization_scope_fingerprint=str(context.get("authorization_scope_fingerprint", "")),
                 analyzer_fingerprints=tuple(stage_input.analysis_analyzer_fingerprints),
+                source_revision=stage_input.workbook_source_sha256 or None,
             ) and _canonical_provenance_matches(
                 receipt.result_references,
                 receipt.result_hashes,
@@ -1509,7 +1510,9 @@ async def run_recipe_async(
             status="committed",
             committed=True,
             provenance_complete=True,
-            source_revision=str(context.get("source_revision", "")),
+            source_revision=str(
+                context.get("source_revision", "") or stage_input.workbook_source_sha256
+            ),
             created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             reuse_decision="run_fresh" if getattr(stage, "stage_id", "") in fresh_requested else "reuse",
         )
@@ -1624,6 +1627,7 @@ async def run_recipe_async(
                         }.items()
                     )
                 ),
+                workbook_source_sha256=(str(context.get("workbook_source_sha256", "")) if declared_domains else ""),
             )
             stage_outputs, current = await dispatch_stage(stage, stage_input)
             outputs_by_stage[getattr(stage, "stage_id", f"stage-{len(outputs_by_stage) + 1}")] = current
