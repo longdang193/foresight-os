@@ -8,19 +8,19 @@ except ImportError:
     from optimization_measurement import MANDATORY_XLSX_WORKLOADS, SCENARIO_XLSX_WORKLOADS
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 REQUIRED_PATTERNS = {"DIRECT", "ANALYZE", "CONCURRENT", "HANDOFF", "CHALLENGE_RECOMMENDATION"}
 REQUIRED_TIMING_PATHS = (
     "cold_workbook",
     "same_view_repeat",
     "repeated_investigation",
     "analyst_validator_reuse",
-    "changed_brief",
+    "approved_changed_brief",
     "history-10",
     "history-100",
     "selected_sheet_stress",
 )
-REQUIRED_SCENARIO_WORKLOADS = ("changed_brief", "history-10", "history-100")
+REQUIRED_SCENARIO_WORKLOADS = ("approved_changed_brief", "changed_brief", "history-10", "history-100", "selected_sheet_stress")
 READER_COUNTERS = (
     "archive_sheets_scanned",
     "selected_sheet_count",
@@ -246,10 +246,14 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
                 missing.append(f"xlsx.timing_paths.{name}")
             elif not _is_number(item.get("wall_time_ms")) or float(item["wall_time_ms"]) <= 0:
                 missing.append(f"xlsx.timing_paths.{name}.wall_time_ms>0")
-            if isinstance(item, dict) and not _is_nonnegative_count(item.get("sample_count", 1)):
-                missing.append(f"xlsx.timing_paths.{name}.sample_count>=3")
-            elif isinstance(item, dict) and int(item.get("sample_count", 1)) < 3:
-                missing.append(f"xlsx.timing_paths.{name}.sample_count>=3")
+            if isinstance(item, dict) and not _is_nonnegative_count(item.get("sample_count", 0)):
+                missing.append(f"xlsx.timing_paths.{name}.sample_count>=10")
+            elif isinstance(item, dict) and int(item.get("sample_count", 0)) < 10:
+                missing.append(f"xlsx.timing_paths.{name}.sample_count>=10")
+            if isinstance(item, dict) and (not isinstance(item.get("samples_ms"), list) or len(item["samples_ms"]) < 10):
+                missing.append(f"xlsx.timing_paths.{name}.samples_ms>=10")
+            if isinstance(item, dict) and (not _is_number(item.get("noise_floor_ms")) or float(item["noise_floor_ms"]) < 0):
+                missing.append(f"xlsx.timing_paths.{name}.noise_floor_ms>=0")
     scenario_workloads = workbook.get("scenario_workloads", {})
     for name in REQUIRED_SCENARIO_WORKLOADS:
         item = scenario_workloads.get(name)
@@ -409,10 +413,24 @@ def compare(baseline: dict, release: dict) -> dict:
     timing_path_regressions = {}
     timing_path_comparisons = {}
     for name in REQUIRED_TIMING_PATHS:
-        baseline_timing = float(baseline["xlsx"]["timing_paths"][name]["wall_time_ms"])
-        release_timing = float(release["xlsx"]["timing_paths"][name]["wall_time_ms"])
+        baseline_path = baseline["xlsx"]["timing_paths"][name]
+        release_path = release["xlsx"]["timing_paths"][name]
+        baseline_timing = float(baseline_path["wall_time_ms"])
+        release_timing = float(release_path["wall_time_ms"])
         timing_path_regressions[name] = _pct(release_timing, baseline_timing)
-        timing_path_comparisons[name] = _comparison_metric(baseline_timing, release_timing)
+        absolute_delta = release_timing - baseline_timing
+        baseline_noise_floor = float(baseline_path["noise_floor_ms"])
+        candidate_noise_floor = float(release_path["noise_floor_ms"])
+        timing_path_comparisons[name] = {
+            **_comparison_metric(baseline_timing, release_timing),
+            "absolute_delta_ms": round(absolute_delta, 6),
+            "baseline_noise_floor_ms": baseline_noise_floor,
+            "candidate_noise_floor_ms": candidate_noise_floor,
+            "noise_floor_gate": not (
+                timing_path_regressions[name] > 20
+                and absolute_delta > baseline_noise_floor
+            ),
+        }
     cold_comparison = None
     cold_regression = None
     cold_gate = True
@@ -424,8 +442,15 @@ def compare(baseline: dict, release: dict) -> dict:
         cold_comparison = _comparison_metric(baseline_p95, release_p95)
         cold_regression = _pct(release_p95, baseline_p95)
         absolute_delta = release_p95 - baseline_p95
-        noise_floor = max(float(baseline_cold["noise_floor_ms"]), float(release_cold["noise_floor_ms"]))
-        cold_gate = not (cold_regression > 20 and absolute_delta > noise_floor)
+        baseline_noise_floor = float(baseline_cold["noise_floor_ms"])
+        candidate_noise_floor = float(release_cold["noise_floor_ms"])
+        cold_gate = not (cold_regression > 20 and absolute_delta > baseline_noise_floor)
+        cold_comparison.update({
+            "absolute_delta_ms": round(absolute_delta, 6),
+            "baseline_noise_floor_ms": baseline_noise_floor,
+            "candidate_noise_floor_ms": candidate_noise_floor,
+            "noise_floor_gate": cold_gate,
+        })
     absolute = {
         "xlsx": {
             "p95_ms": _comparison_metric(float(baseline["xlsx"]["p95_ms"]), float(release["xlsx"]["p95_ms"])) if latency_measured else None,
@@ -459,7 +484,10 @@ def compare(baseline: dict, release: dict) -> dict:
         and (allocation_regression is None or allocation_regression <= 15)
         and rss_regression <= 15
         and (not baseline["acceptance"].get("gate_pattern_latency", True) or all(value <= 20 for value in pattern_regressions.values()))
-        and (not baseline["acceptance"].get("gate_timing_paths", True) or all(value <= 20 for value in timing_path_regressions.values()))
+        and (
+            not baseline["acceptance"].get("gate_timing_paths", True)
+            or all(item["noise_floor_gate"] for item in timing_path_comparisons.values())
+        )
         and (not baseline["acceptance"].get("gate_cold_noise_floor", False) or cold_gate)
         and non_regressive_economics
         and not reused_stage_new_calls

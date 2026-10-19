@@ -71,13 +71,20 @@ def _receipt() -> dict:
             "peak_allocation_bytes": 100,
             "deterministic_key": "same",
             "timing_paths": {
-                name: {"wall_time_ms": 10, "sample_count": 10}
+                name: {
+                    "wall_time_ms": 10,
+                    "sample_count": 10,
+                    "samples_ms": [10] * 10,
+                    "p50_ms": 10,
+                    "p95_ms": 10,
+                    "noise_floor_ms": 0,
+                }
                 for name in (
                     "cold_workbook",
                     "same_view_repeat",
                     "repeated_investigation",
                     "analyst_validator_reuse",
-                    "changed_brief",
+                    "approved_changed_brief",
                     "history-10",
                     "history-100",
                     "selected_sheet_stress",
@@ -120,6 +127,7 @@ def _receipt() -> dict:
             "soak_runs": 2,
             "tool_calls_per_finding_increase": 0,
             "gate_timing_paths": True,
+            "gate_cold_noise_floor": False,
         },
         "maf_patterns": {
             name: {
@@ -303,6 +311,28 @@ def test_comparator_rejects_cold_regression_above_empirical_noise_floor():
 
     assert not result["accepted"]
     assert result["regression"]["cold_p95_pct"] == 172.727
+
+
+def test_candidate_variance_cannot_raise_baseline_noise_threshold():
+    baseline = _receipt()
+    release = deepcopy(baseline)
+    release["revision"]["commit"] = "release-commit"
+
+    baseline_path = baseline["xlsx"]["timing_paths"]["same_view_repeat"]
+    baseline_path.update({"wall_time_ms": 20, "p50_ms": 10, "p95_ms": 20, "noise_floor_ms": 10})
+    baseline_path["samples_ms"] = [10] * 9 + [20]
+
+    release_path = release["xlsx"]["timing_paths"]["same_view_repeat"]
+    release_path.update({"wall_time_ms": 31, "p50_ms": 10, "p95_ms": 31, "noise_floor_ms": 100})
+    release_path["samples_ms"] = [10] * 9 + [31]
+
+    result = compare(baseline, release)
+
+    assert not result["accepted"]
+    comparison = result["absolute"]["xlsx"]["timing_paths"]["same_view_repeat"]
+    assert comparison["baseline_noise_floor_ms"] == 10
+    assert comparison["candidate_noise_floor_ms"] == 100
+    assert comparison["noise_floor_gate"] is False
 
 
 def test_comparator_rejects_new_calls_for_reused_stage():
