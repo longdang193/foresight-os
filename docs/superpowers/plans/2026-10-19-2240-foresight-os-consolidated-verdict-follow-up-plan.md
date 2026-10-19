@@ -1,7 +1,7 @@
 ---
 layer: change
 artifact_type: plan
-status: active
+status: completed
 template_id: implementation-plan
 contract_version: "1"
 name: foresight-os-consolidated-verdict-follow-up
@@ -141,7 +141,7 @@ introduced by this plan.
 - Branch: `codex/foresight-os-consolidated-verdict-follow-up`
 - Base commit: `5ae8069543ad55f82e451f56554ca09b0435c61f`
 - Expected workspace: `clean execution worktree from base; current main dirty changes preserved separately`
-- Next action: `Task 5 XLSX reader parity and resource evidence`
+- Next action: `completion verified; branch finishing remains separately authorized`
 - Blockers: `none; current workspace is not a safe execution workspace until isolated`
 
 | Task | State | Workspace | Executor | Depends On | Required Proof | Evidence |
@@ -537,10 +537,10 @@ introduced by this plan.
 
 Run from the clean execution worktree after selected tasks complete:
 
-- `python -m pytest -q`
-- `python -m compileall -q src tests evaluation`
-- `python scripts/check_markdown_links.py README.md AGENTS.md docs/architecture.md docs/getting-started.md docs/evidence-and-evaluation.md evaluation/README.md --tracked-docs`
-- `git diff --check`
+- [x] `python -m pytest -q`
+- [x] `python -m compileall -q src tests evaluation`
+- [x] `python scripts/check_markdown_links.py README.md AGENTS.md docs/architecture.md docs/getting-started.md docs/evidence-and-evaluation.md evaluation/README.md --tracked-docs`
+- [x] `git diff --check`
 - Confirm both verified local checkpoint commits are present and
   source-identifiable: the Task 3 benchmark-protocol checkpoint and the Task 4
   instrumentation-only persistence checkpoint.
@@ -574,9 +574,8 @@ The plan is ready for completion verification when:
    correctness or persistence change set; and
 8. all final verification commands pass with no unrecorded scope deviation.
 
-The plan remains `proposed` until `skill-verification-before-completion`
-returns `verified` for an executed implementation. Dependency cleanup remains
-a separate maintenance plan covering clean-wheel installation, optional
+Verification returned `verified` for the executed implementation. Dependency
+cleanup remains a separate maintenance plan covering clean-wheel installation, optional
 agent-framework behavior, pandas consumer proof, and package import tests.
 
 ## Explicit Deferrals
