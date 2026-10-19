@@ -141,15 +141,15 @@ introduced by this plan.
 - Branch: `codex/foresight-os-consolidated-verdict-follow-up`
 - Base commit: `5ae8069543ad55f82e451f56554ca09b0435c61f`
 - Expected workspace: `clean execution worktree from base; current main dirty changes preserved separately`
-- Next action: `repair Task 3 benchmark workloads, timing-noise measurement, and source-identifiable receipts`
+- Next action: `Task 4 persistence instrumentation and mandatory history measurement`
 - Blockers: `none; current workspace is not a safe execution workspace until isolated`
 
 | Task | State | Workspace | Executor | Depends On | Required Proof | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | Task 1 | `completed` | dedicated clean worktree | `lead controller` | none | focused contract tests | `tests/test_analysis_input_contract.py`, `tests/test_work_brief_compatibility.py`, `tests/test_analysis_schema.py` pass |
 | Task 2 | `completed` | dedicated clean worktree | `lead controller` | Task 1 | identity, approval, and capability boundary proof | focused Task 2 suite passes; persisted alias admission and material-change rejection pass |
-| Task 3 | `active` | dedicated clean worktree | `lead controller` | Task 2 | verified benchmark checkpoint | pending |
-| Task 4 | `pending` | dedicated clean worktree | `lead controller` | Task 3 | instrumentation checkpoint, history proof, conditional candidate | pending |
+| Task 3 | `completed` | dedicated clean worktree | `lead controller` | Task 2 | verified benchmark checkpoint | `97e81fa`; clean baseline receipt: `work/optimization-runs/task3-clean2/baseline.json` |
+| Task 4 | `active` | dedicated clean worktree | `lead controller` | Task 3 | instrumentation checkpoint, history proof, conditional candidate | pending |
 | Task 5 | `pending` | dedicated clean worktree | `lead controller` | Task 3 | reader parity and resource evidence, or explicit deferral | pending |
 
 ## Task Breakdown
