@@ -329,7 +329,10 @@ class AnalysisStore:
                 expected_pending = expected_current.get("pending")
                 if expected_pending is not None and current.get("pending") == expected_pending and snapshot.get("pending") != expected_pending:
                     self.pending_analysis_path.unlink(missing_ok=True)
-                    self._remember_consumed_pending_token(current_pending_token)
+                    self._remember_consumed_pending_token(
+                        current_pending_token,
+                        revision=self._revision_from_bytes(current.get("pending")) or 0,
+                    )
                 return False
             consumed_tokens = self._tokens_from_bytes(snapshot.get("pending_tokens"))
             if current_pending_token and current_pending_token != snapshot_pending_token:
@@ -394,13 +397,18 @@ class AnalysisStore:
                 raise ValueError(f"stale pending snapshot: expected {expected_revision}, persisted {pending.revision}")
             if pending is not None and (not state.pending_token or state.pending_token != pending.pending_token):
                 raise ValueError("stale pending identity")
-            consumed_tokens = self._load_consumed_pending_tokens()
+            token_revision = current.revision if current is not None else (pending.revision if pending is not None else expected_revision)
+            consumed_tokens = self._load_consumed_pending_tokens(token_revision)
             if pending is None and state.pending_token and state.pending_token in consumed_tokens:
                 raise ValueError("stale pending identity")
-            if pending is None and current is not None and current.revision != expected_revision:
-                raise ValueError(f"stale revision: expected {expected_revision}, current {current.revision}")
+            if pending is None and current is not None and (
+                current.revision != expected_revision or state.revision != expected_revision
+            ):
+                raise ValueError(
+                    f"stale revision: expected {expected_revision}, current {current.revision}, state {state.revision}"
+                )
             if pending is not None and current is not None and not accepted:
-                self._remember_consumed_pending_token(pending.pending_token)
+                self._remember_consumed_pending_token(pending.pending_token, revision=current.revision if current is not None else pending.revision)
                 self.pending_analysis_path.unlink(missing_ok=True)
                 return current
             status = RevisionStatus.ACCEPTED if accepted else RevisionStatus.REJECTED
@@ -421,7 +429,7 @@ class AnalysisStore:
                 committed = replace(committed, revision=number, revisions=[*current.revisions, revision])
             self._write_validated(self._validate_analysis(committed))
             if pending is not None:
-                self._remember_consumed_pending_token(pending.pending_token)
+                self._remember_consumed_pending_token(pending.pending_token, revision=committed.revision)
             self.pending_analysis_path.unlink(missing_ok=True)
             return committed
 
@@ -448,7 +456,7 @@ class AnalysisStore:
             self.stats.merge_time_ms += (perf_counter() - merge_started) * 1000
         self._write_validated(self._validate_analysis(pending), self.pending_analysis_path)
         if existing_pending is not None:
-            self._remember_consumed_pending_token(existing_pending.pending_token)
+            self._remember_consumed_pending_token(existing_pending.pending_token, revision=current.revision if current is not None else existing_pending.revision)
         return pending
 
     def _revision_snapshot_unlocked(self) -> dict[str, bytes | None]:
@@ -470,11 +478,24 @@ class AnalysisStore:
         return token if isinstance(token, str) and token else None
 
     @staticmethod
+    def _revision_from_bytes(content: bytes | None) -> int | None:
+        if content is None:
+            return None
+        value = json.loads(content.decode("utf-8"))
+        revision = value.get("revision") if isinstance(value, dict) else None
+        return revision if isinstance(revision, int) else None
+
+    @staticmethod
     def _tokens_from_bytes(content: bytes | None) -> set[str]:
         if content is None:
             return set()
         value = json.loads(content.decode("utf-8"))
-        return {item for item in value if isinstance(item, str)} if isinstance(value, list) else set()
+        if isinstance(value, list):
+            return {item for item in value if isinstance(item, str)}
+        if isinstance(value, dict):
+            tokens = value.get("tokens", ())
+            return {item for item in tokens if isinstance(item, str)} if isinstance(tokens, list) else set()
+        return set()
 
     def update_pending(self, state: AnalysisState) -> AnalysisState:
         if state.revision_status != RevisionStatus.PENDING_REVIEW or not state.pending_token:
@@ -654,18 +675,26 @@ class AnalysisStore:
             self.stats.committed_write_bytes += len(content.encode("utf-8"))
             self.stats.committed_write_time_ms += elapsed_ms
 
-    def _load_consumed_pending_tokens(self) -> set[str]:
+    def _load_consumed_pending_tokens(self, revision: int | None = None) -> set[str]:
         if not self.pending_tokens_path.exists():
             return set()
         value = json.loads(self.pending_tokens_path.read_text(encoding="utf-8"))
-        return {item for item in value if isinstance(item, str)} if isinstance(value, list) else set()
+        if isinstance(value, list):
+            return {item for item in value if isinstance(item, str)}
+        if not isinstance(value, dict) or revision is not None and value.get("revision") != revision:
+            return set()
+        tokens = value.get("tokens", ())
+        return {item for item in tokens if isinstance(item, str)} if isinstance(tokens, list) else set()
 
-    def _remember_consumed_pending_token(self, token: str | None) -> None:
+    def _remember_consumed_pending_token(self, token: str | None, *, revision: int) -> None:
         if not token:
             return
-        tokens = self._load_consumed_pending_tokens()
+        tokens = self._load_consumed_pending_tokens(revision)
         tokens.add(token)
-        self._atomic_write(self.pending_tokens_path, json.dumps(sorted(tokens), indent=2) + "\n")
+        self._atomic_write(
+            self.pending_tokens_path,
+            json.dumps({"revision": revision, "tokens": sorted(tokens)}, indent=2) + "\n",
+        )
 
     @staticmethod
     def _merge_states(current: AnalysisState, pending: AnalysisState) -> AnalysisState:
