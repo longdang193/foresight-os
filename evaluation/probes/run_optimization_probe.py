@@ -884,6 +884,7 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
             "xlsx_parse_count": context.stats.xlsx_parse_count,
             "openpyxl_load_count": context.stats.openpyxl_load_count,
             "archive_sheets_scanned": getattr(context.stats, "archive_sheets_scanned", None),
+            "archive_sheet_xml_scanned": getattr(context.stats, "archive_sheet_xml_scanned", None),
             "selected_sheet_count": getattr(context.stats, "selected_sheet_count", None),
             "selected_row_count": getattr(context.stats, "selected_row_count", None),
             "selected_cell_count": getattr(context.stats, "selected_cell_count", None),

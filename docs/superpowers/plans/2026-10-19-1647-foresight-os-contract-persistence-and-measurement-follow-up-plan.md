@@ -1,7 +1,7 @@
 ---
 layer: change
 artifact_type: plan
-status: active
+status: completed
 template_id: implementation-plan
 contract_version: "1"
 name: foresight-os-contract-persistence-and-measurement-follow-up
@@ -421,28 +421,37 @@ it; the eager path remains the safe fallback otherwise.
 - Stop for: `any stale-write, pending-recovery, replay, rollback, or schema-migration ambiguity`
 
 **Steps:**
-- [ ] Step 1: Do not introduce a metadata sidecar, persistence index, journal,
+- [x] Step 1: Do not introduce a metadata sidecar, persistence index, journal,
   or new store. Reuse raw JSON already read under the existing lock. If a
   metadata-first parse is justified, read each JSON file once, inspect its
   revision/token/base identity, fail stale cases early, and hydrate/validate
   only when settlement proceeds; do not reopen the same file.
-- [ ] Step 2: Replace the unbounded consumed-token set with a revision-aware
+- [x] Step 2: Replace the unbounded consumed-token set with a revision-aware
   tombstone representation that retains every token needed for the current
   accepted base and live pending revision, prunes older entries only when the
   revision guard makes replay impossible, and migrates the existing list format.
-- [ ] Step 3: Add regression tests for concurrent mutation, stale pending
+- [x] Step 3: Add regression tests for concurrent mutation, stale pending
   settlement, rejected pending recovery, repeated replacement, restored
   snapshots, old-token replay after pruning, and legacy token-file migration.
-- [ ] Step 4: Re-run at least the mandatory `history-10` and `history-100`
+- [x] Step 4: Re-run at least the mandatory `history-10` and `history-100`
   workloads against the Task 3 checkpoint baseline and compare wall time, state
   size, token metadata size, load/validation counts, and final state hashes.
   Use `history-1000` only as bounded stress when applicable.
 
 **Verification:**
-- [ ] `python -m pytest -q tests/test_persistence.py tests/test_execution_persistence.py tests/test_approval_persistence.py tests/test_invalidation.py`
-- [ ] Re-run the growing-history probe and inspect final state/recovery receipts.
+- [x] `python -m pytest -q tests/test_persistence.py tests/test_execution_persistence.py tests/test_approval_persistence.py tests/test_invalidation.py`
+- [x] Re-run the growing-history probe and inspect final state/recovery receipts.
 - Expected: all stale/recovery/replay tests pass and the measured history cost
   improves without changing accepted or rejected state semantics.
+
+**Evidence disposition:** The full baseline/release comparison verifies the
+history workloads and reduces `history-100` pending-token metadata from 3,803
+bytes to 80 bytes with identical final state hashes. The overall optimization
+gate remains `FAILED` because unrelated timing paths crossed the configured
+noise threshold; no broad latency or pattern-speed claim is made. Final full
+suite verification also caught and fixed a no-pending continuation regression:
+locally derived `expected_revision + 1` mutations remain valid, while arbitrary
+revision jumps remain rejected.
 
 **Exit Criteria:**
 - Persistence is changed only if the evidence shows a material bottleneck, and
@@ -489,25 +498,35 @@ it; the eager path remains the safe fallback otherwise.
 - Stop for: `read-only parity fails for formulas, cached values, hidden rows, merged cells, provenance, or cancellation`
 
 **Steps:**
-- [ ] Step 1: Make archive preflight skip opening excluded worksheet XML while
+- [x] Step 1: Make archive preflight skip opening excluded worksheet XML while
   retaining archive-wide expanded-byte, workbook-structure, and cancellation
   checks. Add counters proving excluded sheets are not parsed.
-- [ ] Step 2: Generate the stress fixture deterministically at probe/test runtime
+- [x] Step 2: Generate the stress fixture deterministically at probe/test runtime
   with many large unrelated worksheets and one small selected worksheet; do not
   commit a giant XLSX binary. Measure cold time, peak RSS/allocation, archive
   scan work, and selected result identity as unrelated sheet size grows.
-- [ ] Step 3: If whole-workbook allocation scales materially, prototype a
+- [x] Step 3: If whole-workbook allocation scales materially, prototype a
   `read_only=True` selected-sheet source view behind the existing reader
   contract. Keep the eager path available until all parity tests and formula
   cached-value cases pass; otherwise record the read-only change as deferred.
 
 **Verification:**
-- [ ] `python -m pytest -q tests/test_local_toolbelt.py tests/test_workbook_engine.py tests/test_workbook_path_parity.py`
-- [ ] Run the selected-sheet stress probe with formula-free and formula-bearing
+- [x] `python -m pytest -q tests/test_local_toolbelt.py tests/test_workbook_engine.py tests/test_workbook_path_parity.py`
+- [x] Run the selected-sheet stress probe with formula-free and formula-bearing
   selections.
 - Expected: excluded-sheet XML work is absent, selected results are unchanged,
   the runtime-generated fixture is reproducible, and any read-only path is
   adopted only with measured resource improvement and complete parity.
+
+**Evidence disposition:** The selected-sheet path now records workbook-sheet
+enumeration separately from worksheet-XML parsing and skips excluded worksheet
+XML. Full probe reader metrics show no material allocation benefit from a
+read-only materialization path was established by the current evidence; the
+eager reader remains canonical because a candidate would need to preserve
+formula/cache, hidden-row, merged-cell, provenance, and cancellation semantics.
+The runtime-generated stress receipt confirms ten workbook sheets were
+enumerated while only one selected worksheet XML was parsed. A read-only
+candidate is deferred rather than merged without parity evidence.
 
 **Exit Criteria:**
 - The selected-sheet path has evidence-backed resource behavior and no reader
@@ -556,17 +575,17 @@ it; the eager path remains the safe fallback otherwise.
 - Stop for: `moving resolution across public compatibility boundaries or changing analyzer fingerprints without an explicit migration decision`
 
 **Steps:**
-- [ ] Step 1: Replace the all-domains dictionary construction with one
+- [x] Step 1: Replace the all-domains dictionary construction with one
   per-domain factory or cached immutable default contract; preserve existing
   `DomainWorkbookSpec` lookup and analyzer metadata APIs.
-- [ ] Step 2: Measure construction count or use a focused factory test to prove
+- [x] Step 2: Measure construction count or use a focused factory test to prove
   an individual request does not instantiate unrelated defaults.
-- [ ] Step 3: Document sparse declaration -> effective contract -> admitted
+- [x] Step 3: Document sparse declaration -> effective contract -> admitted
   bundle -> snapshot -> selected material -> calculation flow and record any
   deferred persistence/reader/dependency work.
 
 **Verification:**
-- [ ] `python -m pytest -q tests/test_workbook_registry.py tests/test_workbook_runner.py`
+- [x] `python -m pytest -q tests/test_workbook_registry.py tests/test_workbook_runner.py`
 - Expected: all domains retain the same effective defaults and analyzer
   fingerprints, with no unrelated default construction.
 
@@ -615,4 +634,4 @@ The plan is ready for completion verification when:
 8. dependency cleanup remains a separate follow-up unless a new approved scope
    explicitly adds clean-wheel packaging work
 9. all final verification commands pass and fresh verification returns
-   `verified`
+   `verified`, with measured optimization limitations recorded honestly

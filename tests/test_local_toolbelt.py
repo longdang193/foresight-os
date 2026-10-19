@@ -805,6 +805,7 @@ def test_xlsx_stats_capture_archive_and_materialization_work(workbook_path):
 
     stats = context.stats
     assert stats.archive_sheets_scanned == 3
+    assert stats.archive_sheet_xml_scanned == 1
     assert stats.selected_sheet_count == 1
     assert stats.selected_row_count > 0
     assert stats.selected_cell_count > 0

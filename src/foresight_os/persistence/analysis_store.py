@@ -402,7 +402,8 @@ class AnalysisStore:
             if pending is None and state.pending_token and state.pending_token in consumed_tokens:
                 raise ValueError("stale pending identity")
             if pending is None and current is not None and (
-                current.revision != expected_revision or state.revision != expected_revision
+                current.revision != expected_revision
+                or state.revision not in {expected_revision, expected_revision + 1}
             ):
                 raise ValueError(
                     f"stale revision: expected {expected_revision}, current {current.revision}, state {state.revision}"

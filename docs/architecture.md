@@ -88,6 +88,14 @@ The public `analyze` command dispatches CSV to the existing vertical slice and
 dispatches XLSX only through an explicit domain or one unambiguous domain in
 `brief.md`. Missing or ambiguous XLSX domain selection is `BLOCKED_INPUT`.
 
+The input contract flow is intentionally one-way: sparse declarations remain
+field-presence-aware through WorkBrief normalization, domain defaults are
+resolved once at this boundary, and the resulting effective contract supplies
+the admitted bundle, source snapshot, selected material, identity hashes, and
+domain calculation. Direct, persisted, and approved execution therefore share
+the same effective contract rather than reconstituting defaults at later
+layers.
+
 Workbook defaults, lazy analyzer dispatch, and explicit analyzer versions are
 owned by `workbook_registry.py`; compatibility helpers delegate to that
 registry rather than maintaining a second map. A behavior-changing analyzer

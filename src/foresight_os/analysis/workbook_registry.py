@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
+from functools import lru_cache
 from importlib import import_module
 from typing import Any
 
@@ -14,53 +15,7 @@ class DomainWorkbookSpec:
     analyzer_version: str
 
     def default_contract(self):
-        from foresight_os.domain.analysis_inputs import AnalysisInputContract
-
-        defaults = {
-            "portfolio_resilience": AnalysisInputContract(
-                domain=self.domain,
-                required_tables=("Brief", "Sales_History", "Fixed_Costs", "Scenario_Assumptions", "Strategic_Options", "Reported_KPIs"),
-                periods=("2026", "2025"),
-                baseline_period="2026",
-                comparison_period="2025",
-                scenarios=("Downside", "Base", "Upside"),
-                units="EUR",
-                reporting_currency="EUR",
-                compatibility_assumption="legacy workbook metadata defaults",
-            ),
-            "supplier_resilience": AnalysisInputContract(
-                domain=self.domain,
-                required_tables=("Brief", "Supplier_Master", "Incidents", "Scenario_Assumptions", "Mitigation_Options"),
-                units="EUR",
-                reporting_currency="EUR",
-                conversion_rates={"EUR": 1.0, "USD": 0.92, "CNY": 0.13},
-                compatibility_assumption="legacy supplier workbook FX map: EUR=1.0, USD=0.92, CNY=0.13",
-            ),
-            "ev_capacity_investment": AnalysisInputContract(
-                domain=self.domain,
-                required_tables=("Brief", "Demand_History", "Demand_Scenarios", "Capacity", "Infrastructure", "Policy_Signals", "Strategic_Options", "Reported_KPIs"),
-                periods=("2025", "2026", "2030"),
-                scenarios=("Low", "Base", "High"),
-                units="units",
-                compatibility_assumption="legacy workbook scenario defaults",
-            ),
-            "technology_radar": AnalysisInputContract(
-                domain=self.domain,
-                required_tables=("Brief", "Signals", "Company_Relevance", "Competitor_Actions", "Scenario_Signposts", "Priority_Scoring"),
-                units="index",
-                compatibility_assumption="legacy technology radar scope",
-            ),
-            "powerbi_strategic_portfolio": AnalysisInputContract(
-                domain=self.domain,
-                required_tables=("Brief", "Dim_Region", "Dim_Segment", "Fact_Performance", "Targets", "Forward_Signals", "Measure_Definitions", "Dashboard_Snapshot", "Strategic_Options", "Change_One_Input"),
-                baseline_period="2025-01:2025-09",
-                comparison_period="2026-01:2026-09",
-                units="EUR",
-                periods=("2025-01:2025-09", "2026-01:2026-09"),
-                compatibility_assumption="legacy Power BI comparable-period defaults",
-            ),
-        }
-        return defaults[self.domain]
+        return _default_contract_for_domain(self.domain)
 
     def load_analyzer(self) -> Callable[..., Any]:
         module = import_module(self.analyzer_module)
@@ -75,6 +30,60 @@ _SPECS = {
     "powerbi_strategic_portfolio": DomainWorkbookSpec("powerbi_strategic_portfolio", "foresight_os.analysis.powerbi_strategic_portfolio", "_analyze_powerbi_material", "1"),
 }
 WORKBOOK_DOMAINS = tuple(_SPECS)
+
+
+@lru_cache(maxsize=None)
+def _default_contract_for_domain(domain: str):
+    from foresight_os.domain.analysis_inputs import AnalysisInputContract
+
+    builders = {
+        "portfolio_resilience": lambda: AnalysisInputContract(
+            domain=domain,
+            required_tables=("Brief", "Sales_History", "Fixed_Costs", "Scenario_Assumptions", "Strategic_Options", "Reported_KPIs"),
+            periods=("2026", "2025"),
+            baseline_period="2026",
+            comparison_period="2025",
+            scenarios=("Downside", "Base", "Upside"),
+            units="EUR",
+            reporting_currency="EUR",
+            compatibility_assumption="legacy workbook metadata defaults",
+        ),
+        "supplier_resilience": lambda: AnalysisInputContract(
+            domain=domain,
+            required_tables=("Brief", "Supplier_Master", "Incidents", "Scenario_Assumptions", "Mitigation_Options"),
+            units="EUR",
+            reporting_currency="EUR",
+            conversion_rates={"EUR": 1.0, "USD": 0.92, "CNY": 0.13},
+            compatibility_assumption="legacy supplier workbook FX map: EUR=1.0, USD=0.92, CNY=0.13",
+        ),
+        "ev_capacity_investment": lambda: AnalysisInputContract(
+            domain=domain,
+            required_tables=("Brief", "Demand_History", "Demand_Scenarios", "Capacity", "Infrastructure", "Policy_Signals", "Strategic_Options", "Reported_KPIs"),
+            periods=("2025", "2026", "2030"),
+            scenarios=("Low", "Base", "High"),
+            units="units",
+            compatibility_assumption="legacy workbook scenario defaults",
+        ),
+        "technology_radar": lambda: AnalysisInputContract(
+            domain=domain,
+            required_tables=("Brief", "Signals", "Company_Relevance", "Competitor_Actions", "Scenario_Signposts", "Priority_Scoring"),
+            units="index",
+            compatibility_assumption="legacy technology radar scope",
+        ),
+        "powerbi_strategic_portfolio": lambda: AnalysisInputContract(
+            domain=domain,
+            required_tables=("Brief", "Dim_Region", "Dim_Segment", "Fact_Performance", "Targets", "Forward_Signals", "Measure_Definitions", "Dashboard_Snapshot", "Strategic_Options", "Change_One_Input"),
+            baseline_period="2025-01:2025-09",
+            comparison_period="2026-01:2026-09",
+            units="EUR",
+            periods=("2025-01:2025-09", "2026-01:2026-09"),
+            compatibility_assumption="legacy Power BI comparable-period defaults",
+        ),
+    }
+    try:
+        return builders[domain]()
+    except KeyError as error:
+        raise ValueError(f"unsupported workbook analysis domain: {domain}") from error
 
 
 def get_workbook_spec(domain: str) -> DomainWorkbookSpec:
