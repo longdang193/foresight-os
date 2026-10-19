@@ -9,7 +9,7 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
-from foresight_os.analysis.workbook_inputs import MaterialView, apply_table_column_mappings, read_workbook, require_row_columns, require_table, row_evidence, table_rows
+from foresight_os.analysis.workbook_inputs import MaterialView, apply_table_column_mappings, default_workbook_contract, read_workbook, require_row_columns, require_table, row_evidence, table_rows
 from foresight_os.analysis.workbook_engine import DomainAnalysis
 from foresight_os.analysis.workbook_runner import WorkbookWorkflowRunner, merge_input_contract
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
@@ -102,14 +102,7 @@ def _capacity_dependency_ids(capacity_rows: list[tuple[int, dict[str, Any]]], by
 def analyze_ev_capacity_investment(source: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None, *, workbook_context: Any | None = None) -> EVAnalysis:
     source = Path(source)
     sheets = ("Brief", "Demand_History", "Demand_Scenarios", "Capacity", "Infrastructure", "Policy_Signals", "Strategic_Options", "Reported_KPIs")
-    contract = AnalysisInputContract.from_dict(input_contract) if input_contract is not None else AnalysisInputContract(
-        domain="ev_capacity_investment",
-        required_tables=sheets,
-        periods=("2030",),
-        scenarios=("Low", "Base", "High"),
-        units="units",
-        compatibility_assumption="legacy workbook scenario defaults",
-    )
+    contract = default_workbook_contract("ev_capacity_investment") if input_contract is None else AnalysisInputContract.from_dict(input_contract)
     contract.validate()
     selected_period = contract.period_specs[-1] if contract.period_specs else None
     if selected_period is None:
@@ -268,21 +261,18 @@ def write_ev_report(path: Path, ev: EVAnalysis, state: AnalysisState | None = No
 
 
 def _analyze_ev_material(material: MaterialView, contract: AnalysisInputContract) -> DomainAnalysis:
-    value = analyze_ev_capacity_investment(Path(material.source), contract, workbook_context=material)
+    value = analyze_ev_capacity_investment(
+        Path(material.source),
+        merge_input_contract(default_workbook_contract("ev_capacity_investment"), contract),
+        workbook_context=material,
+    )
     return DomainAnalysis(result=value, state=value.state)
 
 def run_ev_capacity_investment_workflow(store: AnalysisStore, source: Path, *, human_decision: str = "REJECT", output_dir: Path | None = None, input_contract: AnalysisInputContract | dict[str, Any] | None = None, workbook_context: Any | None = None) -> EVWorkflowResult:
     try:
         if input_contract is None and store.brief_path.exists():
             input_contract = normalize_work_brief(store.load_brief()).contract_for_domain("ev_capacity_investment")
-        contract = merge_input_contract(AnalysisInputContract(
-            domain="ev_capacity_investment",
-            required_tables=("Brief", "Demand_History", "Demand_Scenarios", "Capacity", "Infrastructure", "Policy_Signals", "Strategic_Options", "Reported_KPIs"),
-            periods=("2025", "2026", "2030"),
-            scenarios=("Low", "Base", "High"),
-            units="units",
-            compatibility_assumption="legacy workbook scenario defaults",
-        ), input_contract)
+        contract = merge_input_contract(default_workbook_contract("ev_capacity_investment"), input_contract)
         result = WorkbookWorkflowRunner(store).run(
             Path(source),
             contract,

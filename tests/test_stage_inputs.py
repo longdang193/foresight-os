@@ -58,7 +58,7 @@ def test_recipe_compiles_explicit_contract_domains_without_wire_field_drift():
     assert "analysis_contract_domains" not in recipe.metadata
 
 
-def test_recipe_includes_global_contracts_and_stage_overrides_per_stage():
+def test_global_contracts_do_not_select_deterministic_stage_domains():
     brief = _brief([
         WorkStage("portfolio", "assess portfolio", participants=["analyst"]),
         WorkStage("supplier", "assess suppliers", participants=["analyst"]),
@@ -79,7 +79,7 @@ def test_recipe_includes_global_contracts_and_stage_overrides_per_stage():
     recipe = select_recipe(brief)
 
     assert recipe.stages[0].analysis_domains == ("portfolio_resilience",)
-    assert recipe.stages[1].analysis_domains == ("portfolio_resilience", "supplier_resilience")
+    assert recipe.stages[1].analysis_domains == ("supplier_resilience",)
 
 
 def test_stage_input_contains_only_declared_dependency_outputs(monkeypatch):
@@ -144,6 +144,14 @@ def test_contract_identity_changes_stage_semantic_fingerprint():
     stage = RecipeStage("stage-1", ExecutionPattern.DIRECT, ({"id": "analyst"},), "prompt", "typed-result", {})
     first = StageInput("question", "2030", "assess", "result", analysis_contract_fingerprints=(("portfolio_resilience", "first"),))
     second = StageInput("question", "2030", "assess", "result", analysis_contract_fingerprints=(("portfolio_resilience", "second"),))
+
+    assert _stage_fingerprints(stage, first, ())[0] != _stage_fingerprints(stage, second, ())[0]
+
+
+def test_analyzer_identity_changes_stage_semantic_fingerprint():
+    stage = RecipeStage("stage-1", ExecutionPattern.DIRECT, ({"id": "analyst"},), "prompt", "typed-result", {})
+    first = StageInput("question", "2030", "assess", "result", analysis_analyzer_fingerprints=(("portfolio_resilience", "analyzer-v1"),))
+    second = StageInput("question", "2030", "assess", "result", analysis_analyzer_fingerprints=(("portfolio_resilience", "analyzer-v2"),))
 
     assert _stage_fingerprints(stage, first, ())[0] != _stage_fingerprints(stage, second, ())[0]
 

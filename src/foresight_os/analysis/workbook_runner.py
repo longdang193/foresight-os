@@ -24,6 +24,8 @@ class WorkbookWorkflowResult:
     review: ReviewResult | None = None
     report_path: Path | None = None
     failure: str | None = None
+    artifact_status: str = "not_requested"
+    artifact_error: str | None = None
     source_fingerprint: str = ""
     layout_fingerprint: str = ""
     contract_fingerprint: str = ""
@@ -154,16 +156,26 @@ class WorkbookWorkflowRunner:
                 )
 
             report_path = None
+            artifact_status = "not_requested"
+            artifact_error = None
             if render_report is not None:
                 report_root = Path(output_dir) if output_dir is not None else self.store.root / "artifacts"
                 report_path = report_root / report_name
-                render_report(report_path, settled_result, acceptance.state)
+                try:
+                    render_report(report_path, settled_result, acceptance.state)
+                except Exception as error:
+                    artifact_status = "failed"
+                    artifact_error = f"{type(error).__name__}: {error}"
+                else:
+                    artifact_status = "accepted"
             return WorkbookWorkflowResult(
                 status="accepted",
                 state=acceptance.state,
                 domain_result=settled_result,
                 review=review,
                 report_path=report_path,
+                artifact_status=artifact_status,
+                artifact_error=artifact_error,
                 diagnostics=engine_result.diagnostics,
                 metrics=metrics,
                 **fingerprints,

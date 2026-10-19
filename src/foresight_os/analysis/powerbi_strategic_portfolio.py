@@ -8,7 +8,7 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
-from foresight_os.analysis.workbook_inputs import MaterialView, apply_table_column_mappings, read_workbook, require_row_columns, require_table, row_evidence, table_rows
+from foresight_os.analysis.workbook_inputs import MaterialView, apply_table_column_mappings, default_workbook_contract, read_workbook, require_row_columns, require_table, row_evidence, table_rows
 from foresight_os.analysis.workbook_engine import DomainAnalysis
 from foresight_os.analysis.workbook_runner import WorkbookWorkflowRunner, merge_input_contract
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, _PeriodSpec, _parse_period, normalize_work_brief
@@ -151,15 +151,7 @@ def _forward_signal_index(signal_rows: list[dict[str, Any]], segment: str | None
 def analyze_powerbi_strategic_portfolio(source: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None, *, workbook_context: Any | None = None) -> PowerBIAnalysis:
     source = Path(source)
     sheets = ("Brief", "Dim_Region", "Dim_Segment", "Fact_Performance", "Targets", "Forward_Signals", "Measure_Definitions", "Dashboard_Snapshot", "Strategic_Options", "Change_One_Input")
-    contract = AnalysisInputContract.from_dict(input_contract) if input_contract is not None else AnalysisInputContract(
-        domain="powerbi_strategic_portfolio",
-        required_tables=sheets,
-        baseline_period="2025-01:2025-09",
-        comparison_period="2026-01:2026-09",
-        units="EUR",
-        periods=("2025-01:2025-09", "2026-01:2026-09"),
-        compatibility_assumption="legacy Power BI comparable-period defaults",
-    )
+    contract = default_workbook_contract("powerbi_strategic_portfolio") if input_contract is None else AnalysisInputContract.from_dict(input_contract)
     contract.validate()
     baseline_spec = _select_period_spec(contract, contract.baseline_period, 2025)
     comparison_spec = _select_period_spec(contract, contract.comparison_period, 2026)
@@ -308,7 +300,11 @@ def render_powerbi_report(powerbi: PowerBIAnalysis, state: AnalysisState | None 
 
 
 def _analyze_powerbi_material(material: MaterialView, contract: AnalysisInputContract) -> DomainAnalysis:
-    value = analyze_powerbi_strategic_portfolio(Path(material.source), contract, workbook_context=material)
+    value = analyze_powerbi_strategic_portfolio(
+        Path(material.source),
+        merge_input_contract(default_workbook_contract("powerbi_strategic_portfolio"), contract),
+        workbook_context=material,
+    )
     return DomainAnalysis(result=value, state=value.state)
 
 def run_powerbi_strategic_portfolio_workflow(store: AnalysisStore, source: Path, *, human_decision: str = "REJECT", output_dir: Path | None = None, input_contract: AnalysisInputContract | dict[str, Any] | None = None, workbook_context: Any | None = None) -> PowerBIWorkflowResult:
@@ -316,15 +312,7 @@ def run_powerbi_strategic_portfolio_workflow(store: AnalysisStore, source: Path,
         if input_contract is None and store.brief_path.exists():
             input_contract = normalize_work_brief(store.load_brief()).contract_for_domain("powerbi_strategic_portfolio")
         sheets = ("Brief", "Dim_Region", "Dim_Segment", "Fact_Performance", "Targets", "Forward_Signals", "Measure_Definitions", "Dashboard_Snapshot", "Strategic_Options", "Change_One_Input")
-        contract = merge_input_contract(AnalysisInputContract(
-            domain="powerbi_strategic_portfolio",
-            required_tables=sheets,
-            baseline_period="2025-01:2025-09",
-            comparison_period="2026-01:2026-09",
-            units="EUR",
-            periods=("2025-01:2025-09", "2026-01:2026-09"),
-            compatibility_assumption="legacy Power BI comparable-period defaults",
-        ), input_contract)
+        contract = merge_input_contract(default_workbook_contract("powerbi_strategic_portfolio"), input_contract)
         result = WorkbookWorkflowRunner(store).run(
             Path(source),
             contract,

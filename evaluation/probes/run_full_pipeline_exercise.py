@@ -51,6 +51,20 @@ def pipeline_passes(report: dict[str, Any]) -> bool:
     )
 
 
+def _selection_for_table(table: Any) -> SheetSelection:
+    if table.name == table.source_range:
+        return SheetSelection(
+            ranges=((table.sheet, table.source_range),),
+            include_hidden=True,
+            include_hidden_rows=True,
+        )
+    return SheetSelection(
+        tables=((table.sheet, table.name),),
+        include_hidden=True,
+        include_hidden_rows=True,
+    )
+
+
 def _run_case(source: Path, workbook: Path, scope: ParticipantScope, output_root: Path) -> dict[str, Any]:
     original_before = hashlib.sha256(source.read_bytes()).hexdigest()
     before = hashlib.sha256(workbook.read_bytes()).hexdigest()
@@ -66,11 +80,7 @@ def _run_case(source: Path, workbook: Path, scope: ParticipantScope, output_root
             store,
             scope.resolve(workbook),
             AnalysisOperation(kind="aggregate", value_column=value_column),
-            selection=SheetSelection(
-                tables=((table.sheet, table.name),),
-                include_hidden=True,
-                include_hidden_rows=True,
-            ),
+            selection=_selection_for_table(table),
             investigation_id=f"exercise-{workbook.stem}",
             human_decision="ACCEPT",
         )

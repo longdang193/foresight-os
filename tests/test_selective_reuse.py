@@ -24,6 +24,7 @@ def test_stage_receipt_reuse_revalidates_semantic_scope_and_provenance():
         provenance_complete=True,
     )
     assert receipt.reusable_for(input_fingerprint="input-v1", skill_hashes=("skill-v1",), capability_fingerprints=("local-v1",), model_config_fingerprint="model-v1", authorization_scope_fingerprint="scope-v1")
+    assert not receipt.reusable_for(input_fingerprint="input-v1", skill_hashes=("skill-v1",), capability_fingerprints=("local-v1",), model_config_fingerprint="model-v1", authorization_scope_fingerprint="scope-v1", analyzer_fingerprints=(("portfolio_resilience", "analyzer-v2"),))
     assert not receipt.reusable_for(input_fingerprint="input-v1", authorization_scope_fingerprint="scope-v2")
     assert not receipt.reusable_for(input_fingerprint="input-v1", execution_policy_fingerprint="policy-v2", skill_hashes=("skill-v1",), capability_fingerprints=("local-v1",), model_config_fingerprint="model-v1", authorization_scope_fingerprint="scope-v1")
     assert classify_reuse(receipt, reusable=True)["status"] == "reusable"

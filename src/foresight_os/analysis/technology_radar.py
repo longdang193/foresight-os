@@ -8,7 +8,7 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
-from foresight_os.analysis.workbook_inputs import MaterialView, apply_table_column_mappings, read_workbook, require_row_columns, require_table, row_evidence, table_rows
+from foresight_os.analysis.workbook_inputs import MaterialView, apply_table_column_mappings, default_workbook_contract, read_workbook, require_row_columns, require_table, row_evidence, table_rows
 from foresight_os.analysis.workbook_engine import DomainAnalysis
 from foresight_os.analysis.workbook_runner import WorkbookWorkflowRunner, merge_input_contract
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
@@ -100,12 +100,7 @@ def _action(evidence_strength: float, deployment: int, relevance: float, impact:
 
 def analyze_technology_radar(source: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None, *, workbook_context: Any | None = None) -> TechnologyAnalysis:
     source = Path(source)
-    contract = AnalysisInputContract.from_dict(input_contract) if input_contract is not None else AnalysisInputContract(
-        domain="technology_radar",
-        required_tables=("Brief", "Signals", "Company_Relevance", "Competitor_Actions", "Scenario_Signposts", "Priority_Scoring"),
-        units="index",
-        compatibility_assumption="legacy technology radar scope",
-    )
+    contract = default_workbook_contract("technology_radar") if input_contract is None else AnalysisInputContract.from_dict(input_contract)
     contract.validate()
     workbook = workbook_context if isinstance(workbook_context, MaterialView) else read_workbook(source, SheetSelection(sheet_names=("Brief", "Signals", "Company_Relevance", "Competitor_Actions", "Scenario_Signposts", "Priority_Scoring"), include_hidden=True, include_hidden_rows=True), workbook_context=workbook_context)
     digest = workbook.workbook_sha256
@@ -225,19 +220,18 @@ def render_technology_report(technology: TechnologyAnalysis, state: AnalysisStat
 
 
 def _analyze_technology_material(material: MaterialView, contract: AnalysisInputContract) -> DomainAnalysis:
-    value = analyze_technology_radar(Path(material.source), contract, workbook_context=material)
+    value = analyze_technology_radar(
+        Path(material.source),
+        merge_input_contract(default_workbook_contract("technology_radar"), contract),
+        workbook_context=material,
+    )
     return DomainAnalysis(result=value, state=value.state)
 
 def run_technology_radar_workflow(store: AnalysisStore, source: Path, *, human_decision: str = "REJECT", output_dir: Path | None = None, input_contract: AnalysisInputContract | dict[str, Any] | None = None, workbook_context: Any | None = None) -> TechnologyWorkflowResult:
     try:
         if input_contract is None and store.brief_path.exists():
             input_contract = normalize_work_brief(store.load_brief()).contract_for_domain("technology_radar")
-        contract = merge_input_contract(AnalysisInputContract(
-            domain="technology_radar",
-            required_tables=("Brief", "Signals", "Company_Relevance", "Competitor_Actions", "Scenario_Signposts", "Priority_Scoring"),
-            scenarios=("Acceleration", "Base", "Delay"),
-            compatibility_assumption="legacy technology workbook metadata defaults",
-        ), input_contract)
+        contract = merge_input_contract(default_workbook_contract("technology_radar"), input_contract)
         result = WorkbookWorkflowRunner(store).run(
             Path(source),
             contract,

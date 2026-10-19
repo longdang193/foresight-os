@@ -64,14 +64,14 @@ class WorkbookAnalysisEngine:
     ) -> WorkbookEngineResult:
         normalized_contract = AnalysisInputContract.from_dict(contract)
         active_context = context or self.context or WorkbookContext()
-        selection = dict(normalized_contract.workbook_selection)
-        if not selection and normalized_contract.required_tables:
+        spec = layout_spec or WorkbookLayoutSpec.from_contract(normalized_contract)
+        selection = spec.selection
+        if selection is None and normalized_contract.required_tables:
             selection = {
                 "sheet_names": list(normalized_contract.required_tables),
                 "include_hidden": True,
                 "include_hidden_rows": True,
             }
-        spec = layout_spec or WorkbookLayoutSpec.from_contract(normalized_contract)
         try:
             workbook = active_context.read(source, selection or None, cancel_check=cancel_check)
             layout = resolve_workbook_layout(workbook, spec)
@@ -101,4 +101,3 @@ class WorkbookAnalysisEngine:
             return WorkbookEngineResult(status="blocked_input", context=active_context, failure=str(error))
         except Exception as error:  # domain adapters convert malformed output at the workflow boundary
             return WorkbookEngineResult(status="failed", context=active_context, failure=f"{type(error).__name__}: {error}")
-

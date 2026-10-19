@@ -68,6 +68,7 @@
           ,"analysis_domains": { "type": "array", "items": { "type": "string", "minLength": 1 } }
           ,"executor_kind": { "type": "string", "enum": ["agent", "deterministic_local"] }
           ,"analysis_contract_fingerprints": { "type": "object", "additionalProperties": { "type": "string" } }
+          ,"analysis_analyzer_fingerprints": { "type": "object", "additionalProperties": { "type": "string" } }
         }
       }
     }

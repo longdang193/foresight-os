@@ -106,6 +106,7 @@ class StageInput:
     dependency_outputs: tuple[tuple[str, object], ...] = ()
     research_needs: tuple[object, ...] = ()
     analysis_contract_fingerprints: tuple[tuple[str, str], ...] = ()
+    analysis_analyzer_fingerprints: tuple[tuple[str, str], ...] = ()
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -117,6 +118,7 @@ class StageInput:
             "dependency_outputs": {stage_id: output for stage_id, output in self.dependency_outputs},
             "research_needs": self.research_needs,
             "analysis_contract_fingerprints": dict(self.analysis_contract_fingerprints),
+            "analysis_analyzer_fingerprints": dict(self.analysis_analyzer_fingerprints),
         }
 
     def __str__(self) -> str:
@@ -157,6 +159,7 @@ class RecipeStage:
     analysis_domains: tuple[str, ...] = ()
     executor_kind: str = "agent"
     analysis_contract_fingerprints: tuple[tuple[str, str], ...] = ()
+    analysis_analyzer_fingerprints: tuple[tuple[str, str], ...] = ()
 
     @property
     def typed_review_checks(self) -> tuple[str, ...]:
@@ -196,6 +199,7 @@ class RecipeStage:
              "analysis_domains": list(self.analysis_domains),
              "executor_kind": self.executor_kind,
              "analysis_contract_fingerprints": dict(self.analysis_contract_fingerprints),
+             "analysis_analyzer_fingerprints": dict(self.analysis_analyzer_fingerprints),
         }
         return value
 
@@ -236,6 +240,10 @@ class RecipeStage:
             analysis_contract_fingerprints=tuple(
                 (str(domain), str(fingerprint))
                 for domain, fingerprint in dict(value.get("analysis_contract_fingerprints", {})).items()
+            ),
+            analysis_analyzer_fingerprints=tuple(
+                (str(domain), str(fingerprint))
+                for domain, fingerprint in dict(value.get("analysis_analyzer_fingerprints", {})).items()
             ),
         )
 
