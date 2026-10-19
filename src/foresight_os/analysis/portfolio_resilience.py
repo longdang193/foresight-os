@@ -9,8 +9,8 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
-from foresight_os.analysis.workbook_inputs import MaterialView, apply_table_column_mappings, read_workbook, require_row_columns, require_table, resolve_workbook_contract, row_evidence, table_rows
-from foresight_os.analysis.workbook_engine import DomainAnalysis
+from foresight_os.analysis.workbook_inputs import MaterialView, WorkbookLayoutSpec, apply_table_column_mappings, require_row_columns, require_table, resolve_workbook_contract, row_evidence, table_rows
+from foresight_os.analysis.workbook_engine import DomainAnalysis, WorkbookAnalysisEngine, require_completed
 from foresight_os.analysis.workbook_runner import WorkbookWorkflowRunner
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
@@ -29,7 +29,7 @@ from foresight_os.domain.models import (
     SourceLocator,
 )
 from foresight_os.persistence.analysis_store import AnalysisStore
-from foresight_os.runtime.local_toolbelt import SheetSelection, ToolbeltError
+from foresight_os.runtime.local_toolbelt import ToolbeltError
 
 
 @dataclass(frozen=True)
@@ -123,6 +123,8 @@ class PortfolioWorkflowResult:
     review: ReviewResult | None
     report_path: Path | None
     failure: str | None = None
+    artifact_status: str = "not_requested"
+    artifact_error: str | None = None
 
 
 def _number(value: Any) -> float | None:
@@ -186,8 +188,20 @@ def _record(
 
 
 def analyze_portfolio_resilience(source: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None, *, workbook_context: Any | None = None) -> PortfolioAnalysis:
-    source = Path(source)
     contract = resolve_workbook_contract("portfolio_resilience", input_contract)
+    _validate_portfolio_contract(contract)
+    result = WorkbookAnalysisEngine().run(
+        Path(source),
+        contract,
+        _analyze_portfolio_material,
+        layout_spec=WorkbookLayoutSpec.from_contract(contract),
+        context=workbook_context,
+        materialize_scope=False,
+    )
+    return require_completed(result).result
+
+
+def _validate_portfolio_contract(contract: AnalysisInputContract) -> None:
     contract.validate()
     period_by_raw = {spec.raw: spec for spec in contract.period_specs}
     selected_spec = period_by_raw.get(contract.baseline_period or "") or (contract.period_specs[-1] if contract.period_specs else None)
@@ -196,17 +210,17 @@ def analyze_portfolio_resilience(source: Path, input_contract: AnalysisInputCont
         raise ValueError("unsupported period granularity for portfolio_resilience: year required")
     if comparison_spec is not None and (comparison_spec.granularity != "year" or comparison_spec.is_cross_year):
         raise ValueError("unsupported comparison period granularity for portfolio_resilience: year required")
+
+
+def _analyze_portfolio_material(material: MaterialView, contract: AnalysisInputContract) -> DomainAnalysis:
+    material.check_cancel()
+    _validate_portfolio_contract(contract)
+    period_by_raw = {spec.raw: spec for spec in contract.period_specs}
+    selected_spec = period_by_raw.get(contract.baseline_period or "") or (contract.period_specs[-1] if contract.period_specs else None)
+    comparison_spec = period_by_raw.get(contract.comparison_period or "") or (contract.period_specs[-2] if len(contract.period_specs) > 1 else None)
     selected_period = str(selected_spec.start_year if selected_spec is not None else 2026)
     comparison_period = str(comparison_spec.start_year if comparison_spec is not None else 2025)
-    workbook = workbook_context if isinstance(workbook_context, MaterialView) else read_workbook(
-        source,
-        SheetSelection(
-            sheet_names=("Brief", "Sales_History", "Fixed_Costs", "Scenario_Assumptions", "Strategic_Options", "Reported_KPIs"),
-            include_hidden=True,
-            include_hidden_rows=True,
-        ),
-        workbook_context=workbook_context,
-    )
+    workbook = material
     source_sha256 = workbook.workbook_sha256
     brief_table = _table(workbook, "Brief")
     selected_entities = set(contract.entity_scope)
@@ -596,7 +610,7 @@ def analyze_portfolio_resilience(source: Path, input_contract: AnalysisInputCont
     )
     decision_question = brief_table.columns[1] if len(brief_table.columns) > 1 and brief_table.columns[0] == "Decision question" else "Which product segments should the company prioritize?"
     horizon = next((str(row[1]) for row in brief_table.rows if row and row[0] == "Horizon" and len(row) > 1), "2027–2029")
-    return PortfolioAnalysis(
+    value = PortfolioAnalysis(
         source_sha256,
         decision_question,
         horizon,
@@ -618,6 +632,7 @@ def analyze_portfolio_resilience(source: Path, input_contract: AnalysisInputCont
         contract.fingerprint,
         reporting_unit,
     )
+    return DomainAnalysis(result=value, state=state)
 
 
 def _money(value: float | None, currency: str = "EUR") -> str:
@@ -767,15 +782,6 @@ def write_portfolio_report(path: Path, portfolio: PortfolioAnalysis, state: Anal
     path.write_text(render_portfolio_report(portfolio, state), encoding="utf-8")
 
 
-def _analyze_portfolio_material(material: MaterialView, contract: AnalysisInputContract) -> DomainAnalysis:
-    value = analyze_portfolio_resilience(
-        Path(material.source),
-        resolve_workbook_contract("portfolio_resilience", contract),
-        workbook_context=material,
-    )
-    return DomainAnalysis(result=value, state=value.state)
-
-
 def run_portfolio_resilience_workflow(
     store: AnalysisStore,
     source: Path,
@@ -798,6 +804,15 @@ def run_portfolio_resilience_workflow(
             output_dir=output_dir,
             render_report=lambda path, value, state: write_portfolio_report(path, value, state),
         )
-        return PortfolioWorkflowResult(result.status, result.state, result.domain_result, result.review, result.report_path, result.failure)
+        return PortfolioWorkflowResult(
+            result.status,
+            result.state,
+            result.domain_result,
+            result.review,
+            result.report_path,
+            result.failure,
+            result.artifact_status,
+            result.artifact_error,
+        )
     except Exception as error:
         return PortfolioWorkflowResult("failed", None, None, None, None, f"{type(error).__name__}: {error}")

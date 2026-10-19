@@ -88,6 +88,31 @@ The public `analyze` command dispatches CSV to the existing vertical slice and
 dispatches XLSX only through an explicit domain or one unambiguous domain in
 `brief.md`. Missing or ambiguous XLSX domain selection is `BLOCKED_INPUT`.
 
+Workbook defaults, lazy analyzer dispatch, and explicit analyzer versions are
+owned by `workbook_registry.py`; compatibility helpers delegate to that
+registry rather than maintaining a second map. A behavior-changing analyzer
+edit requires an explicit registry version bump so stage receipt fingerprints
+remain deterministic.
+
+Each workbook execution captures one bounded source snapshot before layout and
+materialization. That snapshot supplies reads, provenance, hashes, and receipt
+identity for the run; changing the source path after capture affects only a
+later execution. Artifact rendering is independent of accepted analytical
+state, and an accepted revision can be rendered again without rerunning
+analysis or review.
+
+The deterministic review core is importable without initializing
+`agent_framework`. Agent-assisted review remains behind the compatibility
+facade in `reviewer.py`, so provider-bound execution is not required for local
+workbook analysis or deterministic review checks.
+
+Reader and persistence counters are exposed only as measurement facts. The
+optimization probe records archive scans, selected material, formula counts,
+openpyxl loads, source capture/hash counts, materialization time, persistence
+bytes/time, and repeated process-cold samples. Candidate XLSX optimizations
+must pass correctness/resource, warm/reuse, and cold-noise-floor gates before
+they are retained; the current baseline retains no unproven reader change.
+
 ### 2. Controller and recipe
 
 The controller resolves policy into an `ExecutionRecipe`. A recipe names the

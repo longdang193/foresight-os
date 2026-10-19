@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol
 
@@ -61,6 +61,7 @@ class WorkbookAnalysisEngine:
         layout_spec: WorkbookLayoutSpec | None = None,
         context: WorkbookContext | None = None,
         cancel_check: Callable[[], bool] | None = None,
+        materialize_scope: bool = True,
     ) -> WorkbookEngineResult:
         normalized_contract = AnalysisInputContract.from_dict(contract)
         active_context = context or self.context or WorkbookContext()
@@ -73,10 +74,27 @@ class WorkbookAnalysisEngine:
                 "include_hidden_rows": True,
             }
         try:
+            if cancel_check is not None and cancel_check():
+                raise CancellationRequested("workbook analysis cancelled")
             workbook = active_context.read(source, selection or None, cancel_check=cancel_check)
+            if cancel_check is not None and cancel_check():
+                raise CancellationRequested("workbook analysis cancelled")
             layout = resolve_workbook_layout(workbook, spec)
-            material = build_material_view(workbook, layout, normalized_contract)
+            filter_contract = normalized_contract
+            if not materialize_scope:
+                filter_contract = replace(normalized_contract, entity_scope=(), periods=(), scenarios=(), units="")
+            material = build_material_view(
+                workbook,
+                layout,
+                normalized_contract,
+                filter_contract=filter_contract,
+                cancel_check=cancel_check,
+            )
+            if cancel_check is not None and cancel_check():
+                raise CancellationRequested("workbook analysis cancelled")
             value = analyzer(material, normalized_contract)
+            if cancel_check is not None and cancel_check():
+                raise CancellationRequested("workbook analysis cancelled")
             domain_result = value if isinstance(value, DomainAnalysis) else DomainAnalysis(result=value)
             metrics = {
                 "capture_count": int(active_context.stats.capture_count),
@@ -101,3 +119,12 @@ class WorkbookAnalysisEngine:
             return WorkbookEngineResult(status="blocked_input", context=active_context, failure=str(error))
         except Exception as error:  # domain adapters convert malformed output at the workflow boundary
             return WorkbookEngineResult(status="failed", context=active_context, failure=f"{type(error).__name__}: {error}")
+
+
+def require_completed(result: WorkbookEngineResult) -> DomainAnalysis:
+    """Preserve direct analyzer exceptions while sharing engine composition."""
+    if result.status == "completed" and result.domain_result is not None:
+        return result.domain_result
+    if result.status == "cancelled":
+        raise CancellationRequested(result.failure or "workbook analysis cancelled")
+    raise ToolbeltError(result.failure or f"workbook analysis {result.status}")

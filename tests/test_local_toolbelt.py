@@ -765,6 +765,20 @@ def test_xlsx_read_inspects_sheets_hidden_rows_headers_types_formulas_and_proven
     assert all(item.provenance.workbook_sha256 == result.workbook_sha256 for item in result.measurements)
 
 
+def test_xlsx_stats_capture_archive_and_materialization_work(workbook_path):
+    context = WorkbookContext()
+
+    context.read(workbook_path, SheetSelection(tables=(("Demand", "DemandTable"),)))
+
+    stats = context.stats
+    assert stats.archive_sheets_scanned == 3
+    assert stats.selected_sheet_count == 1
+    assert stats.selected_row_count > 0
+    assert stats.selected_cell_count > 0
+    assert stats.formula_count > 0
+    assert stats.materialization_time_ms > 0
+
+
 def test_xlsx_selection_can_include_hidden_sheet_and_rows_and_analysis_is_deterministic(workbook_path):
     result = spreadsheet_read(
         workbook_path,

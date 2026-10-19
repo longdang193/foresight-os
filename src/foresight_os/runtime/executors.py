@@ -297,7 +297,7 @@ class DeterministicLocalExecutor:
             return cancel_event.is_set() or bool(original_cancel_check and original_cancel_check())
 
         def run_blocking() -> Any:
-            return engine.run(source, contract, analyzer, cancel_check=cancelled)
+            return engine.run(source, contract, analyzer, cancel_check=cancelled, materialize_scope=False)
 
         if scope is not None and getattr(scope, "executor", None) is None:
             scope.executor = ThreadPoolExecutor(max_workers=1)
@@ -334,20 +334,10 @@ class DeterministicLocalExecutor:
         return result.domain_result.result
 
 
-def _default_workbook_analyzers() -> dict[str, Callable[..., Any]]:
-    from foresight_os.analysis.ev_capacity_investment import _analyze_ev_material
-    from foresight_os.analysis.portfolio_resilience import _analyze_portfolio_material
-    from foresight_os.analysis.powerbi_strategic_portfolio import _analyze_powerbi_material
-    from foresight_os.analysis.supplier_resilience import _analyze_supplier_material
-    from foresight_os.analysis.technology_radar import _analyze_technology_material
+def _default_workbook_analyzers() -> Mapping[str, Callable[..., Any]]:
+    from foresight_os.analysis.workbook_registry import workbook_analyzer_map
 
-    return {
-        "ev_capacity_investment": _analyze_ev_material,
-        "portfolio_resilience": _analyze_portfolio_material,
-        "powerbi_strategic_portfolio": _analyze_powerbi_material,
-        "supplier_resilience": _analyze_supplier_material,
-        "technology_radar": _analyze_technology_material,
-    }
+    return workbook_analyzer_map()
 
 
 @dataclass

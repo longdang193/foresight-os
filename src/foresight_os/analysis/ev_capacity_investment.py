@@ -9,14 +9,14 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
-from foresight_os.analysis.workbook_inputs import MaterialView, apply_table_column_mappings, read_workbook, require_row_columns, require_table, resolve_workbook_contract, row_evidence, table_rows
-from foresight_os.analysis.workbook_engine import DomainAnalysis
+from foresight_os.analysis.workbook_inputs import MaterialView, WorkbookLayoutSpec, apply_table_column_mappings, require_row_columns, require_table, resolve_workbook_contract, row_evidence, table_rows
+from foresight_os.analysis.workbook_engine import DomainAnalysis, WorkbookAnalysisEngine, require_completed
 from foresight_os.analysis.workbook_runner import WorkbookWorkflowRunner
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
 from foresight_os.persistence.analysis_store import AnalysisStore
-from foresight_os.runtime.local_toolbelt import SheetSelection, SourceSnapshot, ToolbeltError
+from foresight_os.runtime.local_toolbelt import SourceSnapshot, ToolbeltError
 
 
 @dataclass(frozen=True)
@@ -78,6 +78,8 @@ class EVWorkflowResult:
     review: ReviewResult | None
     report_path: Path | None
     failure: str | None = None
+    artifact_status: str = "not_requested"
+    artifact_error: str | None = None
 
 
 def _number(value: Any) -> float | None:
@@ -100,9 +102,20 @@ def _capacity_dependency_ids(capacity_rows: list[tuple[int, dict[str, Any]]], by
     return tuple(by_row[("Capacity", index)].id for index, row in capacity_rows if int(row.get("Year")) == year)
 
 def analyze_ev_capacity_investment(source: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None, *, workbook_context: Any | None = None) -> EVAnalysis:
-    source = Path(source)
-    sheets = ("Brief", "Demand_History", "Demand_Scenarios", "Capacity", "Infrastructure", "Policy_Signals", "Strategic_Options", "Reported_KPIs")
     contract = resolve_workbook_contract("ev_capacity_investment", input_contract)
+    _validate_ev_contract(contract)
+    result = WorkbookAnalysisEngine().run(
+        Path(source),
+        contract,
+        _analyze_ev_material,
+        layout_spec=WorkbookLayoutSpec.from_contract(contract),
+        context=workbook_context,
+        materialize_scope=False,
+    )
+    return require_completed(result).result
+
+
+def _validate_ev_contract(contract: AnalysisInputContract) -> None:
     contract.validate()
     selected_period = contract.period_specs[-1] if contract.period_specs else None
     if selected_period is None:
@@ -111,7 +124,16 @@ def analyze_ev_capacity_investment(source: Path, input_contract: AnalysisInputCo
         if selected_period.granularity != "year" or selected_period.is_cross_year:
             raise ValueError("unsupported period granularity for ev_capacity_investment: year required")
         selected_year = selected_period.start_year
-    workbook = workbook_context if isinstance(workbook_context, MaterialView) else read_workbook(source, SheetSelection(sheet_names=sheets, include_hidden=True, include_hidden_rows=True), workbook_context=workbook_context)
+    return None
+
+
+def _analyze_ev_material(material: MaterialView, contract: AnalysisInputContract) -> DomainAnalysis:
+    material.check_cancel()
+    _validate_ev_contract(contract)
+    sheets = ("Brief", "Demand_History", "Demand_Scenarios", "Capacity", "Infrastructure", "Policy_Signals", "Strategic_Options", "Reported_KPIs")
+    selected_period = contract.period_specs[-1] if contract.period_specs else None
+    selected_year = 2030 if selected_period is None else selected_period.start_year
+    workbook = material
     digest = workbook.workbook_sha256
     tables = {name: _table(workbook, name) for name in sheets}
     selected_regions = set(contract.entity_scope)
@@ -221,7 +243,8 @@ def analyze_ev_capacity_investment(source: Path, input_contract: AnalysisInputCo
     state = AnalysisState("ev-capacity-investment", 1, evidence=evidence, claims=claims, implications=[implication], recommendations=[recommendation], relationships=relationships, revisions=[Revision("revision-1", 1, "EV capacity analysis pending acceptance", [item.id for item in [*evidence, *calculations, *claims, implication, recommendation]])], invalidation=Invalidation(), revision_status=RevisionStatus.DRAFT, calculations=calculations)
     decision_question = next((str(row[1]) for row in tables["Brief"].rows if row and row[0] == "Decision question" and len(row) > 1), "Should the company expand, pilot, outsource, or defer EV service capacity?")
     horizon = next((str(row[1]) for row in tables["Brief"].rows if row and row[0] == "Horizon" and len(row) > 1), "2026–2030")
-    return EVAnalysis(digest, decision_question, horizon, assumptions, tuple(issues), history, tuple(scenarios), options, ("Annual demand realization by scenario", "Capacity utilization and practical availability", "Policy renewal and step-down dates", "Regional grid, charging, and service readiness", "Open KPI and expansion-cost exceptions"), recommendation.statement, state, contract.fingerprint)
+    value = EVAnalysis(digest, decision_question, horizon, assumptions, tuple(issues), history, tuple(scenarios), options, ("Annual demand realization by scenario", "Capacity utilization and practical availability", "Policy renewal and step-down dates", "Regional grid, charging, and service readiness", "Open KPI and expansion-cost exceptions"), recommendation.statement, state, contract.fingerprint)
+    return DomainAnalysis(result=value, state=state)
 
 def _money(value: float | None) -> str:
     return "n/a" if value is None else f"€{value:,.0f}"
@@ -260,14 +283,6 @@ def write_ev_report(path: Path, ev: EVAnalysis, state: AnalysisState | None = No
     path.write_text(render_ev_report(ev, state), encoding="utf-8")
 
 
-def _analyze_ev_material(material: MaterialView, contract: AnalysisInputContract) -> DomainAnalysis:
-    value = analyze_ev_capacity_investment(
-        Path(material.source),
-        resolve_workbook_contract("ev_capacity_investment", contract),
-        workbook_context=material,
-    )
-    return DomainAnalysis(result=value, state=value.state)
-
 def run_ev_capacity_investment_workflow(store: AnalysisStore, source: Path, *, human_decision: str = "REJECT", output_dir: Path | None = None, input_contract: AnalysisInputContract | dict[str, Any] | None = None, workbook_context: Any | None = None) -> EVWorkflowResult:
     try:
         if input_contract is None and store.brief_path.exists():
@@ -282,6 +297,15 @@ def run_ev_capacity_investment_workflow(store: AnalysisStore, source: Path, *, h
             output_dir=output_dir,
             render_report=lambda path, value, state: write_ev_report(path, value, state),
         )
-        return EVWorkflowResult(result.status, result.state, result.domain_result, result.review, result.report_path, result.failure)
+        return EVWorkflowResult(
+            result.status,
+            result.state,
+            result.domain_result,
+            result.review,
+            result.report_path,
+            result.failure,
+            result.artifact_status,
+            result.artifact_error,
+        )
     except Exception as error:
         return EVWorkflowResult("failed", None, None, None, None, f"{type(error).__name__}: {error}")

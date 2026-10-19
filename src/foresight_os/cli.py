@@ -149,6 +149,10 @@ def main(argv: list[str] | None = None) -> int:
         payload = {"accepted": outcome.status == "accepted", "status": outcome.status}
         if outcome.failure:
             payload["error"] = outcome.failure
+        if hasattr(outcome, "artifact_status"):
+            payload["artifact_status"] = outcome.artifact_status
+            if outcome.artifact_error:
+                payload["artifact_error"] = outcome.artifact_error
         print(json.dumps(payload))
         return 0 if outcome.status == "accepted" else 2
     if args.command == "brief":

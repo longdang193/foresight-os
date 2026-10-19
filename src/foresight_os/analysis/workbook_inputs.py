@@ -11,6 +11,7 @@ from foresight_os.domain.analysis_inputs import AnalysisInputContract, _parse_pe
 from foresight_os.domain.models import Evidence, SourceLocator
 from foresight_os.runtime.local_toolbelt import (
     CellProvenance,
+    CancellationRequested,
     MissingWorkbookInputError,
     SheetSelection,
     SourceSnapshot,
@@ -23,54 +24,9 @@ from foresight_os.runtime.local_toolbelt import (
 
 
 def default_workbook_contract(domain: str) -> AnalysisInputContract:
-    defaults = {
-        "portfolio_resilience": AnalysisInputContract(
-            domain="portfolio_resilience",
-            required_tables=("Brief", "Sales_History", "Fixed_Costs", "Scenario_Assumptions", "Strategic_Options", "Reported_KPIs"),
-            periods=("2026", "2025"),
-            baseline_period="2026",
-            comparison_period="2025",
-            scenarios=("Downside", "Base", "Upside"),
-            units="EUR",
-            reporting_currency="EUR",
-            compatibility_assumption="legacy workbook metadata defaults",
-        ),
-        "supplier_resilience": AnalysisInputContract(
-            domain="supplier_resilience",
-            required_tables=("Brief", "Supplier_Master", "Incidents", "Scenario_Assumptions", "Mitigation_Options"),
-            units="EUR",
-            reporting_currency="EUR",
-            conversion_rates={"EUR": 1.0, "USD": 0.92, "CNY": 0.13},
-            compatibility_assumption="legacy supplier workbook FX map: EUR=1.0, USD=0.92, CNY=0.13",
-        ),
-        "ev_capacity_investment": AnalysisInputContract(
-            domain="ev_capacity_investment",
-            required_tables=("Brief", "Demand_History", "Demand_Scenarios", "Capacity", "Infrastructure", "Policy_Signals", "Strategic_Options", "Reported_KPIs"),
-            periods=("2025", "2026", "2030"),
-            scenarios=("Low", "Base", "High"),
-            units="units",
-            compatibility_assumption="legacy workbook scenario defaults",
-        ),
-        "technology_radar": AnalysisInputContract(
-            domain="technology_radar",
-            required_tables=("Brief", "Signals", "Company_Relevance", "Competitor_Actions", "Scenario_Signposts", "Priority_Scoring"),
-            units="index",
-            compatibility_assumption="legacy technology radar scope",
-        ),
-        "powerbi_strategic_portfolio": AnalysisInputContract(
-            domain="powerbi_strategic_portfolio",
-            required_tables=("Brief", "Dim_Region", "Dim_Segment", "Fact_Performance", "Targets", "Forward_Signals", "Measure_Definitions", "Dashboard_Snapshot", "Strategic_Options", "Change_One_Input"),
-            baseline_period="2025-01:2025-09",
-            comparison_period="2026-01:2026-09",
-            units="EUR",
-            periods=("2025-01:2025-09", "2026-01:2026-09"),
-            compatibility_assumption="legacy Power BI comparable-period defaults",
-        ),
-    }
-    try:
-        return defaults[str(domain)]
-    except KeyError as exc:
-        raise ValueError(f"unsupported workbook analysis domain: {domain}") from exc
+    from foresight_os.analysis.workbook_registry import default_workbook_contract_for
+
+    return default_workbook_contract_for(domain)
 
 
 def resolve_workbook_contract(
@@ -93,25 +49,16 @@ def resolve_workbook_contract(
     return AnalysisInputContract.from_dict({**default.to_dict(), **overrides, "domain": domain})
 
 
-_WORKBOOK_ANALYZER_VERSIONS = {
-    "portfolio_resilience": "1",
-    "supplier_resilience": "1",
-    "ev_capacity_investment": "1",
-    "technology_radar": "1",
-    "powerbi_strategic_portfolio": "1",
-}
-
-
 def workbook_analyzer_version(domain: str) -> str:
-    try:
-        return _WORKBOOK_ANALYZER_VERSIONS[str(domain)]
-    except KeyError as exc:
-        raise ValueError(f"unsupported workbook analysis domain: {domain}") from exc
+    from foresight_os.analysis.workbook_registry import workbook_analyzer_version_for
+
+    return workbook_analyzer_version_for(domain)
 
 
 def workbook_analyzer_fingerprint(domain: str) -> str:
-    payload = f"{domain}:{workbook_analyzer_version(domain)}".encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
+    from foresight_os.analysis.workbook_registry import workbook_analyzer_fingerprint_for
+
+    return workbook_analyzer_fingerprint_for(domain)
 
 
 @dataclass(frozen=True)
@@ -243,6 +190,7 @@ class MaterialView:
     scope_fingerprint: str
     tables: tuple[tuple[str, TypedTable], ...]
     data_quality_rows: tuple[tuple[str, int, str, tuple[CellProvenance, ...]], ...] = ()
+    cancel_check: Any | None = None
 
     @property
     def workbook_sha256(self) -> str:
@@ -253,6 +201,10 @@ class MaterialView:
             if name == logical_name:
                 return table
         raise MissingWorkbookInputError(f"missing materialized workbook table: {logical_name}")
+
+    def check_cancel(self) -> None:
+        if self.cancel_check is not None and self.cancel_check():
+            raise CancellationRequested("workbook analysis cancelled")
 
 
 def resolve_workbook_layout(workbook: WorkbookReadResult, spec: WorkbookLayoutSpec) -> ResolvedWorkbookLayout:
@@ -351,13 +303,27 @@ def _row_matches_scope(
                 return False, f"required_scope_{label}_missing"
             continue
         if not _scope_matches(value, allowed, label):
-            if label == "period" and not explicitly_bound and _period_interval(value) is None:
-                continue
+            if label == "period" and not explicitly_bound:
+                try:
+                    observed_period = _parse_period(str(value).strip())
+                except ValueError:
+                    continue
+                permitted_periods = tuple(_parse_period(str(item).strip()) for item in allowed)
+                if observed_period.granularity == "year" and any(item.granularity != "year" for item in permitted_periods):
+                    continue
             return False, f"out_of_scope_{label}"
     return True, ""
 
 
-def build_material_view(workbook: WorkbookReadResult, layout: ResolvedWorkbookLayout, contract: AnalysisInputContract) -> MaterialView:
+def build_material_view(
+    workbook: WorkbookReadResult,
+    layout: ResolvedWorkbookLayout,
+    contract: AnalysisInputContract,
+    *,
+    filter_contract: AnalysisInputContract | None = None,
+    cancel_check: Any | None = None,
+) -> MaterialView:
+    active_filter_contract = filter_contract or contract
     material_tables: list[tuple[str, TypedTable]] = []
     rejected: list[tuple[str, int, str, tuple[CellProvenance, ...]]] = []
     scope_columns_by_table = dict(layout_scope for layout_scope in layout.scope_columns) if hasattr(layout, "scope_columns") else {}
@@ -367,10 +333,12 @@ def build_material_view(workbook: WorkbookReadResult, layout: ResolvedWorkbookLa
         retained_provenance: list[tuple[CellProvenance, ...]] = []
         retained_measurements: list[tuple[Any, ...]] = []
         for index, row in enumerate(table.rows):
+            if cancel_check is not None and cancel_check():
+                raise CancellationRequested("workbook analysis cancelled")
             row_mapping = dict(zip(table.columns, row, strict=False))
             keep, reason = _row_matches_scope(
                 row_mapping,
-                contract,
+                active_filter_contract,
                 scope_columns=dict(scope_columns_by_table.get(logical_name, ())),
                 required_dimensions=required_dimensions_by_table.get(logical_name, ()),
             )
@@ -414,6 +382,7 @@ def build_material_view(workbook: WorkbookReadResult, layout: ResolvedWorkbookLa
         scope_fingerprint=scope_fingerprint,
         tables=tuple(material_tables),
         data_quality_rows=tuple(rejected),
+        cancel_check=cancel_check,
     )
 
 

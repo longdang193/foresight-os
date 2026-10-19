@@ -69,6 +69,12 @@ The supported domains are `portfolio_resilience`, `supplier_resilience`,
 exactly one resolvable domain contract or the command returns `BLOCKED_INPUT`.
 CSV continues to use the provider-free `run_vertical_slice` path.
 
+The deterministic workbook and review primitives are provider-isolated: local
+analysis does not initialize agent providers, while agent-assisted review stays
+behind its explicit runtime boundary. Workbook receipts are source-bound to one
+captured snapshot, and accepted analytical state can be rendered again without
+rerunning analysis when an artifact attempt fails.
+
 The CLI also supports `inspect-powerbi` for metadata-only project inspection,
 `challenge` for recording a review challenge, and `scope-change` for recording
 a changed decision scope. Use each command’s `--help` output for the current

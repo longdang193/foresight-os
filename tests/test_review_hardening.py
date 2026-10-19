@@ -3,6 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import asyncio
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 from evaluation.probes.compare_optimization_receipts import compare
 from foresight_os.analysis.ev_capacity_investment import _capacity_dependency_ids
@@ -137,3 +141,11 @@ def test_optimization_comparison_rejects_zero_output_or_unhealthy_release():
     rss_regression = _receipt()
     rss_regression["resource"]["rss_bytes"] = 10**12
     assert not compare(baseline, rss_regression)["accepted"]
+
+
+def test_review_core_import_does_not_initialize_agent_framework():
+    script = "import sys; import foresight_os.analysis.review_core; print('agent_framework' in sys.modules)"
+    env = {**os.environ, "PYTHONPATH": str(Path.cwd() / "src")}
+    output = subprocess.check_output([sys.executable, "-c", script], text=True, env=env).strip()
+
+    assert output == "False"

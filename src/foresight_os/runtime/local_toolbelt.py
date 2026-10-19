@@ -11,6 +11,7 @@ import operator
 import posixpath
 import re
 from threading import RLock, get_ident
+from time import perf_counter
 from types import MappingProxyType
 import zipfile
 import xml.etree.ElementTree as ET
@@ -274,6 +275,12 @@ class WorkbookStats:
     currentness_hash_count: int = 0
     xlsx_parse_count: int = 0
     openpyxl_load_count: int = 0
+    archive_sheets_scanned: int = 0
+    selected_sheet_count: int = 0
+    selected_row_count: int = 0
+    selected_cell_count: int = 0
+    formula_count: int = 0
+    materialization_time_ms: float = 0.0
     cache_hits: int = 0
     analysis_cache_hits: int = 0
     snapshot_bytes: int = 0
@@ -1412,7 +1419,13 @@ def _read_delimited(
     return WorkbookReadResult(str(source), digest, (summary,), (table,), tuple(measurements))
 
 
-def _preflight_xlsx_archive(snapshot: SourceSnapshot, selection: SheetSelection | None, limits: ToolbeltLimits, cancel_check: Callable[[], bool] | None) -> None:
+def _preflight_xlsx_archive(
+    snapshot: SourceSnapshot,
+    selection: SheetSelection | None,
+    limits: ToolbeltLimits,
+    cancel_check: Callable[[], bool] | None,
+    stats: WorkbookStats | None = None,
+) -> None:
     namespaces = {
         "main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
         "rel": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
@@ -1427,6 +1440,8 @@ def _preflight_xlsx_archive(snapshot: SourceSnapshot, selection: SheetSelection 
         total_merged_range_count = 0
         total_merged_cell_count = 0
         for sheet in workbook_root.findall("main:sheets/main:sheet", namespaces):
+            if stats is not None:
+                stats.archive_sheets_scanned += 1
             title = sheet.attrib["name"]
             selected_sheet = not selection or not selection.sheet_names or title in selection.sheet_names
             target = targets.get(sheet.attrib.get(f"{{{namespaces['rel']}}}id"))
@@ -1543,7 +1558,7 @@ def spreadsheet_read(
         raise ToolbeltError("invalid workbook archive") from error
     if expanded_bytes > limits.max_expanded_bytes:
         raise ToolbeltError("workbook expanded content exceeds byte limit")
-    _preflight_xlsx_archive(snapshot, selection, limits, cancel_check)
+    _preflight_xlsx_archive(snapshot, selection, limits, cancel_check, _stats)
     if _stats is not None:
         _stats.xlsx_parse_count += 1
     digest = snapshot.sha256
@@ -1557,6 +1572,7 @@ def spreadsheet_read(
         if _stats is not None:
             _stats.openpyxl_load_count += 1
         _validate_xlsx_selection(workbook, selection)
+        materialization_started = perf_counter()
         sheets: list[SheetSummary] = []
         tables: list[TypedTable] = []
         measurements: list[TypedMeasurement] = []
@@ -1570,6 +1586,8 @@ def spreadsheet_read(
             sheets.append(summary)
             if not _in_selection(ws.title, selection):
                 continue
+            if _stats is not None:
+                _stats.selected_sheet_count += 1
             selected_tables = [table_name for sheet, table_name in (selection.tables if selection else ()) if sheet == ws.title]
             if selected_tables:
                 selected_ranges = [ws.tables[name].ref for name in selected_tables if name in ws.tables]
@@ -1597,12 +1615,16 @@ def spreadsheet_read(
                     row = source_row[0].row
                     if row in hidden_rows and not (selection and selection.include_hidden_rows):
                         continue
+                    if _stats is not None:
+                        _stats.selected_row_count += 1
                     values: list[Any] = []
                     provenance: list[CellProvenance] = []
                     row_cells: list[TypedMeasurement] = []
                     for cell, cached_cell in zip_longest(source_row, cached_row, fillvalue=None):
                         _check_cancel(cancel_check)
                         formula = cell.value if isinstance(cell.value, str) and cell.value.startswith("=") else None
+                        if formula and _stats is not None:
+                            _stats.formula_count += 1
                         cached_value = _coerce(cached_cell.value) if formula and cached_cell is not None else None
                         raw_value = cached_value if formula and cached_value is not None else cell.value
                         value = _coerce(raw_value)
@@ -1632,6 +1654,8 @@ def spreadsheet_read(
                         row_cells.append(measurements[-1])
                         values.append(value)
                         provenance.append(locator)
+                        if _stats is not None:
+                            _stats.selected_cell_count += 1
                         cell_count += 1
                         if cell_count > limits.max_cells:
                             raise ToolbeltError("workbook selection exceeds cell limit")
@@ -1664,6 +1688,8 @@ def spreadsheet_read(
                     continue
                 related.extend(CellProvenance(digest, sheet, coordinate, f"{sheet}!{coordinate}") for sheet, coordinate in measurement.cross_sheet_cells)
             finalized_tables.append(replace(table, related_provenance=tuple(dict.fromkeys(related))))
+        if _stats is not None:
+            _stats.materialization_time_ms += (perf_counter() - materialization_started) * 1000
         result = WorkbookReadResult(str(source), digest, tuple(sheets), tuple(finalized_tables), tuple(measurements))
         return _publish_read_result(
             result,

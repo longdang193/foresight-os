@@ -151,6 +151,20 @@ def test_malformed_analysis_does_not_replace_existing_file(tmp_path: Path):
     assert store.analysis_path.read_text(encoding="utf-8") == existing
 
 
+def test_analysis_store_records_validation_load_and_commit_write_metrics(tmp_path: Path):
+    store = AnalysisStore(tmp_path / "metrics")
+    state = AnalysisState("metrics", 1, revisions=[Revision("revision-1", 1, "initial state")])
+
+    store.save_analysis(state)
+    assert store.load_analysis().revision == 1
+
+    assert store.stats.validation_count >= 2
+    assert store.stats.load_count >= 1
+    assert store.stats.committed_write_count == 1
+    assert store.stats.committed_write_bytes > 0
+    assert store.stats.committed_write_time_ms >= 0
+
+
 def test_two_processes_commit_one_revision_and_one_conflict(tmp_path: Path):
     work_dir = tmp_path / "race"
     store = AnalysisStore(work_dir)

@@ -225,6 +225,21 @@ def test_comparator_rejects_large_warm_and_repeated_timing_path_regressions():
     assert result["regression"]["timing_paths_pct"]["repeated_investigation"] == 150.0
 
 
+def test_comparator_rejects_cold_regression_above_empirical_noise_floor():
+    baseline = _receipt()
+    release = deepcopy(baseline)
+    release["revision"]["commit"] = "release"
+    baseline["acceptance"]["gate_cold_noise_floor"] = True
+    release["acceptance"]["gate_cold_noise_floor"] = True
+    baseline["xlsx"]["cold_noise_floor"] = {"status": "VERIFIED", "sample_count": 10, "p50_ms": 10, "p95_ms": 11, "noise_floor_ms": 1}
+    release["xlsx"]["cold_noise_floor"] = {"status": "VERIFIED", "sample_count": 10, "p50_ms": 28, "p95_ms": 30, "noise_floor_ms": 2}
+
+    result = compare(baseline, release)
+
+    assert not result["accepted"]
+    assert result["regression"]["cold_p95_pct"] == 172.727
+
+
 def test_comparator_rejects_new_calls_for_reused_stage():
     baseline = _receipt()
     release = deepcopy(baseline)

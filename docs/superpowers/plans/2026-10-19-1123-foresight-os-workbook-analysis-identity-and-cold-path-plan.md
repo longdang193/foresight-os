@@ -1,7 +1,7 @@
 ---
 layer: change
 artifact_type: plan
-status: proposed
+status: completed
 template_id: implementation-plan
 contract_version: "1"
 name: foresight-os-workbook-analysis-identity-and-cold-path
@@ -176,7 +176,7 @@ claims and require an installation smoke test.
 - Branch: `codex/foresight-os-workbook-analysis-identity-cold-path`
 - Base commit: `958439893142d213889b4147d18d80ee83fafa23`
 - Expected workspace: clean dedicated worktree; unrelated dirty primary-checkout changes preserved and excluded
-- Next action: fetch and assert the pinned `origin/main` base before creating the worktree
+- Next action: hand off the verified worktree to the explicitly authorized Git disposition
 - Blockers: none
 
 ## Task Breakdown
@@ -186,13 +186,13 @@ claims and require an installation smoke test.
 | 1 | `completed` | lead | none | clean dedicated worktree and baseline receipts | `work/optimization-baseline/baseline-receipt.json`; pytest, isolated compile, Markdown links, and baseline probe verified |
 | 2 | `completed` | lead | 1 | source-aware identity, contract resolution, and period tests pass | `PYTHONPATH=src python -m pytest -q tests/test_analysis_input_contract.py tests/test_selective_reuse.py tests/test_workbook_engine.py tests/test_runtime_boundaries.py tests/test_execution_gate.py` passed: 119 tests; isolated `python -m compileall -q src tests evaluation` passed |
 | 3A | `completed` | lead | 2 | one authoritative snapshot and safe lock ownership | `PYTHONPATH=src python -m pytest -q tests/test_local_toolbelt.py tests/test_execution_gate.py` passed: 90 tests; source mutation, adopted snapshot, capture limits, cancellation, and lock-scope proof included |
-| 3B | `pending` | lead | 3A | public/runtime/CLI path parity | pending |
-| 3C | `pending` | lead | 3B | cancellation settlement and artifact retry behavior | pending |
-| 4 | `pending` | lead | 1-3C | behavior-neutral instrumentation and workload gates | pending |
-| 5 | `pending` | lead | 1-4 | measured candidate optimizations pass matched gates | pending |
-| 6 | `pending` | lead | 2, 3B | registry and analyzer-version tests pass | pending |
-| 7 | `pending` | lead | 3B, 3C | local review imports work without external provider initialization | pending |
-| 8 | `pending` | lead | 2-7 | full verification and documentation reconciliation pass | pending |
+| 3B | `completed` | lead | 3A | public/runtime/CLI path parity | `PYTHONPATH=src python -m pytest -q tests/test_workbook_path_parity.py tests/test_analysis_input_contract.py tests/test_supplier_and_ev_resilience.py tests/test_technology_powerbi_validator.py tests/test_brief_portability.py tests/test_workbook_engine.py tests/test_workbook_runner.py` passed; direct, standalone, CLI, and deterministic approved-runtime parity covered |
+| 3C | `completed` | lead | 3B | cancellation settlement and artifact retry behavior | `PYTHONPATH=src python -m pytest -q tests/test_workbook_runner.py tests/test_workbook_path_parity.py tests/test_cli.py tests/test_runtime_boundaries.py tests/test_local_toolbelt.py` passed; cancellation, artifact failure independence, CLI artifact fields, and retry-only rendering covered |
+| 4 | `completed` | lead | 1-3C | behavior-neutral instrumentation and workload gates | `work/optimization-baseline/instrumented-baseline-receipt.json`; focused instrumentation/comparator tests and release probe verified; matched base comparison marked reader instrumentation unavailable on the uninstrumented base |
+| 5 | `deferred` | lead | 1-4 | measured candidate optimizations pass matched gates | no XLSX reader candidate retained; baseline evidence is behavior/performance proof only and candidate optimization remains deferred |
+| 6 | `completed` | lead | 2, 3B | registry and analyzer-version tests pass | `tests/test_workbook_registry.py` plus contract/runtime boundary suites pass; lazy registry owns defaults, dispatch, and versions |
+| 7 | `completed` | lead | 3B, 3C | local review imports work without external provider initialization | `tests/test_review_hardening.py` subprocess import proof passes; provider dependency/package removal intentionally deferred |
+| 8 | `completed` | lead | 2-7 | full verification and documentation reconciliation pass | `python -m pytest -q`, `python -m compileall -q src tests evaluation`, the tracked Markdown-link checker, and `git diff --check` passed; focused anomaly-probe tests passed without changing the preserved receipt hash; Task 5 remains explicitly deferred and the retained optimization receipts remain outside the source implementation diff |
 
 ## Task Details
 
@@ -400,8 +400,8 @@ claims and require an installation smoke test.
 1. Update architecture and maintained guidance to describe source-bound receipt reuse, exact stage/domain resolution, one snapshot path, artifact independence, and separate performance gates.
 2. Run `python -m pytest -q`, `python -m compileall -q src tests evaluation`, `python scripts/check_markdown_links.py README.md AGENTS.md docs/architecture.md docs/getting-started.md docs/evidence-and-evaluation.md evaluation/README.md --tracked-docs`, and `git diff --check`.
 3. Run matched baseline/release probes for cold, warm, source-change, scope-change, reuse, and growing-history cases; compare with `evaluation/probes/compare_optimization_receipts.py`.
-4. Inspect `git diff --stat`, `git diff --name-status`, generated-surface changes, and `git status --short --branch`; confirm no primary-checkout files or disposable artifacts were copied into the branch.
-5. Record verified outcomes, retained deferrals, residual risks, and exact base/head SHAs; leave plan status `proposed` until `skill-verification-before-completion` returns `verified`.
+4. Inspect `git diff --stat`, `git diff --name-status`, generated-surface changes, and `git status --short --branch`; confirm no primary-checkout files or disposable artifacts were copied into the branch. Retain the tracked anomaly receipt as probe evidence: its runtime memory counters vary between valid runs, and the confirmed overwrite cause was the CLI test's default tracked output path, now isolated under `tmp_path`.
+5. Record verified outcomes, retained deferrals, residual risks, and exact base/head SHAs; set plan status `completed` after `skill-verification-before-completion` returns `verified`.
 **Verification:** all commands and matched gates pass, or each failed/blocked dimension is truthfully recorded as `FAILED`, `BLOCKED_INPUT`, `BLOCKED_EXTERNAL`, or `not_measured`.
 **Exit Criteria:** a fresh verification handoff can prove every implementation outcome from the plan and Git state alone.
 
