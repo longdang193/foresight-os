@@ -137,7 +137,7 @@ it; the eager path remains the safe fallback otherwise.
 | --- | --- | --- | --- | --- | --- | --- |
 | Task 1 | `completed` | new worktree | `lead controller` | none | sparse round-trip and parity tests | focused contract, runner, path-parity, execution-gate, CLI, and approval tests passed |
 | Task 2 | `completed` | new worktree | `lead controller` | Task 1 | admission/activation lifecycle tests | capability and hosted-MCP lifecycle tests passed |
-| Task 3 | `active` | new worktree | `lead controller` | Tasks 1-2 | changed-brief, history, timing, and receipt tests/probes | in progress |
+| Task 3 | `completed` | new worktree | `lead controller` | Tasks 1-2 | changed-brief, history, timing, and receipt tests/probes | verified at checkpoint `4c43576` |
 | Task 4 | `pending` | new worktree | `lead controller` | Task 3 | persistence benchmark plus stale/replay regression tests | pending |
 | Task 5 | `pending` | new worktree | `lead controller` | Task 3 | selected-sheet resource evidence and parity tests | pending |
 | Task 6 | `pending` | new worktree | `lead controller` | Tasks 1-5, with Tasks 4-5 completed or evidence-deferred | default construction proof and final suite | pending |
@@ -340,37 +340,37 @@ it; the eager path remains the safe fallback otherwise.
 - Stop for: `a probe requires credentials, network mutation, or rewriting an existing historical receipt rather than creating a new pair`
 
 **Steps:**
-- [ ] Step 1: Add a real same-workbook changed-brief workload that changes
+- [x] Step 1: Add a real same-workbook changed-brief workload that changes
   scope or a stage override and asserts one correct reassessment, preserved
   source identity, expected reuse/invalidation, and distinct analytical output.
-- [ ] Step 2: Replace the two-run history alias with configurable workloads in
+- [x] Step 2: Replace the two-run history alias with configurable workloads in
   which `history-10` is the mandatory fast scaling check, `history-100` is the
   mandatory release gate, and `history-1000` is bounded stress/manual evidence
   promoted only if the smaller workloads cannot characterize growth. Record
   compact aggregate measurements, endpoint state/token hashes, sizes,
   load/validation counts, wall time, and sampled milestones; do not persist
   hundreds or thousands of full snapshots.
-- [ ] Step 3: Record `dirty` state, exact baseline/candidate commit, source-tree
+- [x] Step 3: Record `dirty` state, exact baseline/candidate commit, source-tree
   hash, harness hash, fixture identity, workload parameters, and relevant
   environment in receipts. Baseline and candidate source identities must differ,
   while both worktrees remain clean and share the same harness, fixture,
   workload, and relevant environment identities. Each receipt's source-tree
   hash must match its own clean commit. Reject mismatched comparisons and retain
   old artifacts as historical evidence.
-- [ ] Step 4: Enable timing-path gates with repeated samples for at least the
+- [x] Step 4: Enable timing-path gates with repeated samples for at least the
   cold-workbook, repeated-investigation, changed-brief, `history-10`,
   `history-100`, and selected-sheet stress paths. Apply each path's own
   absolute noise floor plus the existing relative threshold; do not let an
   aggregate p95 hide a path-specific regression. Add comparator tests proving
   that missing changed-brief/history/timing evidence yields `NOT_MEASURED`, not
   a pass.
-- [ ] Step 5: After Tasks 1-3 pass, create a verified local checkpoint commit.
+- [x] Step 5: After Tasks 1-3 pass, create a verified local checkpoint commit.
   Use that checkpoint as the optimization baseline for Tasks 4-5. Do not use
   `2081f6caa78fe771b52014b6ad4d99c2b4118845` as the candidate acceptance
   baseline; it remains informational context only.
 
 **Verification:**
-- [ ] `python -m pytest -q tests/test_optimization_measurement.py`
+- [x] `python -m pytest -q tests/test_optimization_measurement.py`
 - [ ] Run baseline and release probe modes from clean worktrees and compare the
   resulting immutable receipt pair.
 - Expected: changed-brief, `history-10`, and `history-100` are `VERIFIED`,
@@ -616,4 +616,3 @@ The plan is ready for completion verification when:
    explicitly adds clean-wheel packaging work
 9. all final verification commands pass and fresh verification returns
    `verified`
-
