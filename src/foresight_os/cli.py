@@ -133,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         if store.brief_path.exists():
             try:
-                brief_contract = normalize_work_brief(store.load_brief()).contract_for_domain(domain)
+                brief_contract = normalize_work_brief(store.load_brief()).declared_contract_for_domain(domain)
                 contract = brief_contract
             except (OSError, ValueError) as error:
                 print(json.dumps({"status": "BLOCKED_INPUT", "error": str(error)}))

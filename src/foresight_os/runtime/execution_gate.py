@@ -154,7 +154,7 @@ class ExecutionGate:
         normalized_intent: NormalizedIntent,
     ) -> Mapping[str, AnalysisInputContract]:
         effective: dict[str, AnalysisInputContract] = {}
-        for declared in normalized_intent.contracts:
+        for declared in normalized_intent.declarations:
             if declared.stage_id is None:
                 resolved = resolve_workbook_contract(declared.domain, declared)
                 effective[f"{GLOBAL_SCOPE}:{declared.domain}"] = resolved
@@ -165,7 +165,7 @@ class ExecutionGate:
             stage_id = str(getattr(stage, "stage_id", "stage"))
             for domain in getattr(stage, "analysis_domains", ()):
                 try:
-                    declared = normalized_intent.resolve_contract_for_domain(str(domain), stage_id)
+                    declared = normalized_intent.resolve_declared_contract_for_domain(str(domain), stage_id)
                     effective[f"{stage_id}:{domain}"] = resolve_workbook_contract(str(domain), declared)
                 except ValueError as error:
                     raise ExecutionAdmissionError(str(error)) from error

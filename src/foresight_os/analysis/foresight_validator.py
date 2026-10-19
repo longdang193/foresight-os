@@ -494,8 +494,8 @@ def run_validator_workflow(
     try:
         if input_contract is None and store.brief_path.exists():
             input_contract = {
-                contract.domain: contract.to_dict()
-                for contract in normalize_work_brief(store.load_brief()).contracts
+                declaration.domain: declaration.to_dict()
+                for declaration in normalize_work_brief(store.load_brief()).declarations
             }
         result = validate_exercises(Path(validator_source), Path(exercise_dir), input_contract=input_contract, workbook_context=workbook_context)
         pending = store.save_pending(result.state)

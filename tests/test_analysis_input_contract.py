@@ -45,6 +45,30 @@ def test_analysis_input_contract_round_trips_and_fingerprints_deterministically(
     assert validate_work_brief(value)["analysis_inputs"][0]["domain"] == "supplier_resilience"
 
 
+def test_sparse_declaration_survives_validation_persistence_and_workbook_resolution(tmp_path):
+    sparse = {"domain": "supplier_resilience", "entity_scope": ["Cetus Electronics"]}
+    brief = _brief(supplier_resilience={"entity_scope": ["Cetus Electronics"]})
+
+    validated = validate_work_brief(brief)
+    assert validated["analysis_inputs"] == [sparse]
+
+    store = AnalysisStore(tmp_path / "case")
+    store.save_brief(brief)
+    restored = store.load_brief()
+    assert restored.to_dict()["analysis_inputs"] == [sparse]
+
+    normalized = normalize_work_brief(restored)
+    declaration = normalized.declared_contract_for_domain("supplier_resilience")
+    assert declaration is not None
+    assert declaration.to_dict() == sparse
+
+    from foresight_os.analysis.workbook_inputs import resolve_workbook_contract
+
+    effective = resolve_workbook_contract("supplier_resilience", declaration)
+    assert effective.entity_scope == ("Cetus Electronics",)
+    assert effective.required_tables
+
+
 def test_invalid_contract_policy_is_rejected_before_analysis():
     with pytest.raises((ValidationError, ValueError), match="duplicate policy"):
         validate_work_brief(_brief(supplier_resilience={"domain": "supplier_resilience", "duplicate_policy": "invented"}))

@@ -69,6 +69,40 @@ def _freeze(value: Any) -> Any:
 
 
 @dataclass(frozen=True)
+class AnalysisInputDeclaration:
+    """Immutable sparse declaration preserved until workbook resolution."""
+
+    values: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "values", MappingProxyType({str(key): _freeze(value) for key, value in self.values.items()}))
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any], *, domain: str | None = None) -> "AnalysisInputDeclaration":
+        data = dict(value)
+        if domain is not None:
+            data["domain"] = str(domain)
+        if not str(data.get("domain", "")).strip():
+            raise ValueError("analysis input declaration requires a domain")
+        return cls(data)
+
+    @property
+    def domain(self) -> str:
+        return str(self.values["domain"])
+
+    @property
+    def stage_id(self) -> str | None:
+        value = self.values.get("stage_id")
+        return str(value) if value is not None else None
+
+    def to_dict(self) -> dict[str, Any]:
+        return _canonical(self.values)
+
+    def resolve(self) -> "AnalysisInputContract":
+        return AnalysisInputContract.from_dict(self.to_dict())
+
+
+@dataclass(frozen=True)
 class _PeriodSpec:
     raw: str
     start_year: int
@@ -264,6 +298,7 @@ class NormalizedIntent:
     topology_requirements: tuple[str, ...] = ()
     resource_limits: dict[str, int | str] = field(default_factory=dict)
     contracts: tuple[AnalysisInputContract, ...] = ()
+    declarations: tuple[AnalysisInputDeclaration, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "stages", tuple(_freeze(item) for item in self.stages))
@@ -297,6 +332,42 @@ class NormalizedIntent:
 
     def resolve_contract_for_domain(self, domain: str, stage_id: str) -> AnalysisInputContract:
         return self._resolve_contract(domain, stage_id, required=True)
+
+    def declared_contract_for_domain(self, domain: str, stage_id: str | None = None) -> AnalysisInputDeclaration | None:
+        return self._resolve_declaration(domain, stage_id, required=False)
+
+    def resolve_declared_contract_for_domain(self, domain: str, stage_id: str) -> AnalysisInputDeclaration:
+        declaration = self._resolve_declaration(domain, stage_id, required=True)
+        assert declaration is not None
+        return declaration
+
+    def _resolve_declaration(
+        self,
+        domain: str,
+        stage_id: str | None,
+        *,
+        required: bool,
+    ) -> AnalysisInputDeclaration | None:
+        wanted = str(domain).lower()
+        scoped = [
+            declaration
+            for declaration in self.declarations
+            if stage_id is not None and declaration.stage_id == str(stage_id) and declaration.domain.lower() == wanted
+        ]
+        global_matches = [
+            declaration
+            for declaration in self.declarations
+            if declaration.stage_id is None and declaration.domain.lower() == wanted
+        ]
+        candidates = scoped or global_matches
+        if len(candidates) > 1:
+            scope = str(stage_id) if scoped else GLOBAL_SCOPE
+            raise ValueError(f"ambiguous analysis input contract scope: {scope}:{domain}")
+        if candidates:
+            return candidates[0]
+        if required:
+            raise ValueError(f"missing analysis input contract: {stage_id}:{domain}")
+        return None
 
     def _resolve_contract(
         self,
@@ -351,7 +422,8 @@ def normalize_work_brief(brief: Any) -> NormalizedIntent:
         contracts_value = expanded
     stages = tuple(dict(stage) for stage in value.get("stages", ()))
     stage_ids = {str(stage.get("stage_id", "")) for stage in stages}
-    contracts = tuple(AnalysisInputContract.from_dict(item) for item in contracts_value)
+    declarations = tuple(AnalysisInputDeclaration.from_dict(item) for item in contracts_value)
+    contracts = tuple(declaration.resolve() for declaration in declarations)
     seen_scopes: set[tuple[str, str]] = set()
     for contract in contracts:
         contract.validate()
@@ -398,4 +470,5 @@ def normalize_work_brief(brief: Any) -> NormalizedIntent:
         topology_requirements=tuple(str(item) for item in (value.get("execution_intent") or {}).get("required_patterns", ())),
         resource_limits=resource_limits,
         contracts=contracts,
+        declarations=declarations,
     )
