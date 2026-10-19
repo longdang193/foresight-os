@@ -148,7 +148,7 @@ introduced by this plan.
 | --- | --- | --- | --- | --- | --- | --- |
 | Task 1 | `completed` | dedicated clean worktree | `lead controller` | none | focused contract tests | `tests/test_analysis_input_contract.py`, `tests/test_work_brief_compatibility.py`, `tests/test_analysis_schema.py` pass |
 | Task 2 | `completed` | dedicated clean worktree | `lead controller` | Task 1 | identity, approval, and capability boundary proof | focused Task 2 suite passes; persisted alias admission and material-change rejection pass |
-| Task 3 | `completed` | dedicated clean worktree | `lead controller` | Task 2 | verified benchmark checkpoint | `97e81fa`; clean baseline receipt: `work/optimization-runs/task3-clean2/baseline.json` |
+| Task 3 | `completed` | dedicated clean worktree | `lead controller` | Task 2 | verified benchmark checkpoint | `20a3503`; clean baseline receipt: `work/optimization-runs/task3-final2/baseline.json` |
 | Task 4 | `active` | dedicated clean worktree | `lead controller` | Task 3 | instrumentation checkpoint, history proof, conditional candidate | pending |
 | Task 5 | `pending` | dedicated clean worktree | `lead controller` | Task 3 | reader parity and resource evidence, or explicit deferral | pending |
 
