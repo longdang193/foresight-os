@@ -562,7 +562,7 @@ class AnalysisStore:
         self.stats.json_decode_count += 1
         self.stats.json_decode_time_ms += (perf_counter() - decode_started) * 1000
         value = migrate_analysis_dict(raw)
-        value = self._validate_analysis(value)
+        value = self._validate_analysis(value, assume_json_shape=True)
         hydration_started = perf_counter()
         evidence = [
             Evidence(
@@ -692,9 +692,9 @@ class AnalysisStore:
         self.stats.load_time_ms += (perf_counter() - started) * 1000
         return result
 
-    def _validate_analysis(self, value: AnalysisState | dict) -> dict:
+    def _validate_analysis(self, value: AnalysisState | dict, *, assume_json_shape: bool = False) -> dict:
         started = perf_counter()
-        result = validate_analysis(value)
+        result = validate_analysis(value, assume_json_shape=assume_json_shape)
         self.stats.validation_count += 1
         self.stats.validation_time_ms += (perf_counter() - started) * 1000
         return result
