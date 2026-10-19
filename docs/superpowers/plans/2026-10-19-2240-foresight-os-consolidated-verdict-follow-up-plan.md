@@ -150,7 +150,7 @@ introduced by this plan.
 | Task 2 | `completed` | dedicated clean worktree | `lead controller` | Task 1 | identity, approval, and capability boundary proof | focused Task 2 suite passes; persisted alias admission and material-change rejection pass |
 | Task 3 | `completed` | dedicated clean worktree | `lead controller` | Task 2 | verified benchmark checkpoint | `e1ec537`; clean baseline/release receipts and `PASS` comparison: `work/optimization-runs/task3-final3/` |
 | Task 4 | `completed` | dedicated clean worktree | `lead controller` | Task 3 | instrumentation checkpoint, history proof, conditional candidate | `6ada464`; `work/optimization-runs/task4-instrumentation/release.json`; candidate `e74decc` deferred and reverted by `560dc78` |
-| Task 5 | `completed` | dedicated clean worktree | `lead controller` | Task 3 | reader parity and resource evidence, or explicit deferral | selected-sheet scaling is material, but `read_only=True` lacks tables, merged cells, and row dimensions; eager reader retained |
+| Task 5 | `completed` | dedicated clean worktree | `lead controller` | Task 3 | reader parity and resource evidence, or explicit deferral | `work/optimization-runs/task5-reader/reader-decision.json`; selected-sheet scaling is material, but `read_only=True` lacks tables, merged cells, and row dimensions; eager reader retained |
 
 ## Task Breakdown
 
