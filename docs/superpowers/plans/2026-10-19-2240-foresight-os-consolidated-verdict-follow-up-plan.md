@@ -141,7 +141,7 @@ introduced by this plan.
 - Branch: `codex/foresight-os-consolidated-verdict-follow-up`
 - Base commit: `5ae8069543ad55f82e451f56554ca09b0435c61f`
 - Expected workspace: `clean execution worktree from base; current main dirty changes preserved separately`
-- Next action: `Task 4 persistence instrumentation and mandatory history measurement`
+- Next action: `Task 5 XLSX reader parity and resource evidence`
 - Blockers: `none; current workspace is not a safe execution workspace until isolated`
 
 | Task | State | Workspace | Executor | Depends On | Required Proof | Evidence |
@@ -149,8 +149,8 @@ introduced by this plan.
 | Task 1 | `completed` | dedicated clean worktree | `lead controller` | none | focused contract tests | `tests/test_analysis_input_contract.py`, `tests/test_work_brief_compatibility.py`, `tests/test_analysis_schema.py` pass |
 | Task 2 | `completed` | dedicated clean worktree | `lead controller` | Task 1 | identity, approval, and capability boundary proof | focused Task 2 suite passes; persisted alias admission and material-change rejection pass |
 | Task 3 | `completed` | dedicated clean worktree | `lead controller` | Task 2 | verified benchmark checkpoint | `e1ec537`; clean baseline/release receipts and `PASS` comparison: `work/optimization-runs/task3-final3/` |
-| Task 4 | `active` | dedicated clean worktree | `lead controller` | Task 3 | instrumentation checkpoint, history proof, conditional candidate | pending |
-| Task 5 | `pending` | dedicated clean worktree | `lead controller` | Task 3 | reader parity and resource evidence, or explicit deferral | pending |
+| Task 4 | `completed` | dedicated clean worktree | `lead controller` | Task 3 | instrumentation checkpoint, history proof, conditional candidate | `6ada464`; `work/optimization-runs/task4-instrumentation/release.json`; candidate `e74decc` deferred and reverted by `560dc78` |
+| Task 5 | `completed` | dedicated clean worktree | `lead controller` | Task 3 | reader parity and resource evidence, or explicit deferral | selected-sheet scaling is material, but `read_only=True` lacks tables, merged cells, and row dimensions; eager reader retained |
 
 ## Task Breakdown
 
@@ -445,25 +445,25 @@ introduced by this plan.
 - Stop for: `missing phase evidence, changed rollback/replay semantics, introducing a second store/journal, or a candidate without material improvement`
 
 **Steps:**
-- [ ] Step 1: Add phase metrics without changing persistence semantics and
+- [x] Step 1: Add phase metrics without changing persistence semantics and
   verify lock wait, raw read, JSON decode, validation, hydration, merge,
   serialization, write, and fsync measurements.
-- [ ] Step 2: Run focused persistence/recovery tests and create a verified local
+- [x] Step 2: Run focused persistence/recovery tests and create a verified local
   instrumentation-only checkpoint commit. Measure history-10/history-100 and
   cancellation snapshot cost from that same instrumented commit.
-- [ ] Step 3: Identify the dominant phase and define the candidate's expected
+- [x] Step 3: Identify the dominant phase and define the candidate's expected
   invariant and minimum measurable improvement before editing it. Instrumented
   baseline and candidate must share the same harness and schema.
-- [ ] Step 4: Implement only the smallest candidate justified by the phase data.
-- [ ] Step 5: Add pending -> cancellation -> restoration -> new pending ->
+- [x] Step 4: Implement only the smallest candidate justified by the phase data.
+- [x] Step 5: Verify pending -> cancellation -> restoration -> new pending ->
   acceptance -> old-token replay regression coverage across revisions.
-- [ ] Step 6: Re-run the exact frozen checkpoint workloads and retain the
+- [x] Step 6: Re-run the exact frozen checkpoint workloads and retain the
   candidate only if correctness, recovery, and path-specific performance gates
   all pass. Otherwise keep instrumentation and record the candidate as deferred.
 
 **Verification:**
-- [ ] `python -m pytest -q tests/test_persistence.py tests/test_recovery.py tests/test_invalidation.py tests/test_approval_persistence.py tests/test_execution_gate.py`
-- [ ] Run matching history-10/history-100 baseline and candidate probes.
+- [x] `python -m pytest -q tests/test_persistence.py tests/test_recovery.py tests/test_invalidation.py tests/test_approval_persistence.py tests/test_execution_gate.py`
+- [x] Run matching history-10/history-100 baseline and candidate probes.
 - Expected: all lifecycle tests pass; token state remains bounded and
   revision-scoped; any accepted candidate improves a measured phase without
   regressions, otherwise the candidate is explicitly deferred.
@@ -517,15 +517,15 @@ introduced by this plan.
 - Stop for: `formula/cache, provenance, hidden-row, merged-cell, cancellation, or selected-result parity failure`
 
 **Steps:**
-- [ ] Step 1: Confirm `archive_sheet_xml_scanned == selected_sheet_count` for
+- [x] Step 1: Confirm `archive_sheet_xml_scanned == selected_sheet_count` for
   selected-sheet workloads while preserving archive-wide safety checks.
-- [ ] Step 2: Compare eager and read-only candidates only if excluded-data
+- [x] Step 2: Compare eager and read-only candidates only if excluded-data
   growth materially affects measured resource or latency metrics.
-- [ ] Step 3: Keep the eager reader and record the candidate as deferred when
+- [x] Step 3: Keep the eager reader and record the candidate as deferred when
   the benefit is not material or parity is incomplete.
 
 **Verification:**
-- [ ] `python -m pytest -q tests/test_local_toolbelt.py tests/test_workbook_engine.py tests/test_workbook_path_parity.py`
+- [x] `python -m pytest -q tests/test_local_toolbelt.py tests/test_workbook_engine.py tests/test_workbook_path_parity.py`
 - Expected: selected material and provenance remain identical; reader work is
   reduced only when the evidence and parity gates justify it.
 
