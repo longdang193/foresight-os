@@ -869,6 +869,8 @@ def _stage_fingerprints(
         "horizon": input_payload.get("horizon", ""),
         "relevant_constraints": input_payload.get("relevant_constraints", ()),
         "analysis_contract_fingerprints": input_payload.get("analysis_contract_fingerprints", {}),
+            "analysis_analyzer_fingerprints": input_payload.get("analysis_analyzer_fingerprints", {}),
+        "analysis_analyzer_fingerprints": input_payload.get("analysis_analyzer_fingerprints", {}),
         "dependency_result_hashes": {
             stage_id: _canonical_result_hash(output)
             for stage_id, output in dict(dependency_outputs).items()
@@ -1184,6 +1186,7 @@ async def run_recipe_async(
             "semantic": semantic_fingerprint,
             "execution_policy": execution_policy_fingerprint,
             "analysis_contracts": tuple(stage_input.analysis_contract_fingerprints),
+            "analysis_analyzers": tuple(stage_input.analysis_analyzer_fingerprints),
         }
         stage_context["result_contract"] = str(getattr(stage, "result_contract", ANALYSIS_STAGE_RESULT_CONTRACT))
         stage_context["require_structured_output"] = bool(context.get("require_structured_output", False))
@@ -1213,6 +1216,7 @@ async def run_recipe_async(
                 capability_fingerprints=tuple(context.get("capability_fingerprints", ())),
                 model_config_fingerprint=str(context.get("model_config_fingerprint", "")),
                 authorization_scope_fingerprint=str(context.get("authorization_scope_fingerprint", "")),
+                analyzer_fingerprints=tuple(stage_input.analysis_analyzer_fingerprints),
             ) and _canonical_provenance_matches(
                 receipt.result_references,
                 receipt.result_hashes,
@@ -1499,6 +1503,7 @@ async def run_recipe_async(
             capability_fingerprints=tuple(context.get("capability_fingerprints", ())),
             model_config_fingerprint=str(context.get("model_config_fingerprint", "")),
             authorization_scope_fingerprint=str(context.get("authorization_scope_fingerprint", "")),
+            analyzer_fingerprints=tuple(stage_input.analysis_analyzer_fingerprints),
             result_references=canonical.result_references,
             result_hashes=canonical.result_hashes,
             status="committed",
@@ -1603,6 +1608,21 @@ async def run_recipe_async(
                 research_needs=tuple(getattr(stage, "research_needs", ()) or ()),
                 analysis_contract_fingerprints=tuple(
                     sorted(relevant_contract_fingerprints.items())
+                ),
+                analysis_analyzer_fingerprints=tuple(
+                    sorted(
+                        {
+                            domain: context.get("analysis_analyzer_fingerprints", {}).get(
+                                f"{stage_id}:{domain}",
+                                context.get("analysis_analyzer_fingerprints", {}).get(domain, ""),
+                            )
+                            for domain in declared_domains
+                            if context.get("analysis_analyzer_fingerprints", {}).get(
+                                f"{stage_id}:{domain}",
+                                context.get("analysis_analyzer_fingerprints", {}).get(domain),
+                            ) is not None
+                        }.items()
+                    )
                 ),
             )
             stage_outputs, current = await dispatch_stage(stage, stage_input)

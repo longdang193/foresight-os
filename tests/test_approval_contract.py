@@ -33,13 +33,21 @@ def test_recipe_rejects_negative_limits():
         validate_execution_recipe(recipe)
 
 
-def test_recipe_round_trips_analysis_domains_from_approved_stage_artifacts():
+def test_recipe_rejects_multiple_domains_for_agent_stage():
     recipe = make_recipe(RecipeName.DIRECT).to_dict()
     recipe["stages"][0]["analysis_domains"] = ["market", "retailer"]
 
-    validated = validate_execution_recipe(recipe)
+    with pytest.raises(ValidationError, match="must not declare analysis domains"):
+        validate_execution_recipe(recipe)
 
-    assert validated["stages"][0]["analysis_domains"] == ["market", "retailer"]
+
+def test_recipe_rejects_invalid_deterministic_domain_cardinality():
+    recipe = make_recipe(RecipeName.DIRECT).to_dict()
+    recipe["stages"][0]["executor_kind"] = "deterministic_local"
+    recipe["stages"][0]["analysis_domains"] = []
+
+    with pytest.raises(ValidationError, match="exactly one analysis domain"):
+        validate_execution_recipe(recipe)
 
 
 def test_legacy_analysis_contract_domains_are_loaded_into_stage_scope():

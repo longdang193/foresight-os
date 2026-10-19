@@ -1,6 +1,9 @@
 from dataclasses import dataclass
+import asyncio
 import inspect
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Mapping
 
 from agent_framework import Agent, ChatMiddleware
@@ -250,7 +253,7 @@ class DeterministicLocalExecutor:
             return await result if inspect.isawaitable(result) else result
 
         domains = tuple(str(item) for item in getattr(self.stage, "analysis_domains", ()))
-        analyzers = self.run_context.get("workbook_analyzers", {})
+        analyzers = self.run_context.get("workbook_analyzers") or _default_workbook_analyzers()
         source = self.run_context.get("workbook_source")
         contracts = self.run_context.get("analysis_contracts", {})
         if len(domains) != 1 or source is None or not isinstance(analyzers, Mapping):
@@ -262,13 +265,74 @@ class DeterministicLocalExecutor:
             raise ValueError(f"deterministic-local stage is not bound to workbook domain: {domain}")
         from foresight_os.analysis.workbook_engine import WorkbookAnalysisEngine
 
-        engine = self.run_context.get("workbook_engine") or WorkbookAnalysisEngine(
-            context=self.run_context.get("workbook_context")
-        )
-        result = engine.run(source, contract, analyzer, cancel_check=self.run_context.get("cancel_check"))
+        scope = self.run_context.get("scope")
+        workbook_context = self.run_context.get("workbook_context")
+        if workbook_context is None and scope is not None:
+            workbook_context = getattr(scope, "workbook_context", None)
+        if workbook_context is None and scope is not None:
+            from foresight_os.runtime.local_toolbelt import WorkbookContext
+
+            workbook_context = WorkbookContext()
+            scope.workbook_context = workbook_context
+        engine = self.run_context.get("workbook_engine") or WorkbookAnalysisEngine(context=workbook_context)
+        cancel_event = threading.Event()
+        original_cancel_check = self.run_context.get("cancel_check")
+
+        def cancelled() -> bool:
+            return cancel_event.is_set() or bool(original_cancel_check and original_cancel_check())
+
+        def run_blocking() -> Any:
+            return engine.run(source, contract, analyzer, cancel_check=cancelled)
+
+        if scope is not None and getattr(scope, "executor", None) is None:
+            scope.executor = ThreadPoolExecutor(max_workers=1)
+        executor = getattr(scope, "executor", None) if scope is not None else None
+        if executor is None:
+            executor = ThreadPoolExecutor(max_workers=1)
+            owns_executor = True
+        else:
+            owns_executor = False
+        future = asyncio.get_running_loop().run_in_executor(executor, run_blocking)
+        try:
+            result = await asyncio.shield(future)
+        except asyncio.CancelledError:
+            cancel_event.set()
+            while not future.done():
+                try:
+                    await asyncio.shield(future)
+                except asyncio.CancelledError:
+                    continue
+            if owns_executor:
+                executor.shutdown(wait=True, cancel_futures=False)
+            raise
+        finally:
+            if owns_executor:
+                executor.shutdown(wait=True, cancel_futures=False)
         if result.status != "completed" or result.domain_result is None:
-            raise ValueError(result.failure or f"deterministic workbook analysis {result.status}")
+            if result.status == "cancelled":
+                from foresight_os.runtime.metrics import RunCanceledError
+
+                raise RunCanceledError(result.failure or "deterministic workbook analysis cancelled")
+            if result.status == "blocked_input":
+                raise ValueError(f"BLOCKED_INPUT: {result.failure or 'deterministic workbook input is invalid'}")
+            raise RuntimeError(result.failure or f"deterministic workbook analysis {result.status}")
         return result.domain_result.result
+
+
+def _default_workbook_analyzers() -> dict[str, Callable[..., Any]]:
+    from foresight_os.analysis.ev_capacity_investment import _analyze_ev_material
+    from foresight_os.analysis.portfolio_resilience import _analyze_portfolio_material
+    from foresight_os.analysis.powerbi_strategic_portfolio import _analyze_powerbi_material
+    from foresight_os.analysis.supplier_resilience import _analyze_supplier_material
+    from foresight_os.analysis.technology_radar import _analyze_technology_material
+
+    return {
+        "ev_capacity_investment": _analyze_ev_material,
+        "portfolio_resilience": _analyze_portfolio_material,
+        "powerbi_strategic_portfolio": _analyze_powerbi_material,
+        "supplier_resilience": _analyze_supplier_material,
+        "technology_radar": _analyze_technology_material,
+    }
 
 
 @dataclass

@@ -93,3 +93,73 @@ def test_engine_maps_missing_selection_to_blocked_input(tmp_path):
 
     assert result.status == "blocked_input"
     assert "missing workbook sheet" in (result.failure or "")
+
+
+def test_explicit_table_selection_fails_closed_when_table_is_missing(tmp_path):
+    source = _workbook(tmp_path)
+    contract = AnalysisInputContract(
+        domain="test",
+        required_tables=("Data",),
+        workbook_selection={"tables": [["Data", "MissingTable"]]},
+    )
+
+    result = WorkbookAnalysisEngine().run(source, contract, lambda material, normalized: material)
+
+    assert result.status == "blocked_input"
+    assert "missing workbook table" in (result.failure or "")
+
+
+def test_scope_requires_applicable_dimensions_and_filters_period_and_units(tmp_path):
+    source = tmp_path / "scoped.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Data"
+    sheet.append(["Entity", "Period", "Unit", "Value"])
+    sheet.append(["North", "2025-02", "EUR", 1])
+    sheet.append(["North", "2025-10", "EUR", 2])
+    sheet.append(["North", "2025-02", "USD", 3])
+    sheet.append([None, "2025-02", "EUR", 4])
+    workbook.save(source)
+    contract = AnalysisInputContract(
+        domain="test",
+        required_tables=("Data",),
+        entity_scope=("North",),
+        periods=("2025-01:2025-09",),
+        units="EUR",
+        workbook_selection={
+            "sheet": "Data",
+            "required_scope_dimensions": {"Data": ["entity", "period", "unit"]},
+        },
+    )
+
+    result = WorkbookAnalysisEngine().run(source, contract, lambda material, normalized: material)
+
+    assert result.status == "completed"
+    assert result.material_view is not None
+    assert result.material_view.table("Data").rows == (("North", "2025-02", "EUR", 1),)
+    assert {reason for _, _, reason, _ in result.material_view.data_quality_rows} == {
+        "out_of_scope_period",
+        "out_of_scope_unit",
+        "required_scope_entity_missing",
+    }
+
+
+def test_declared_table_alias_compiles_physical_selection(tmp_path):
+    source = tmp_path / "aliased.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Physical Data"
+    sheet.append(["Value"])
+    sheet.append([7])
+    workbook.save(source)
+    contract = AnalysisInputContract(
+        domain="test",
+        required_tables=("LogicalData",),
+        workbook_selection={"table_aliases": {"LogicalData": "Physical Data"}},
+    )
+
+    result = WorkbookAnalysisEngine().run(source, contract, lambda material, normalized: material.table("LogicalData").rows[0][0])
+
+    assert result.status == "completed"
+    assert result.domain_result is not None
+    assert result.domain_result.result == 7

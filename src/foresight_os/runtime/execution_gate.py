@@ -11,8 +11,10 @@ from foresight_os.controller.recipes import ExecutionRecipe
 from foresight_os.analysis.result_committer import ANALYSIS_STAGE_RESULT_CONTRACT, CanonicalResultCommitter, analysis_stage_result_schema
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.domain.analysis_inputs import GLOBAL_SCOPE, normalize_work_brief
+from foresight_os.analysis.workbook_inputs import workbook_analyzer_fingerprint
 from foresight_os.persistence.ids import canonical_json_hash
 from foresight_os.runtime.capabilities import CapabilityUnavailableError, admit_capability_context
+from foresight_os.runtime.local_toolbelt import SourceSnapshot, ToolbeltError
 from foresight_os.runtime.workflow import run_recipe_async
 
 
@@ -50,7 +52,12 @@ def _assert_store_writable(store: AnalysisStore) -> None:
         raise ExecutionAdmissionError(f"RESULT_PERSISTENCE_UNAVAILABLE: analysis store is not writable: {exc}") from exc
 
 
-def _preflight_recipe(store: AnalysisStore, recipe: ExecutionRecipe, run_context: dict[str, Any]) -> None:
+def _preflight_recipe(
+    store: AnalysisStore,
+    recipe: ExecutionRecipe,
+    run_context: dict[str, Any],
+    workbook_source: Path | None = None,
+) -> str:
     _assert_store_writable(store)
     for stage in recipe.stages:
         contract = str(getattr(stage, "result_contract", ""))
@@ -77,6 +84,16 @@ def _preflight_recipe(store: AnalysisStore, recipe: ExecutionRecipe, run_context
             raise ExecutionAdmissionError(f"capability preflight failed: {exc}") from exc
     if not isinstance(analysis_stage_result_schema(), dict):
         raise ExecutionAdmissionError("structured output schema is unavailable")
+    if any(str(getattr(stage, "executor_kind", "agent")) == "deterministic_local" for stage in recipe.stages):
+        if workbook_source is None:
+            raise ExecutionAdmissionError("BLOCKED_INPUT: deterministic execution requires --workbook")
+        if workbook_source.suffix.lower() not in {".xlsx", ".xlsm"} or not workbook_source.is_file():
+            raise ExecutionAdmissionError(f"BLOCKED_INPUT: invalid workbook source: {workbook_source}")
+        try:
+            return SourceSnapshot.capture(workbook_source).sha256
+        except (OSError, ToolbeltError) as exc:
+            raise ExecutionAdmissionError(f"BLOCKED_INPUT: cannot capture workbook source: {exc}") from exc
+    return ""
 
 
 def classify_material_changes(before: dict[str, Any], after: dict[str, Any], envelope: AdaptationEnvelope) -> tuple[dict[str, Any], ...]:
@@ -103,13 +120,22 @@ class ApprovedExecution:
     approval_fingerprint: str
     run_decisions: dict[str, Any]
     recipe: ExecutionRecipe
+    workbook_source: Path | None = None
+    workbook_source_sha256: str = ""
 
 
 class ExecutionGate:
     def __init__(self, store: AnalysisStore):
         self.store = store
 
-    def admit(self, *, prompt: str, run_id: str | None = None, run_context: dict[str, Any] | None = None) -> ApprovedExecution:
+    def admit(
+        self,
+        *,
+        prompt: str,
+        run_id: str | None = None,
+        run_context: dict[str, Any] | None = None,
+        workbook_source: str | Path | None = None,
+    ) -> ApprovedExecution:
         with FileLock(str(self.store.lock_path)):
             if not self.store.brief_path.exists():
                 raise ExecutionAdmissionError("execution requires a persisted WorkBrief")
@@ -138,7 +164,13 @@ class ExecutionGate:
                 raise ExecutionAdmissionError("persisted recipe no longer matches the approved snapshot")
             if approval.investigation_id != brief.investigation_id:
                 raise ExecutionAdmissionError("approval investigation does not match the WorkBrief")
-            _preflight_recipe(self.store, recipe, _local_capability_context(self.store, run_context))
+            source_path = Path(workbook_source).resolve() if workbook_source is not None else None
+            source_sha256 = _preflight_recipe(
+                self.store,
+                recipe,
+                _local_capability_context(self.store, run_context),
+                source_path,
+            )
             return ApprovedExecution(
                 work_dir=self.store.root,
                 prompt=prompt,
@@ -150,6 +182,8 @@ class ExecutionGate:
                     "fallback_on_stale_reuse": envelope.fallback_on_stale_reuse,
                 },
                 recipe=recipe,
+                workbook_source=source_path,
+                workbook_source_sha256=source_sha256,
             )
 
     async def execute(
@@ -159,13 +193,23 @@ class ExecutionGate:
         client: Any | None = None,
         run_id: str | None = None,
         run_context: dict[str, Any] | None = None,
+        workbook_source: str | Path | None = None,
     ):
-        admission = self.admit(prompt=prompt, run_id=run_id, run_context=run_context)
+        admission = self.admit(
+            prompt=prompt,
+            run_id=run_id,
+            run_context=run_context,
+            workbook_source=workbook_source,
+        )
         with FileLock(str(self.store.lock_path)):
             current_approval = self.store.load_execution_approval()
             if current_approval is None or current_approval.status != ApprovalStatus.APPROVED or current_approval.projection_fingerprint != admission.approval_fingerprint:
                 raise ExecutionAdmissionError("approval was superseded before dispatch")
-        if client is None:
+        has_external_stage = any(
+            str(getattr(stage, "executor_kind", "agent")) != "deterministic_local"
+            for stage in admission.recipe.stages or ()
+        )
+        if client is None and has_external_stage:
             raise ExecutionAdmissionError("approved execution requires a configured client")
         brief = self.store.load_brief()
         normalized_intent = normalize_work_brief(brief)
@@ -182,8 +226,23 @@ class ExecutionGate:
             "structured_output_schema": analysis_stage_result_schema(),
             "canonical_result_committer": CanonicalResultCommitter(self.store, self.store.load_brief().investigation_id),
             "normalized_intent": normalized_intent,
+            "workbook_source": admission.workbook_source,
+            "workbook_source_sha256": admission.workbook_source_sha256,
+            "source_revision": admission.workbook_source_sha256,
+            "analysis_contracts": {
+                contract.domain: contract.to_dict()
+                for contract in normalized_intent.contracts
+            },
             "analysis_contract_fingerprints": {
                 key: contract.fingerprint
+                for contract in normalized_intent.contracts
+                for key in (
+                    (f"{contract.stage_id or GLOBAL_SCOPE}:{contract.domain}",)
+                    + ((contract.domain,) if contract.stage_id is None else ())
+                )
+            },
+            "analysis_analyzer_fingerprints": {
+                key: workbook_analyzer_fingerprint(contract.domain)
                 for contract in normalized_intent.contracts
                 for key in (
                     (f"{contract.stage_id or GLOBAL_SCOPE}:{contract.domain}",)
@@ -200,10 +259,12 @@ async def execute_approved_investigation(
     client: Any | None = None,
     run_id: str | None = None,
     run_context: dict[str, Any] | None = None,
+    workbook_source: str | Path | None = None,
 ):
     return await ExecutionGate(AnalysisStore(work_dir)).execute(
         prompt=prompt,
         client=client,
         run_id=run_id,
         run_context=run_context,
+        workbook_source=workbook_source,
     )

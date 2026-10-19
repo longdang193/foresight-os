@@ -310,6 +310,28 @@ class StageAnalyticalResult:
         return records
 
 
+def stage_result_from_analysis_state(
+    value: object,
+    *,
+    stage_id: str,
+    contract: str,
+) -> StageAnalyticalResult | None:
+    state = getattr(value, "state", None)
+    if not isinstance(state, AnalysisState):
+        return None
+    return StageAnalyticalResult(
+        stage_id=stage_id,
+        contract=contract,
+        evidence=tuple(state.evidence),
+        calculations=tuple(state.calculations),
+        claims=tuple(state.claims),
+        implications=tuple(state.implications),
+        recommendations=tuple(state.recommendations),
+        artifacts=tuple(state.artifacts),
+        relationships=tuple(state.relationships),
+    )
+
+
 @dataclass(frozen=True)
 class CanonicalStageResult:
     """Verified canonical output eligible for the workflow receipt writer."""
@@ -378,13 +400,19 @@ class CanonicalResultCommitter:
             )
             for record in collection
         }
-        normalized = output if isinstance(output, StageAnalyticalResult) else normalize_stage_result(
+        normalized = output if isinstance(output, StageAnalyticalResult) else stage_result_from_analysis_state(
             output,
-            expected_stage_id=stage_id,
-            expected_contract=contract,
-            existing_records=existing_records,
-            existing_record_kinds=existing_record_kinds,
+            stage_id=stage_id,
+            contract=contract,
         )
+        if normalized is None:
+            normalized = normalize_stage_result(
+                output,
+                expected_stage_id=stage_id,
+                expected_contract=contract,
+                existing_records=existing_records,
+                existing_record_kinds=existing_record_kinds,
+            )
         if normalized.stage_id != stage_id or normalized.contract != contract:
             raise ValidationError("canonical result does not match the recipe stage contract")
 

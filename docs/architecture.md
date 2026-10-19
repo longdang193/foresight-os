@@ -140,9 +140,10 @@ enforces the recipe limits. Structured stage results are normalized through the
 approved output contract before they enter analytical state. The committer
 persists provisional state and returns a verified canonical result; the
 workflow is the sole writer of `StageReceipt`. Stage receipts record input and policy fingerprints,
-skill hashes, capability fingerprints, result references and hashes, commit
-status, and provenance completeness. A receipt is reusable only when its
-fingerprints and committed result evidence still match the current stage.
+skill hashes, capability fingerprints, analyzer identities for deterministic
+workbook stages, result references and hashes, commit status, and provenance
+completeness. A receipt is reusable only when its fingerprints and committed
+result evidence still match the current stage.
 When a provider returns completed local tool results without a final message,
 the runtime performs one bounded no-tool structured retry using those transient
 results; malformed or empty output remains subject to canonical validation.

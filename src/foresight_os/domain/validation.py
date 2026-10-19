@@ -153,6 +153,16 @@ def validate_execution_recipe(recipe: ExecutionRecipe | dict[str, Any]) -> dict[
         )
     seen: set[str] = set()
     for stage in value.get("stages", []):
+        executor_kind = str(stage.get("executor_kind", "agent"))
+        analysis_domains = tuple(str(item) for item in stage.get("analysis_domains", ()))
+        if executor_kind == "deterministic_local" and len(analysis_domains) != 1:
+            raise ValidationError(
+                f"deterministic-local stage {stage['stage_id']} requires exactly one analysis domain"
+            )
+        if executor_kind != "deterministic_local" and analysis_domains:
+            raise ValidationError(
+                f"agent/review stage {stage['stage_id']} must not declare analysis domains"
+            )
         if any(dependency not in seen for dependency in stage.get("dependencies", [])):
             raise ValidationError(f"stage {stage['stage_id']} depends on missing or later stage")
         if any(isinstance(limit, int) and limit < 0 for limit in stage.get("limits", {}).values()):

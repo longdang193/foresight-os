@@ -58,6 +58,7 @@ class StageReceipt:
     source_revision: str = ""
     created_at: str = ""
     reuse_decision: str = "reuse"
+    analyzer_fingerprints: tuple[tuple[str, str], ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -72,6 +73,10 @@ class StageReceipt:
             capability_fingerprints=tuple(value.get("capability_fingerprints", ())),
             model_config_fingerprint=str(value.get("model_config_fingerprint", "")),
             authorization_scope_fingerprint=str(value.get("authorization_scope_fingerprint", "")),
+            analyzer_fingerprints=tuple(
+                (str(domain), str(fingerprint))
+                for domain, fingerprint in dict(value.get("analyzer_fingerprints", {})).items()
+            ),
             result_references=tuple(value.get("result_references", ())),
             result_hashes=tuple(value.get("result_hashes", ())),
             status=str(value.get("status", "incomplete")),
@@ -94,6 +99,7 @@ class StageReceipt:
         capability_fingerprints: tuple[str, ...] = (),
         model_config_fingerprint: str = "",
         authorization_scope_fingerprint: str = "",
+        analyzer_fingerprints: tuple[tuple[str, str], ...] = (),
         result_hashes: tuple[str, ...] = (),
     ) -> bool:
         return bool(
@@ -104,6 +110,7 @@ class StageReceipt:
             and self.capability_fingerprints == tuple(capability_fingerprints)
             and self.model_config_fingerprint == model_config_fingerprint
             and self.authorization_scope_fingerprint == authorization_scope_fingerprint
+            and self.analyzer_fingerprints == tuple(analyzer_fingerprints)
             and (not result_hashes or self.result_hashes == tuple(result_hashes))
         )
 

@@ -279,10 +279,14 @@ class WorkBrief:
         if not self.analysis_inputs:
             value.pop("analysis_inputs", None)
         elif isinstance(self.analysis_inputs, dict):
-            value["analysis_inputs"] = [
-                {**dict(contract), "domain": str(domain)} if isinstance(contract, dict) else {"domain": str(domain)}
-                for domain, contract in self.analysis_inputs.items()
-            ]
+            expanded = []
+            for domain, contract in self.analysis_inputs.items():
+                values = contract if isinstance(contract, (list, tuple)) else (contract,)
+                expanded.extend(
+                    {**dict(item), "domain": str(domain)} if isinstance(item, dict) else {"domain": str(domain)}
+                    for item in values
+                )
+            value["analysis_inputs"] = expanded
         if self.execution_intent is None:
             if self.execution_pattern_override is None:
                 value.pop("execution_intent", None)
