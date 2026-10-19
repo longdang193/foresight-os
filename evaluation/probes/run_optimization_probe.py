@@ -329,14 +329,14 @@ def _repeated_workflow_once(path: Path) -> dict[str, object]:
     }
 
 
-def _repeated_workflow(path: Path, sample_count: int = 3) -> dict[str, object]:
+def _repeated_workflow(path: Path, sample_count: int = 10) -> dict[str, object]:
     samples = [_repeated_workflow_once(path) for _ in range(sample_count)]
     latest = samples[-1]
+    timing = timing_statistics([float(item["wall_time_ms"]) for item in samples])
     return {
         **latest,
-        "wall_time_ms": _percentile([float(item["wall_time_ms"]) for item in samples], 0.95),
-        "sample_count": len(samples),
-        "samples_ms": [item["wall_time_ms"] for item in samples],
+        "wall_time_ms": timing["p95_ms"],
+        **timing,
         "local_tool_calls": sum(int(item.get("local_tool_calls", 0) or 0) for item in samples),
     }
 
@@ -830,7 +830,7 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
     warm_result = context.read(path, context_selection)
     warm_read_ms = (time.perf_counter() - warm_started) * 1000
     warm_2_plus_samples: list[float] = []
-    for _ in range(3):
+    for _ in range(10):
         started = time.perf_counter()
         context.read(path, context_selection)
         warm_2_plus_samples.append((time.perf_counter() - started) * 1000)
@@ -845,6 +845,8 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
         validator_started = time.perf_counter()
         validator_report = run_independent_validation(path, selection=context_selection, workbook_context=context)
         validator_samples.append((time.perf_counter() - validator_started) * 1000)
+    same_view_timing = timing_statistics(same_view_samples)
+    validator_timing = timing_statistics(validator_samples)
     context.currentness(path)
     reader_instrumentation_available = all(
         hasattr(context.stats, field)
@@ -858,14 +860,19 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
     )
     sheet_names = tuple(sheet.name for sheet in result.sheets)
     workloads: dict[str, dict[str, object]] = {
-        "cold_workbook": {"executed": True, "status": "VERIFIED", "correctness": "VERIFIED", "wall_time_ms": round(cold_read_ms, 3)},
+        "cold_workbook": {
+            "executed": True,
+            "status": "VERIFIED",
+            "correctness": "VERIFIED",
+            "wall_time_ms": cold_noise_floor["p95_ms"],
+            **cold_noise_floor,
+        },
         "same_view_repeat": {
             "executed": True,
             "status": "VERIFIED" if context.stats.capture_count == 1 and context.stats.xlsx_parse_count == 1 else "FAILED",
             "correctness": "VERIFIED" if warm_result.workbook_sha256 == result.workbook_sha256 else "FAILED",
-            "wall_time_ms": _percentile(same_view_samples, 0.95),
-            "sample_count": len(same_view_samples),
-            "samples_ms": [round(value, 3) for value in same_view_samples],
+            "wall_time_ms": same_view_timing["p95_ms"],
+            **same_view_timing,
             "capture_count": context.stats.capture_count,
             "xlsx_parse_count": context.stats.xlsx_parse_count,
             "analytical_result_fingerprint": analysis.deterministic_key,
@@ -888,9 +895,8 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
             "status": "VERIFIED" if validator_report.accepted else "FAILED",
             "correctness": "VERIFIED" if validator_report.accepted else "FAILED",
             "validator_accepted": validator_report.accepted,
-            "wall_time_ms": _percentile(validator_samples, 0.95),
-            "sample_count": len(validator_samples),
-            "samples_ms": [round(value, 3) for value in validator_samples],
+            "wall_time_ms": validator_timing["p95_ms"],
+            **validator_timing,
         },
     }
     with tempfile.TemporaryDirectory(prefix="foresight-optimization-") as temporary_dir:
@@ -952,7 +958,7 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
     workloads["approved_changed_brief"] = await _approved_changed_brief_workload(mode)
     workloads["changed_brief"] = workloads["approved_changed_brief"]
     workloads["selected_sheet_stress"] = _selected_sheet_stress_workload()
-    workloads["public_workflow_context_reuse"] = workloads["approved_changed_brief"]
+    workloads["public_workflow_context_reuse"] = workloads["repeated_investigation"]
     from foresight_os.runtime.metrics import RunMetrics
 
     local_metrics = RunMetrics("optimization-local", "DIRECT", "direct")
@@ -979,15 +985,15 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
                 "p95_ms": _percentile(durations, 0.95) if durations else None,
                 "sample_count": len(durations),
             },
-            "cold_workbook": {"wall_time_ms": workloads["cold_workbook"].get("wall_time_ms"), "sample_count": cold_noise_floor.get("sample_count", 0)},
-            "same_view_repeat": {"wall_time_ms": workloads["same_view_repeat"].get("wall_time_ms"), "sample_count": workloads["same_view_repeat"].get("sample_count", 0)},
+            "cold_workbook": {key: workloads["cold_workbook"].get(key) for key in ("wall_time_ms", "sample_count", "samples_ms", "p50_ms", "p95_ms", "noise_floor_ms")},
+            "same_view_repeat": {key: workloads["same_view_repeat"].get(key) for key in ("wall_time_ms", "sample_count", "samples_ms", "p50_ms", "p95_ms", "noise_floor_ms")},
             "warm_1": {"wall_time_ms": workloads["warm_1"].get("wall_time_ms")},
             "warm_2_plus": {"p95_ms": workloads["warm_2_plus"].get("p95_ms"), "sample_count": workloads["warm_2_plus"].get("sample_count")},
-            "repeated_investigation": {"wall_time_ms": workloads["repeated_investigation"].get("wall_time_ms"), "sample_count": workloads["repeated_investigation"].get("sample_count", 0)},
-            "analyst_validator_reuse": {"wall_time_ms": workloads["analyst_validator_reuse"].get("wall_time_ms"), "sample_count": workloads["analyst_validator_reuse"].get("sample_count", 0)},
-            "approved_changed_brief": {"wall_time_ms": workloads["approved_changed_brief"].get("wall_time_ms", 0), "sample_count": workloads["approved_changed_brief"].get("sample_count", 0), "samples_ms": workloads["approved_changed_brief"].get("samples_ms", []), "noise_floor_ms": workloads["approved_changed_brief"].get("noise_floor_ms", 0)},
-            "history-10": {"wall_time_ms": workloads["history-10"].get("wall_time_ms_p95", 0), "sample_count": workloads["history-10"].get("sample_count", 0)},
-            "history-100": {"wall_time_ms": workloads["history-100"].get("wall_time_ms_p95", 0), "sample_count": workloads["history-100"].get("sample_count", 0)},
+            "repeated_investigation": {key: workloads["repeated_investigation"].get(key) for key in ("wall_time_ms", "sample_count", "samples_ms", "p50_ms", "p95_ms", "noise_floor_ms")},
+            "analyst_validator_reuse": {key: workloads["analyst_validator_reuse"].get(key) for key in ("wall_time_ms", "sample_count", "samples_ms", "p50_ms", "p95_ms", "noise_floor_ms")},
+            "approved_changed_brief": {key: workloads["approved_changed_brief"].get(key, 0) for key in ("wall_time_ms", "sample_count", "samples_ms", "p50_ms", "p95_ms", "noise_floor_ms")},
+            "history-10": {"wall_time_ms": workloads["history-10"].get("wall_time_ms_p95", 0), "sample_count": workloads["history-10"].get("sample_count", 0), "samples_ms": workloads["history-10"].get("samples_ms", []), "p50_ms": workloads["history-10"].get("wall_time_ms_p50", 0), "p95_ms": workloads["history-10"].get("wall_time_ms_p95", 0), "noise_floor_ms": workloads["history-10"].get("noise_floor_ms", 0)},
+            "history-100": {"wall_time_ms": workloads["history-100"].get("wall_time_ms_p95", 0), "sample_count": workloads["history-100"].get("sample_count", 0), "samples_ms": workloads["history-100"].get("samples_ms", []), "p50_ms": workloads["history-100"].get("wall_time_ms_p50", 0), "p95_ms": workloads["history-100"].get("wall_time_ms_p95", 0), "noise_floor_ms": workloads["history-100"].get("noise_floor_ms", 0)},
             "selected_sheet_stress": {"wall_time_ms": workloads["selected_sheet_stress"].get("wall_time_ms", 0), "sample_count": workloads["selected_sheet_stress"].get("sample_count", 0), "samples_ms": workloads["selected_sheet_stress"].get("samples_ms", []), "noise_floor_ms": workloads["selected_sheet_stress"].get("noise_floor_ms", 0)},
         },
         "peak_allocation_bytes": max(allocations) if allocations else None,
