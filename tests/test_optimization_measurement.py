@@ -1,7 +1,7 @@
 from copy import deepcopy
 
 from evaluation.probes.compare_optimization_receipts import compare, compare_repeats, validate_stability
-from evaluation.probes.optimization_measurement import MANDATORY_XLSX_WORKLOADS
+from evaluation.probes.optimization_measurement import MANDATORY_XLSX_WORKLOADS, SCENARIO_XLSX_WORKLOADS, SCHEMA_VERSION
 from foresight_os.runtime.metrics import RunMetrics
 
 
@@ -29,7 +29,7 @@ def _receipt() -> dict:
         "event_loop_lag_ms": 0.1,
     }
     return {
-        "schema_version": 2,
+        "schema_version": SCHEMA_VERSION,
         "harness": {
             "version": "optimization-harness-v1",
             "source_tree_sha256": "harness",
@@ -43,6 +43,9 @@ def _receipt() -> dict:
             "commit": "commit",
             "repo_root": "repo",
             "package_path": "repo/src/foresight_os/__init__.py",
+            "dirty": False,
+            "source_tree_sha256": "source-tree-commit",
+            "commit_source_tree_sha256": "source-tree-commit",
         },
         "accepted_finding_count": 2,
         "economics": economics,
@@ -68,8 +71,17 @@ def _receipt() -> dict:
             "peak_allocation_bytes": 100,
             "deterministic_key": "same",
             "timing_paths": {
-                name: {"wall_time_ms": 10}
-                for name in ("cold_workbook", "same_view_repeat", "repeated_investigation", "analyst_validator_reuse")
+                name: {"wall_time_ms": 10, "sample_count": 10}
+                for name in (
+                    "cold_workbook",
+                    "same_view_repeat",
+                    "repeated_investigation",
+                    "analyst_validator_reuse",
+                    "changed_brief",
+                    "history-10",
+                    "history-100",
+                    "selected_sheet_stress",
+                )
             },
             "workloads": {
                 **{
@@ -84,10 +96,31 @@ def _receipt() -> dict:
                     "xlsx_parse_count": 1,
                     "distinct_brief_results": True,
                 },
+                **{
+                    name: {
+                        "executed": True,
+                        "status": "VERIFIED",
+                        "correctness": "VERIFIED",
+                        "limitation": None,
+                        "sample_count": 10,
+                    }
+                    for name in SCENARIO_XLSX_WORKLOADS
+                    if name in {"changed_brief", "history-10", "history-100"}
+                },
+            },
+            "scenario_workloads": {
+                name: {"executed": True, "status": "VERIFIED", "correctness": "VERIFIED", "limitation": None}
+                for name in SCENARIO_XLSX_WORKLOADS
             },
         },
         "workload": {"fixture_sha256": "same", "warmups": 2, "measured_runs": 10, "patterns": list(PATTERNS)},
-        "acceptance": {"p95_regression_pct": 20, "peak_allocation_regression_pct": 15, "soak_runs": 2, "tool_calls_per_finding_increase": 0},
+        "acceptance": {
+            "p95_regression_pct": 20,
+            "peak_allocation_regression_pct": 15,
+            "soak_runs": 2,
+            "tool_calls_per_finding_increase": 0,
+            "gate_timing_paths": True,
+        },
         "maf_patterns": {
             name: {
                 "cleanup_complete": True,
@@ -114,6 +147,10 @@ def _receipt() -> dict:
         "acceptance_matrix": {
             name: {"status": "VERIFIED", "correctness": "VERIFIED", "limitation": None}
             for name in MANDATORY_XLSX_WORKLOADS
+        },
+        "scenario_matrix": {
+            name: {"status": "VERIFIED", "correctness": "VERIFIED", "limitation": None}
+            for name in SCENARIO_XLSX_WORKLOADS
         },
     }
 
@@ -186,13 +223,41 @@ def test_comparator_rejects_unverified_mandatory_workloads():
     assert "xlsx.workloads.blocking_cancellation.status=VERIFIED" in result["missing_required_evidence"]["release"]
 
 
-def test_comparator_accepts_same_commit_with_distinct_worktree_digests():
+def test_comparator_rejects_same_commit_with_distinct_worktree_digests():
     baseline = _receipt()
     release = deepcopy(baseline)
     baseline["revision"]["source_tree_sha256"] = "baseline-tree"
     release["revision"]["source_tree_sha256"] = "release-tree"
 
-    assert compare(baseline, release)["accepted"]
+    result = compare(baseline, release)
+
+    assert not result["accepted"]
+    assert "revision.source_tree_sha256_matches_commit" in result["missing_required_evidence"]["baseline"]
+    assert "revision.source_tree_sha256_matches_commit" in result["missing_required_evidence"]["release"]
+
+
+def test_comparator_rejects_dirty_receipts_before_comparison():
+    baseline = _receipt()
+    release = deepcopy(baseline)
+    release["revision"]["commit"] = "release-commit"
+    release["revision"]["dirty"] = True
+
+    result = compare(baseline, release)
+
+    assert not result["accepted"]
+    assert "revision.dirty=false" in result["missing_required_evidence"]["release"]
+
+
+def test_comparator_requires_changed_brief_and_history_evidence():
+    baseline = _receipt()
+    release = deepcopy(baseline)
+    release["revision"]["commit"] = "release-commit"
+    del release["xlsx"]["scenario_workloads"]["changed_brief"]
+
+    result = compare(baseline, release)
+
+    assert not result["accepted"]
+    assert "xlsx.scenario_workloads.changed_brief" in result["missing_required_evidence"]["release"]
 
 
 def test_comparator_rejects_workload_pattern_and_resource_regressions():

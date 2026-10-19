@@ -320,7 +320,7 @@ def render_powerbi_report(powerbi: PowerBIAnalysis, state: AnalysisState | None 
 def run_powerbi_strategic_portfolio_workflow(store: AnalysisStore, source: Path, *, human_decision: str = "REJECT", output_dir: Path | None = None, input_contract: AnalysisInputContract | dict[str, Any] | None = None, workbook_context: Any | None = None) -> PowerBIWorkflowResult:
     try:
         if input_contract is None and store.brief_path.exists():
-            input_contract = normalize_work_brief(store.load_brief()).contract_for_domain("powerbi_strategic_portfolio")
+            input_contract = normalize_work_brief(store.load_brief()).declared_contract_for_domain("powerbi_strategic_portfolio")
         sheets = ("Brief", "Dim_Region", "Dim_Segment", "Fact_Performance", "Targets", "Forward_Signals", "Measure_Definitions", "Dashboard_Snapshot", "Strategic_Options", "Change_One_Input")
         contract = resolve_workbook_contract("powerbi_strategic_portfolio", input_contract)
         result = WorkbookWorkflowRunner(store).run(

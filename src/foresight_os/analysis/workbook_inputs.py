@@ -7,7 +7,7 @@ from datetime import date
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
 
-from foresight_os.domain.analysis_inputs import AnalysisInputContract, _parse_period
+from foresight_os.domain.analysis_inputs import AnalysisInputContract, AnalysisInputDeclaration, _parse_period
 from foresight_os.domain.models import Evidence, SourceLocator
 from foresight_os.runtime.local_toolbelt import (
     CellProvenance,
@@ -31,13 +31,16 @@ def default_workbook_contract(domain: str) -> AnalysisInputContract:
 
 def resolve_workbook_contract(
     domain: str,
-    declared_contract: AnalysisInputContract | Mapping[str, Any] | None,
+    declared_contract: AnalysisInputContract | AnalysisInputDeclaration | Mapping[str, Any] | None,
 ) -> AnalysisInputContract:
     """Resolve compatibility defaults once at the workbook input boundary."""
     default = default_workbook_contract(domain)
     if declared_contract is None:
         return default
-    if isinstance(declared_contract, AnalysisInputContract):
+    if isinstance(declared_contract, AnalysisInputDeclaration):
+        overrides = declared_contract.to_dict()
+        overrides.pop("domain", None)
+    elif isinstance(declared_contract, AnalysisInputContract):
         overrides = declared_contract.to_dict()
         if not declared_contract.required_tables:
             overrides.pop("required_tables", None)

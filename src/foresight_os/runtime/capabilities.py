@@ -372,6 +372,7 @@ def prepare_capability_context(
         for capability_id, binding in load_hosted_mcp_bindings(
             context.get("mcp_environment"),
             required_capabilities=required,
+            activate=activate,
         ).items():
             context.setdefault("mcp_tools", {}).setdefault(capability_id, binding)
 

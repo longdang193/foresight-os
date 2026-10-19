@@ -155,10 +155,9 @@ def test_admitted_execution_resolves_partial_workbook_contract_before_dispatch(m
         investigation_id="partial-contract-gate",
         stages=[WorkStage("stage-1", "Assess technology readiness")],
         analysis_inputs={
-            "technology_radar": AnalysisInputContract(
-                domain="technology_radar",
-                stage_id="stage-1",
-            ).to_dict(),
+            "technology_radar": {
+                "stage_id": "stage-1",
+            },
         },
     )
     recipe = build_execution_recipe(brief).recipe

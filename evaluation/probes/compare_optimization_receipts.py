@@ -3,14 +3,24 @@ import json
 from pathlib import Path
 
 try:
-    from .optimization_measurement import MANDATORY_XLSX_WORKLOADS
+    from .optimization_measurement import MANDATORY_XLSX_WORKLOADS, SCENARIO_XLSX_WORKLOADS
 except ImportError:
-    from optimization_measurement import MANDATORY_XLSX_WORKLOADS
+    from optimization_measurement import MANDATORY_XLSX_WORKLOADS, SCENARIO_XLSX_WORKLOADS
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 REQUIRED_PATTERNS = {"DIRECT", "ANALYZE", "CONCURRENT", "HANDOFF", "CHALLENGE_RECOMMENDATION"}
-REQUIRED_TIMING_PATHS = ("cold_workbook", "same_view_repeat", "repeated_investigation", "analyst_validator_reuse")
+REQUIRED_TIMING_PATHS = (
+    "cold_workbook",
+    "same_view_repeat",
+    "repeated_investigation",
+    "analyst_validator_reuse",
+    "changed_brief",
+    "history-10",
+    "history-100",
+    "selected_sheet_stress",
+)
+REQUIRED_SCENARIO_WORKLOADS = ("changed_brief", "history-10", "history-100")
 READER_COUNTERS = (
     "archive_sheets_scanned",
     "selected_sheet_count",
@@ -106,9 +116,17 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
         elif status != "VERIFIED" and not isinstance(item.get("limitation"), str):
             missing.append(f"evidence.{dimension}.limitation")
     revision = receipt.get("revision", {})
-    for field in ("commit", "repo_root", "package_path"):
+    for field in ("commit", "repo_root", "package_path", "source_tree_sha256", "commit_source_tree_sha256"):
         if not isinstance(revision.get(field), str) or not revision[field].strip():
             missing.append(f"revision.{field}")
+    if revision.get("dirty") is not False:
+        missing.append("revision.dirty=false")
+    if (
+        isinstance(revision.get("source_tree_sha256"), str)
+        and isinstance(revision.get("commit_source_tree_sha256"), str)
+        and revision["source_tree_sha256"] != revision["commit_source_tree_sha256"]
+    ):
+        missing.append("revision.source_tree_sha256_matches_commit")
     accepted_count = receipt.get("accepted_finding_count")
     if not isinstance(accepted_count, int) or accepted_count <= 0:
         missing.append("accepted_finding_count>0")
@@ -228,6 +246,22 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
                 missing.append(f"xlsx.timing_paths.{name}")
             elif not _is_number(item.get("wall_time_ms")) or float(item["wall_time_ms"]) <= 0:
                 missing.append(f"xlsx.timing_paths.{name}.wall_time_ms>0")
+            if isinstance(item, dict) and not _is_nonnegative_count(item.get("sample_count", 1)):
+                missing.append(f"xlsx.timing_paths.{name}.sample_count>=3")
+            elif isinstance(item, dict) and int(item.get("sample_count", 1)) < 3:
+                missing.append(f"xlsx.timing_paths.{name}.sample_count>=3")
+    scenario_workloads = workbook.get("scenario_workloads", {})
+    for name in REQUIRED_SCENARIO_WORKLOADS:
+        item = scenario_workloads.get(name)
+        if not isinstance(item, dict):
+            missing.append(f"xlsx.scenario_workloads.{name}")
+            continue
+        if item.get("executed") is not True:
+            missing.append(f"xlsx.scenario_workloads.{name}.executed=true")
+        if item.get("status") != "VERIFIED":
+            missing.append(f"xlsx.scenario_workloads.{name}.status=VERIFIED")
+        if item.get("correctness") != "VERIFIED":
+            missing.append(f"xlsx.scenario_workloads.{name}.correctness=VERIFIED")
     matrix = receipt.get("acceptance_matrix", {})
     for name in MANDATORY_XLSX_WORKLOADS:
         entry = matrix.get(name)
@@ -444,7 +478,9 @@ def compare(baseline: dict, release: dict) -> dict:
     candidate_correctness = all(
         candidate.get("status") == "VERIFIED"
         and candidate.get("correctness") == "VERIFIED"
-        and candidate.get("distinct_brief_results") is True
+        and (candidate.get("distinct_result_identity") is True or candidate.get("distinct_brief_results") is True)
+        and (candidate.get("source_identity_preserved", True) is True)
+        and (candidate.get("reassessment_observed", True) is True)
         for candidate in (baseline_candidate, release_candidate)
     )
     correctness_status = (

@@ -18,7 +18,7 @@ from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.runtime.local_toolbelt import AnalysisOperation, SheetSelection, ToolbeltLimits
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 HARNESS_VERSION = "optimization-harness-v1"
 HARNESS_PATHS = (
     "evaluation/probes/optimization_measurement.py",
@@ -40,7 +40,9 @@ DETERMINISTIC_XLSX_WORKLOADS = MANDATORY_XLSX_WORKLOADS + ("public_workflow_cont
 SCENARIO_XLSX_WORKLOADS = (
     "changed_brief",
     "changed_selection",
-    "growing_analysis_history",
+    "history-10",
+    "history-100",
+    "history-1000",
     "correction",
     "workbook_cancellation",
     "synthesis_cancellation",
@@ -56,7 +58,49 @@ def configure_measurement_roots(*, target_root: Path, harness_root: Path) -> Non
     _HARNESS_ROOT = harness_root.resolve()
 
 
-def _revision_metadata(target_root: Path | None = None) -> dict[str, str]:
+def _source_tree_digest(repo_root: Path, *, revision: str | None = None) -> str:
+    tracked_paths = subprocess.run(
+        ["git", "ls-files", "-z", "--", "src", "tests", "evaluation", ".github", "README.md", "pyproject.toml"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+    ).stdout.split(b"\0")
+    if revision is None:
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        if not dirty:
+            revision = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo_root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+    digest = hashlib.sha256()
+    for raw_path in sorted(item for item in tracked_paths if item):
+        relative_path = raw_path.decode()
+        content = (
+            subprocess.run(
+                ["git", "show", f"{revision}:{relative_path}"],
+                cwd=repo_root,
+                check=True,
+                capture_output=True,
+            ).stdout
+            if revision
+            else (repo_root / relative_path).read_bytes()
+        )
+        digest.update(raw_path)
+        digest.update(b"\0")
+        digest.update(content)
+    return digest.hexdigest()
+
+
+def _revision_metadata(target_root: Path | None = None) -> dict[str, object]:
     import foresight_os
 
     repo_root = (target_root or _TARGET_ROOT or Path(__file__).parents[2]).resolve()
@@ -70,39 +114,38 @@ def _revision_metadata(target_root: Path | None = None) -> dict[str, str]:
         capture_output=True,
         text=True,
     ).stdout.strip()
-    tracked_paths = subprocess.run(
-        ["git", "ls-files", "-z", "--", "src", "tests", "evaluation", ".github", "README.md", "pyproject.toml"],
+    dirty = bool(subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"],
         cwd=repo_root,
         check=True,
         capture_output=True,
-    ).stdout.split(b"\0")
-    source_digest = hashlib.sha256()
-    for raw_path in sorted(item for item in tracked_paths if item):
-        path = repo_root / raw_path.decode()
-        source_digest.update(raw_path)
-        source_digest.update(b"\0")
-        source_digest.update(path.read_bytes())
+        text=True,
+    ).stdout.strip())
     return {
         "commit": revision,
         "repo_root": str(repo_root),
         "package_path": str(package_path),
-        "source_tree_sha256": source_digest.hexdigest(),
+        "dirty": dirty,
+        "source_tree_sha256": _source_tree_digest(repo_root),
+        "commit_source_tree_sha256": _source_tree_digest(repo_root, revision=revision),
     }
 
 
 def _environment_metadata() -> dict[str, object]:
-    freeze = subprocess.run(
+    freeze = sorted(subprocess.run(
         [sys.executable, "-m", "pip", "freeze"],
         check=True,
         capture_output=True,
         text=True,
-    ).stdout.splitlines()
-    return {
+    ).stdout.splitlines())
+    metadata = {
         "python": platform.python_version(),
         "platform": platform.platform(),
         "executable": str(Path(sys.executable).resolve()),
         "pip_freeze": freeze,
     }
+    metadata["identity"] = hashlib.sha256(json.dumps(metadata, sort_keys=True).encode("utf-8")).hexdigest()
+    return metadata
 
 
 def _harness_metadata(harness_root: Path | None = None) -> dict[str, object]:
@@ -312,6 +355,11 @@ def build_receipt(
             "patterns": sorted(patterns),
             "deterministic_workloads": list(DETERMINISTIC_XLSX_WORKLOADS),
             "scenario_workloads": list(SCENARIO_XLSX_WORKLOADS),
+            "parameters": {
+                "history_sizes": [10, 100, 1000],
+                "timing_sample_count": 10,
+                "cold_sample_count": 10,
+            },
         },
         "acceptance": thresholds,
         "accepted_finding_count": accepted_count,

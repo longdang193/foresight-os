@@ -40,7 +40,8 @@ sys.path.insert(0, str(TARGET_ROOT / "src"))
 from agent_framework import Agent, ChatResponse, ChatResponseUpdate, Content, FunctionInvocationContext, Message, ResponseStream
 
 from foresight_os.controller.recipes import ExecutionPattern, RecipeName, make_recipe
-from foresight_os.domain.analysis_inputs import AnalysisInputContract
+from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
+from foresight_os.domain.models import WorkBrief, WorkStage
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.runtime.capabilities import (
     CapabilityDefinition,
@@ -245,7 +246,7 @@ async def _cancelled_read_workload(path: Path) -> dict[str, object]:
     }
 
 
-def _repeated_workflow(path: Path) -> dict[str, object]:
+def _repeated_workflow_once(path: Path) -> dict[str, object]:
     from foresight_os.analysis.evidence_workflow import run_xlsx_finding_workflow
     from foresight_os.persistence.analysis_store import AnalysisStore
 
@@ -325,6 +326,18 @@ def _repeated_workflow(path: Path) -> dict[str, object]:
             "receipt_write_time_ms": round(float(getattr(store_stats, "receipt_write_time_ms", 0.0) or 0.0), 3),
         },
         "limitation": None,
+    }
+
+
+def _repeated_workflow(path: Path, sample_count: int = 3) -> dict[str, object]:
+    samples = [_repeated_workflow_once(path) for _ in range(sample_count)]
+    latest = samples[-1]
+    return {
+        **latest,
+        "wall_time_ms": _percentile([float(item["wall_time_ms"]) for item in samples], 0.95),
+        "sample_count": len(samples),
+        "samples_ms": [item["wall_time_ms"] for item in samples],
+        "local_tool_calls": sum(int(item.get("local_tool_calls", 0) or 0) for item in samples),
     }
 
 
@@ -487,17 +500,43 @@ def _technology_result_fingerprint(result: object) -> str:
     return hashlib.sha256(repr(signature).encode("utf-8")).hexdigest()
 
 
-def _public_workflow_context_reuse(mode: str) -> dict[str, object]:
+def _changed_brief_workload(mode: str) -> dict[str, object]:
     source = TARGET_ROOT / "tests" / "fixtures" / "exercise" / "04_Technology_Radar.xlsx"
     focused = AnalysisInputContract(domain="technology_radar", entity_scope=("SiC Power Electronics",))
     broad = AnalysisInputContract(domain="technology_radar", entity_scope=("SiC Power Electronics", "Zonal Architecture"))
+    base_brief = WorkBrief(
+        "optimization-changed-brief",
+        "Which technologies should be prioritized?",
+        ["SiC Power Electronics"],
+        ["analysis"],
+        [],
+        [],
+        "screen the focused technology scope",
+        "compare evidence",
+        stages=[WorkStage("radar", "Assess the focused technology scope")],
+        analysis_inputs=[focused.to_dict()],
+    )
+    changed_brief = WorkBrief(
+        base_brief.investigation_id,
+        base_brief.decision_question,
+        [*base_brief.scope, "Zonal Architecture"],
+        base_brief.desired_deliverables,
+        base_brief.assumptions,
+        base_brief.open_dependencies,
+        "reassess the expanded technology scope",
+        "compare the changed evidence",
+        stages=[WorkStage("radar", "Assess the expanded technology scope")],
+        analysis_inputs=[broad.to_dict()],
+    )
+    normalized_briefs = (normalize_work_brief(base_brief), normalize_work_brief(changed_brief))
     workflow_supports_context = "workbook_context" in inspect.signature(run_technology_radar_workflow).parameters
     context = WorkbookContext() if workflow_supports_context else None
     results = []
     started = time.perf_counter()
     with _count_workbook_reads() as read_counts:
         with tempfile.TemporaryDirectory(prefix="foresight-public-workflow-") as temporary_dir:
-            for index, contract in enumerate((focused, broad)):
+            store = AnalysisStore(Path(temporary_dir) / "case")
+            for _brief, contract in zip(normalized_briefs, (focused, broad), strict=True):
                 workflow_kwargs = {
                     "human_decision": "PENDING",
                     "input_contract": contract,
@@ -505,7 +544,7 @@ def _public_workflow_context_reuse(mode: str) -> dict[str, object]:
                 if context is not None:
                     workflow_kwargs["workbook_context"] = context
                 result = run_technology_radar_workflow(
-                    AnalysisStore(Path(temporary_dir) / f"case-{index}"),
+                    store,
                     source,
                     **workflow_kwargs,
                 )
@@ -519,12 +558,18 @@ def _public_workflow_context_reuse(mode: str) -> dict[str, object]:
     retained_bytes = _retained_bytes(context) if context is not None else 0
     caller_context_open = context is None or not context._closed
     distinct_brief_results = len(result_fingerprints) == 2 and len(set(result_fingerprints)) == 2
+    source_hashes = [result.technology.source_sha256 for result in results if result.technology is not None]
+    contract_fingerprints = [result.technology.contract_fingerprint for result in results if result.technology is not None]
+    reassessment_observed = len(set(contract_fingerprints)) == 2 and normalized_briefs[0].stages != normalized_briefs[1].stages
+    source_identity_preserved = len(source_hashes) == 2 and len(set(source_hashes)) == 1
     expected_read_count = 1 if workflow_supports_context else 2
     correct = (
         statuses == ["pending", "pending"]
         and len(fingerprints) == 2
         and len(set(fingerprints)) == 2
         and distinct_brief_results
+        and reassessment_observed
+        and source_identity_preserved
         and capture_count == expected_read_count
         and parse_count == expected_read_count
         and caller_context_open
@@ -544,11 +589,87 @@ def _public_workflow_context_reuse(mode: str) -> dict[str, object]:
         "distinct_contracts": len(set(fingerprints)) == 2,
         "result_fingerprint_count": len(set(result_fingerprints)),
         "distinct_brief_results": distinct_brief_results,
+        "distinct_result_identity": distinct_brief_results,
+        "source_identity_preserved": source_identity_preserved,
+        "reassessment_observed": reassessment_observed,
+        "brief_scope_changed": normalized_briefs[0].decision_question == normalized_briefs[1].decision_question and normalized_briefs[0].stages != normalized_briefs[1].stages,
         "caller_context_supported": workflow_supports_context,
         "caller_context_open_before_cleanup": caller_context_open,
         "retained_bytes": retained_bytes,
         "limitation": None,
     }
+
+
+def _history_workload(path: Path, history_size: int) -> dict[str, object]:
+    from foresight_os.analysis.evidence_workflow import run_xlsx_finding_workflow
+
+    selection = SheetSelection(include_hidden=True, include_hidden_rows=True)
+    samples: list[float] = []
+    milestones: list[dict[str, object]] = []
+    milestone_indexes = {0, history_size // 2, history_size - 1}
+    source_hashes: list[str] = []
+    with tempfile.TemporaryDirectory(prefix=f"foresight-history-{history_size}-") as temporary_dir:
+        root = Path(temporary_dir) / "state"
+        store = AnalysisStore(root)
+        context = WorkbookContext()
+        last = None
+        for index in range(history_size):
+            started = time.perf_counter()
+            last = run_xlsx_finding_workflow(
+                store,
+                path,
+                AnalysisOperation("aggregate", value_column="Value"),
+                selection=selection,
+                investigation_id="optimization-history",
+                human_decision="ACCEPT",
+                workbook_context=context,
+            )
+            samples.append((time.perf_counter() - started) * 1000)
+            if last.evidence is not None:
+                source_hashes.append(last.evidence.source_locator.file_version)
+            if index in milestone_indexes:
+                state_bytes = store.analysis_path.read_bytes() if store.analysis_path.exists() else b""
+                token_bytes = store.pending_tokens_path.read_bytes() if store.pending_tokens_path.exists() else b""
+                milestones.append({
+                    "run": index + 1,
+                    "state_sha256": hashlib.sha256(state_bytes).hexdigest() if state_bytes else None,
+                    "state_bytes": len(state_bytes),
+                    "pending_token_sha256": hashlib.sha256(token_bytes).hexdigest() if token_bytes else None,
+                    "pending_token_bytes": len(token_bytes),
+                    "revision_count": len(last.analysis.revisions) if last.analysis is not None else None,
+                })
+        final_state = last.analysis if last is not None else None
+        correct = (
+            last is not None
+            and last.status == "accepted"
+            and final_state is not None
+            and final_state.revision == history_size
+            and len(final_state.revisions) == history_size
+            and len(source_hashes) == history_size
+            and len(set(source_hashes)) == 1
+        )
+        stats = store.stats
+        return {
+            "executed": True,
+            "status": "VERIFIED" if correct else "FAILED",
+            "correctness": "VERIFIED" if correct else "FAILED",
+            "history_size": history_size,
+            "sample_count": len(samples),
+            "wall_time_ms_p50": _percentile(samples, 0.50),
+            "wall_time_ms_p95": _percentile(samples, 0.95),
+            "wall_time_ms_total": round(sum(samples), 3),
+            "source_identity_preserved": len(set(source_hashes)) == 1,
+            "final_revision": final_state.revision if final_state is not None else None,
+            "final_state_sha256": hashlib.sha256(store.analysis_path.read_bytes()).hexdigest() if store.analysis_path.exists() else None,
+            "final_state_bytes": store.analysis_path.stat().st_size if store.analysis_path.exists() else None,
+            "pending_token_sha256": hashlib.sha256(store.pending_tokens_path.read_bytes()).hexdigest() if store.pending_tokens_path.exists() else None,
+            "pending_token_bytes": store.pending_tokens_path.stat().st_size if store.pending_tokens_path.exists() else 0,
+            "load_count": int(getattr(stats, "load_count", 0)),
+            "validation_count": int(getattr(stats, "validation_count", 0)),
+            "merge_count": int(getattr(stats, "merge_count", 0)),
+            "milestones": milestones,
+            "limitation": None,
+        }
 
 
 async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: str = "baseline") -> dict[str, object]:
@@ -591,9 +712,17 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
         started = time.perf_counter()
         context.read(path, context_selection)
         warm_2_plus_samples.append((time.perf_counter() - started) * 1000)
-    validator_started = time.perf_counter()
-    validator_report = run_independent_validation(path, selection=context_selection, workbook_context=context)
-    validator_ms = (time.perf_counter() - validator_started) * 1000
+    same_view_samples = [warm_read_ms, *warm_2_plus_samples]
+    for _ in range(6):
+        started = time.perf_counter()
+        context.read(path, context_selection)
+        same_view_samples.append((time.perf_counter() - started) * 1000)
+    validator_samples: list[float] = []
+    validator_report = None
+    for _ in range(3):
+        validator_started = time.perf_counter()
+        validator_report = run_independent_validation(path, selection=context_selection, workbook_context=context)
+        validator_samples.append((time.perf_counter() - validator_started) * 1000)
     context.currentness(path)
     reader_instrumentation_available = all(
         hasattr(context.stats, field)
@@ -612,7 +741,9 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
             "executed": True,
             "status": "VERIFIED" if context.stats.capture_count == 1 and context.stats.xlsx_parse_count == 1 else "FAILED",
             "correctness": "VERIFIED" if warm_result.workbook_sha256 == result.workbook_sha256 else "FAILED",
-            "wall_time_ms": round(warm_read_ms, 3),
+            "wall_time_ms": _percentile(same_view_samples, 0.95),
+            "sample_count": len(same_view_samples),
+            "samples_ms": [round(value, 3) for value in same_view_samples],
             "capture_count": context.stats.capture_count,
             "xlsx_parse_count": context.stats.xlsx_parse_count,
             "analytical_result_fingerprint": analysis.deterministic_key,
@@ -635,7 +766,9 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
             "status": "VERIFIED" if validator_report.accepted else "FAILED",
             "correctness": "VERIFIED" if validator_report.accepted else "FAILED",
             "validator_accepted": validator_report.accepted,
-            "wall_time_ms": round(validator_ms, 3),
+            "wall_time_ms": _percentile(validator_samples, 0.95),
+            "sample_count": len(validator_samples),
+            "samples_ms": [round(value, 3) for value in validator_samples],
         },
     }
     with tempfile.TemporaryDirectory(prefix="foresight-optimization-") as temporary_dir:
@@ -659,6 +792,11 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
         alternate_selection = SheetSelection(sheet_names=(sheet_names[-1],), include_hidden=True, include_hidden_rows=True)
         alternate_context = WorkbookContext()
         alternate = alternate_context.read(path, alternate_selection)
+        alternate_samples: list[float] = []
+        for _ in range(3):
+            started = time.perf_counter()
+            alternate_context.read(path, alternate_selection)
+            alternate_samples.append((time.perf_counter() - started) * 1000)
         alternate_value = _analysis_value(alternate.tables[0]) if alternate.tables else None
         primary_value = _analysis_value(result.tables[0])
         workloads["different_selection"] = {
@@ -670,9 +808,14 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
             "primary_value": primary_value,
             "alternate_sheet": sheet_names[-1],
             "alternate_value": alternate_value,
+            "wall_time_ms": _percentile(alternate_samples, 0.95),
+            "sample_count": len(alternate_samples),
+            "samples_ms": [round(value, 3) for value in alternate_samples],
             "limitation": None,
         }
     workloads["repeated_investigation"] = _repeated_workflow(path)
+    workloads["history-10"] = _history_workload(path, 10)
+    workloads["history-100"] = _history_workload(path, 100)
     workloads["blocking_cancellation"] = await _cancelled_read_workload(path)
     sizes = _retained_context_workloads()
     large = sizes["large"]
@@ -684,7 +827,8 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
         "limitation": large.get("limitation"),
     }
     workloads["multi_workbook"] = await _multi_workbook_soak()
-    workloads["public_workflow_context_reuse"] = _public_workflow_context_reuse(mode)
+    workloads["changed_brief"] = _changed_brief_workload(mode)
+    workloads["public_workflow_context_reuse"] = workloads["changed_brief"]
     from foresight_os.runtime.metrics import RunMetrics
 
     local_metrics = RunMetrics("optimization-local", "DIRECT", "direct")
@@ -711,12 +855,16 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
                 "p95_ms": _percentile(durations, 0.95) if durations else None,
                 "sample_count": len(durations),
             },
-            "cold_workbook": {"wall_time_ms": workloads["cold_workbook"].get("wall_time_ms")},
-            "same_view_repeat": {"wall_time_ms": workloads["same_view_repeat"].get("wall_time_ms")},
+            "cold_workbook": {"wall_time_ms": workloads["cold_workbook"].get("wall_time_ms"), "sample_count": cold_noise_floor.get("sample_count", 0)},
+            "same_view_repeat": {"wall_time_ms": workloads["same_view_repeat"].get("wall_time_ms"), "sample_count": workloads["same_view_repeat"].get("sample_count", 0)},
             "warm_1": {"wall_time_ms": workloads["warm_1"].get("wall_time_ms")},
             "warm_2_plus": {"p95_ms": workloads["warm_2_plus"].get("p95_ms"), "sample_count": workloads["warm_2_plus"].get("sample_count")},
-            "repeated_investigation": {"wall_time_ms": workloads["repeated_investigation"].get("wall_time_ms")},
-            "analyst_validator_reuse": {"wall_time_ms": workloads["analyst_validator_reuse"].get("wall_time_ms")},
+            "repeated_investigation": {"wall_time_ms": workloads["repeated_investigation"].get("wall_time_ms"), "sample_count": workloads["repeated_investigation"].get("sample_count", 0)},
+            "analyst_validator_reuse": {"wall_time_ms": workloads["analyst_validator_reuse"].get("wall_time_ms"), "sample_count": workloads["analyst_validator_reuse"].get("sample_count", 0)},
+            "changed_brief": {"wall_time_ms": workloads["changed_brief"].get("wall_time_ms", 0), "sample_count": 3},
+            "history-10": {"wall_time_ms": workloads["history-10"].get("wall_time_ms_p95", 0), "sample_count": workloads["history-10"].get("sample_count", 0)},
+            "history-100": {"wall_time_ms": workloads["history-100"].get("wall_time_ms_p95", 0), "sample_count": workloads["history-100"].get("sample_count", 0)},
+            "selected_sheet_stress": {"wall_time_ms": workloads.get("different_selection", {}).get("wall_time_ms", 0), "sample_count": workloads.get("different_selection", {}).get("sample_count", 0)},
         },
         "peak_allocation_bytes": max(allocations) if allocations else None,
         "peak_retained_bytes": max(_retained_bytes(context), max((item.get("retained_bytes", 0) for item in workloads.values() if isinstance(item, dict)), default=0)),
@@ -736,6 +884,7 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
             "xlsx_parse_count": context.stats.xlsx_parse_count,
             "openpyxl_load_count": context.stats.openpyxl_load_count,
             "archive_sheets_scanned": getattr(context.stats, "archive_sheets_scanned", None),
+            "archive_sheet_xml_scanned": getattr(context.stats, "archive_sheet_xml_scanned", None),
             "selected_sheet_count": getattr(context.stats, "selected_sheet_count", None),
             "selected_row_count": getattr(context.stats, "selected_row_count", None),
             "selected_cell_count": getattr(context.stats, "selected_cell_count", None),
@@ -756,9 +905,11 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
         "mandatory_workloads": [name for name in MANDATORY_XLSX_WORKLOADS if name in workloads],
         "deterministic_workloads": [name for name in DETERMINISTIC_XLSX_WORKLOADS if name in workloads],
         "scenario_workloads": {
-            "changed_brief": {"executed": False, "status": "NOT_MEASURED", "correctness": "NOT_MEASURED", "limitation": "requires a brief-aware domain fixture"},
+            "changed_brief": workloads.get("changed_brief", {"executed": False, "status": "NOT_MEASURED", "correctness": "NOT_MEASURED", "limitation": "changed-brief probe unavailable"}),
             "changed_selection": workloads.get("different_selection", {"executed": False, "status": "NOT_MEASURED", "correctness": "NOT_MEASURED", "limitation": "fixture has one selectable view"}),
-            "growing_analysis_history": workloads.get("repeated_investigation", {"executed": False, "status": "NOT_MEASURED", "correctness": "NOT_MEASURED", "limitation": "history probe unavailable"}),
+            "history-10": workloads.get("history-10", {"executed": False, "status": "NOT_MEASURED", "correctness": "NOT_MEASURED", "limitation": "history probe unavailable"}),
+            "history-100": workloads.get("history-100", {"executed": False, "status": "NOT_MEASURED", "correctness": "NOT_MEASURED", "limitation": "history probe unavailable"}),
+            "history-1000": {"executed": False, "status": "NOT_MEASURED", "correctness": "NOT_MEASURED", "limitation": "bounded manual stress workload; not required for release gate"},
             "correction": {"executed": False, "status": "NOT_MEASURED", "correctness": "NOT_MEASURED", "limitation": "correction requires a reviewed pending state"},
             "workbook_cancellation": workloads.get("blocking_cancellation", {"executed": False, "status": "NOT_MEASURED", "correctness": "NOT_MEASURED", "limitation": "cancellation probe unavailable"}),
             "synthesis_cancellation": {"executed": False, "status": "NOT_MEASURED", "correctness": "NOT_MEASURED", "limitation": "synthesis cancellation is outside deterministic workbook scope"},
@@ -903,7 +1054,7 @@ async def _run(mode: str, fixture: Path, evidence_root: Path, measurement_mode: 
         external_fixture={"tool_calls": metrics.tool_calls, "external_http_requests": metrics.external_http_requests, "failures": metrics.tool_failures},
         native_mcp=mcp,
         state=state,
-        thresholds={"p95_regression_pct": 20, "peak_allocation_regression_pct": 15, "tool_calls_per_finding_increase": 0, "soak_runs": 100, "gate_pattern_latency": False, "gate_timing_paths": False, "gate_cold_noise_floor": True, "gate_reader_metrics": bool(workbook.get("reader_instrumentation_available")) and bool(workbook["persistence"].get("instrumentation_available"))},
+        thresholds={"p95_regression_pct": 20, "peak_allocation_regression_pct": 15, "tool_calls_per_finding_increase": 0, "soak_runs": 100, "gate_pattern_latency": False, "gate_timing_paths": True, "gate_cold_noise_floor": True, "gate_reader_metrics": bool(workbook.get("reader_instrumentation_available")) and bool(workbook["persistence"].get("instrumentation_available"))},
         evidence=evidence,
         target_root=TARGET_ROOT,
         harness_root=HARNESS_ROOT,

@@ -312,7 +312,7 @@ def write_supplier_report(path: Path, supplier: SupplierAnalysis, state: Analysi
 def run_supplier_resilience_workflow(store: AnalysisStore, source: Path, *, human_decision: str = "REJECT", output_dir: Path | None = None, input_contract: AnalysisInputContract | dict[str, Any] | None = None, workbook_context: Any | None = None) -> SupplierWorkflowResult:
     try:
         if input_contract is None and store.brief_path.exists():
-            input_contract = normalize_work_brief(store.load_brief()).contract_for_domain("supplier_resilience")
+            input_contract = normalize_work_brief(store.load_brief()).declared_contract_for_domain("supplier_resilience")
         contract = resolve_workbook_contract("supplier_resilience", input_contract)
         result = WorkbookWorkflowRunner(store).run(
             Path(source),

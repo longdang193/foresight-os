@@ -5,7 +5,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from .analysis_inputs import AnalysisInputContract
+from .analysis_inputs import AnalysisInputContract, AnalysisInputDeclaration
 from .models import AnalysisState, EvidenceCandidate, ExecutionIntent, MethodProvenance, ResearchNeed, ResearchNeedKind, WorkBrief
 from foresight_os.controller.recipes import (
     INDEPENDENT_VALIDATION_POLICY,
@@ -254,7 +254,8 @@ def _normalize_work_brief(value: dict[str, Any]) -> dict[str, Any]:
         seen_scopes = set()
         for contract in contracts:
             try:
-                parsed = AnalysisInputContract.from_dict(contract)
+                declaration = AnalysisInputDeclaration.from_dict(contract)
+                parsed = declaration.resolve()
                 scope = parsed.stage_id or "GLOBAL_SCOPE"
                 key = (scope, parsed.domain.lower())
                 if key in seen_scopes:
@@ -262,7 +263,7 @@ def _normalize_work_brief(value: dict[str, Any]) -> dict[str, Any]:
                 if parsed.stage_id is not None and parsed.stage_id not in stage_ids:
                     raise ValueError(f"unknown analysis input contract stage: {parsed.stage_id}")
                 seen_scopes.add(key)
-                normalized_contracts.append(parsed.to_dict())
+                normalized_contracts.append(declaration.to_dict())
             except ValueError as exc:
                 raise ValidationError(str(exc)) from exc
         normalized["analysis_inputs"] = normalized_contracts

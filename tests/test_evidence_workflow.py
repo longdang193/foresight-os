@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -109,6 +110,30 @@ def test_superseded_pending_token_cannot_be_replayed(tmp_path: Path):
 
     with pytest.raises(ValueError, match="stale pending identity"):
         store.commit_revision(first, expected_revision=1, accepted=True)
+
+
+def test_consumed_pending_token_ledger_is_scoped_to_current_revision(tmp_path: Path):
+    store = AnalysisStore(tmp_path / "bounded-tokens")
+    state = AnalysisState("case", 1, revisions=[Revision("revision-1", 1, "initial", [])])
+    stale_state = state
+    consumed_tokens = []
+
+    for _ in range(6):
+        pending = store.save_pending(state)
+        consumed_tokens.append(pending.pending_token)
+        state = store.commit_revision(pending, expected_revision=pending.revision, accepted=True)
+
+    ledger = json.loads(store.pending_tokens_path.read_text(encoding="utf-8"))
+
+    assert isinstance(ledger, dict)
+    assert ledger["revision"] == state.revision
+    assert ledger["tokens"] == [consumed_tokens[-1]]
+    with pytest.raises(ValueError, match="stale revision"):
+        store.commit_revision(
+            replace(stale_state, pending_token=consumed_tokens[0]),
+            expected_revision=state.revision,
+            accepted=True,
+        )
 
 
 def test_xlsx_finding_workflow_persists_provenance_calculation_and_restart(tmp_path: Path):

@@ -286,7 +286,7 @@ def write_ev_report(path: Path, ev: EVAnalysis, state: AnalysisState | None = No
 def run_ev_capacity_investment_workflow(store: AnalysisStore, source: Path, *, human_decision: str = "REJECT", output_dir: Path | None = None, input_contract: AnalysisInputContract | dict[str, Any] | None = None, workbook_context: Any | None = None) -> EVWorkflowResult:
     try:
         if input_contract is None and store.brief_path.exists():
-            input_contract = normalize_work_brief(store.load_brief()).contract_for_domain("ev_capacity_investment")
+            input_contract = normalize_work_brief(store.load_brief()).declared_contract_for_domain("ev_capacity_investment")
         contract = resolve_workbook_contract("ev_capacity_investment", input_contract)
         result = WorkbookWorkflowRunner(store).run(
             Path(source),

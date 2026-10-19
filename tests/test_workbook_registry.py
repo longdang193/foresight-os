@@ -39,6 +39,13 @@ def test_registry_keeps_versions_and_fingerprints_stable():
     assert fingerprints == {domain: workbook_analyzer_fingerprint_for(domain) for domain in WORKBOOK_DOMAINS}
 
 
+def test_registry_reuses_immutable_default_contract_per_domain():
+    first = default_workbook_contract_for("portfolio_resilience")
+    second = default_workbook_contract_for("portfolio_resilience")
+
+    assert first is second
+
+
 def test_registry_analyzer_map_loads_callables_on_lookup():
     registry_module = importlib.import_module("foresight_os.analysis.workbook_registry")
     analyzers = workbook_analyzer_map()

@@ -276,6 +276,7 @@ class WorkbookStats:
     xlsx_parse_count: int = 0
     openpyxl_load_count: int = 0
     archive_sheets_scanned: int = 0
+    archive_sheet_xml_scanned: int = 0
     selected_sheet_count: int = 0
     selected_row_count: int = 0
     selected_cell_count: int = 0
@@ -1516,9 +1517,13 @@ def _preflight_xlsx_archive(
             if stats is not None:
                 stats.archive_sheets_scanned += 1
             title = sheet.attrib["name"]
+            if selection is not None and not _in_selection(title, selection):
+                continue
             target = targets.get(sheet.attrib.get(f"{{{namespaces['rel']}}}id"))
             if not target:
                 continue
+            if stats is not None:
+                stats.archive_sheet_xml_scanned += 1
             normalized_target = target.lstrip("/")
             sheet_path = posixpath.normpath(normalized_target if normalized_target.startswith("xl/") else posixpath.join("xl", normalized_target))
             selected_ranges = _selection_ranges_for_sheet(title, selection, _archive_table_ranges(archive, sheet_path, namespaces))

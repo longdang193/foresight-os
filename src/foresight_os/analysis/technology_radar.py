@@ -238,7 +238,7 @@ def render_technology_report(technology: TechnologyAnalysis, state: AnalysisStat
 def run_technology_radar_workflow(store: AnalysisStore, source: Path, *, human_decision: str = "REJECT", output_dir: Path | None = None, input_contract: AnalysisInputContract | dict[str, Any] | None = None, workbook_context: Any | None = None) -> TechnologyWorkflowResult:
     try:
         if input_contract is None and store.brief_path.exists():
-            input_contract = normalize_work_brief(store.load_brief()).contract_for_domain("technology_radar")
+            input_contract = normalize_work_brief(store.load_brief()).declared_contract_for_domain("technology_radar")
         contract = resolve_workbook_contract("technology_radar", input_contract)
         result = WorkbookWorkflowRunner(store).run(
             Path(source),

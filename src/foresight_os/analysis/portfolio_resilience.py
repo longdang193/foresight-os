@@ -793,7 +793,7 @@ def run_portfolio_resilience_workflow(
 ) -> PortfolioWorkflowResult:
     try:
         if input_contract is None and store.brief_path.exists():
-            input_contract = normalize_work_brief(store.load_brief()).contract_for_domain("portfolio_resilience")
+            input_contract = normalize_work_brief(store.load_brief()).declared_contract_for_domain("portfolio_resilience")
         contract = resolve_workbook_contract("portfolio_resilience", input_contract)
         result = WorkbookWorkflowRunner(store).run(
             Path(source),

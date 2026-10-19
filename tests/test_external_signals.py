@@ -1,7 +1,12 @@
 import asyncio
 
 from evaluation.probes.run_external_signal_probe import _provider_result_is_success
-from foresight_os.runtime.capabilities import CapabilityResolver, CapabilityScope
+from foresight_os.runtime.capabilities import (
+    CapabilityBindingKind,
+    CapabilityResolver,
+    CapabilityScope,
+    admit_capability_context,
+)
 from foresight_os.runtime.external_signals import (
     HOSTED_MCP_PROVIDERS,
     bind_hosted_mcp,
@@ -61,6 +66,61 @@ def test_load_bindings_only_constructs_requested_capabilities():
     )
     assert set(bindings) == {"technology_signals"}
     assert created == ["foresight-github"]
+
+
+def test_load_bindings_can_defer_hosted_tool_creation_until_activation():
+    created = []
+
+    class TrackingTool(FakeMCPTool):
+        def __init__(self, **kwargs):
+            created.append(kwargs["name"])
+            super().__init__(**kwargs)
+
+    bindings = load_hosted_mcp_bindings(
+        {"GITHUB_MCP_TOKEN": "github-token"},
+        tool_factory=TrackingTool,
+        required_capabilities={"technology_signals"},
+        activate=False,
+    )
+    binding = bindings["technology_signals"]
+    assert created == []
+    assert binding.kind == CapabilityBindingKind.RESOURCE_FACTORY
+
+    scope = CapabilityScope()
+    resolution = CapabilityResolver().resolve(
+        ("technology_signals",),
+        {"scope": scope, "mcp_tools": bindings},
+    )["technology_signals"]
+    assert resolution.available
+    assert created == ["foresight-github"]
+    asyncio.run(scope.close())
+    assert resolution.tool.closed
+
+
+def test_capability_admission_defers_hosted_mcp_creation_until_activation(monkeypatch):
+    created = []
+
+    def fake_create(provider_id, credential, **kwargs):
+        created.append(provider_id)
+        return FakeMCPTool(name=f"foresight-{provider_id}")
+
+    monkeypatch.setattr("foresight_os.runtime.external_signals.create_hosted_mcp_tool", fake_create)
+
+    scope = CapabilityScope()
+    context = admit_capability_context(
+        ("technology_signals",),
+        {
+            "scope": scope,
+            "mcp_environment": {"GITHUB_MCP_TOKEN": "github-token"},
+        },
+    )
+    assert created == []
+    assert context["capability_resolutions"]["technology_signals"].available
+
+    resolved = context["capability_resolver"].resolve(("technology_signals",), context)
+    assert created == ["github"]
+    asyncio.run(scope.close())
+    assert resolved["technology_signals"].tool.closed
 
 
 def test_hosted_mcp_tool_is_injected_into_maf_agent_and_scope_closes_it():
