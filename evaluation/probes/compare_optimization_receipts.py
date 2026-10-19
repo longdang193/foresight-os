@@ -506,7 +506,11 @@ def compare(baseline: dict, release: dict) -> dict:
     candidate_correctness = all(
         candidate.get("status") == "VERIFIED"
         and candidate.get("correctness") == "VERIFIED"
-        and (candidate.get("distinct_result_identity") is True or candidate.get("distinct_brief_results") is True)
+        and (
+            not any(field in candidate for field in ("distinct_result_identity", "distinct_brief_results"))
+            or candidate.get("distinct_result_identity") is True
+            or candidate.get("distinct_brief_results") is True
+        )
         and (candidate.get("source_identity_preserved", True) is True)
         and (candidate.get("reassessment_observed", True) is True)
         for candidate in (baseline_candidate, release_candidate)

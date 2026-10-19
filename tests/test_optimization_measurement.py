@@ -335,6 +335,22 @@ def test_candidate_variance_cannot_raise_baseline_noise_threshold():
     assert comparison["noise_floor_gate"] is False
 
 
+def test_comparator_accepts_verified_nonoptimization_candidate_without_identity_claim():
+    baseline = _receipt()
+    release = deepcopy(baseline)
+    release["revision"]["commit"] = "release-commit"
+    baseline_candidate = baseline["xlsx"]["workloads"]["public_workflow_context_reuse"]
+    release_candidate = release["xlsx"]["workloads"]["public_workflow_context_reuse"]
+    baseline_candidate.pop("distinct_brief_results")
+    release_candidate.pop("distinct_brief_results")
+
+    result = compare(baseline, release)
+
+    assert result["accepted"] is True
+    assert result["outcomes"]["correctness"]["status"] == "VERIFIED"
+    assert result["outcomes"]["optimization_demonstrated"]["status"] == "NOT_MEASURED"
+
+
 def test_comparator_rejects_new_calls_for_reused_stage():
     baseline = _receipt()
     release = deepcopy(baseline)
