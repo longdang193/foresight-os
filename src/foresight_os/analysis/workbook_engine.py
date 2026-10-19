@@ -101,4 +101,3 @@ class WorkbookAnalysisEngine:
             return WorkbookEngineResult(status="blocked_input", context=active_context, failure=str(error))
         except Exception as error:  # domain adapters convert malformed output at the workflow boundary
             return WorkbookEngineResult(status="failed", context=active_context, failure=f"{type(error).__name__}: {error}")
-
