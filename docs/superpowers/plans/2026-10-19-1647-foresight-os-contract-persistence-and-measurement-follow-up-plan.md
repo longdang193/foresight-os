@@ -136,8 +136,8 @@ it; the eager path remains the safe fallback otherwise.
 | Task | State | Workspace | Executor | Depends On | Required Proof | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | Task 1 | `completed` | new worktree | `lead controller` | none | sparse round-trip and parity tests | focused contract, runner, path-parity, execution-gate, CLI, and approval tests passed |
-| Task 2 | `active` | new worktree | `lead controller` | Task 1 | admission/activation lifecycle tests | in progress |
-| Task 3 | `pending` | new worktree | `lead controller` | Tasks 1-2 | changed-brief, history, timing, and receipt tests/probes | pending |
+| Task 2 | `completed` | new worktree | `lead controller` | Task 1 | admission/activation lifecycle tests | capability and hosted-MCP lifecycle tests passed |
+| Task 3 | `active` | new worktree | `lead controller` | Tasks 1-2 | changed-brief, history, timing, and receipt tests/probes | in progress |
 | Task 4 | `pending` | new worktree | `lead controller` | Task 3 | persistence benchmark plus stale/replay regression tests | pending |
 | Task 5 | `pending` | new worktree | `lead controller` | Task 3 | selected-sheet resource evidence and parity tests | pending |
 | Task 6 | `pending` | new worktree | `lead controller` | Tasks 1-5, with Tasks 4-5 completed or evidence-deferred | default construction proof and final suite | pending |

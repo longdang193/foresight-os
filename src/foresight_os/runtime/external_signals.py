@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from foresight_os.runtime.capabilities import CapabilityBinding, CapabilityOwnership
+from foresight_os.runtime.capabilities import CapabilityBinding, CapabilityBindingKind, CapabilityOwnership
 
 
 class HostedMCPError(RuntimeError):
@@ -139,6 +139,7 @@ def load_hosted_mcp_bindings(
     *,
     tool_factory: Any | None = None,
     required_capabilities: set[str] | tuple[str, ...] | None = None,
+    activate: bool = True,
 ) -> dict[str, CapabilityBinding]:
     values = os.environ if environment is None else environment
     bindings: dict[str, CapabilityBinding] = {}
@@ -154,11 +155,43 @@ def load_hosted_mcp_bindings(
             read_tool = str(values.get("FRED_MCP_READ_TOOL", "")).strip()
             if read_tool:
                 allowed_tools = (read_tool,)
-        tool = create_hosted_mcp_tool(provider_id, credential, endpoint=endpoint, tool_factory=tool_factory, allowed_tools=allowed_tools)
+        fingerprint = _fingerprint(provider, endpoint, credential)
+        if activate:
+            value = create_hosted_mcp_tool(
+                provider_id,
+                credential,
+                endpoint=endpoint,
+                tool_factory=tool_factory,
+                allowed_tools=allowed_tools,
+            )
+            bindings[provider.capability_id] = CapabilityBinding(
+                value,
+                ownership=CapabilityOwnership.OWNED,
+                fingerprint=fingerprint,
+            )
+            continue
+
+        def factory(
+            _context: Mapping[str, Any],
+            *,
+            provider_id: str = provider_id,
+            credential: str = credential,
+            endpoint: str = endpoint,
+            allowed_tools: tuple[str, ...] | None = allowed_tools,
+        ) -> Any:
+            return create_hosted_mcp_tool(
+                provider_id,
+                credential,
+                endpoint=endpoint,
+                tool_factory=tool_factory,
+                allowed_tools=allowed_tools,
+            )
+
         bindings[provider.capability_id] = CapabilityBinding(
-            tool,
+            factory,
+            kind=CapabilityBindingKind.RESOURCE_FACTORY,
             ownership=CapabilityOwnership.OWNED,
-            fingerprint=_fingerprint(provider, endpoint, credential),
+            fingerprint=fingerprint,
         )
     return bindings
 
