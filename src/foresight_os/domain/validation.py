@@ -300,13 +300,8 @@ def validate_evidence_candidate(candidate: EvidenceCandidate | dict[str, Any]) -
     return value
 
 
-def validate_analysis(state: AnalysisState | dict[str, Any], *, assume_json_shape: bool = False) -> dict[str, Any]:
-    if isinstance(state, AnalysisState):
-        value = _json_shape(state.to_dict())
-    elif assume_json_shape:
-        value = state
-    else:
-        value = _json_shape(state)
+def validate_analysis(state: AnalysisState | dict[str, Any]) -> dict[str, Any]:
+    value = _json_shape(state.to_dict() if isinstance(state, AnalysisState) else state)
     _validate_schema(value, "analysis.schema.json")
 
     collections = (
