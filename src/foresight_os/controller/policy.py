@@ -10,6 +10,7 @@ from foresight_os.controller.recipes import (
     make_recipe,
     minimum_stage_agent_calls,
 )
+from foresight_os.analysis.workbook_inputs import workbook_analyzer_fingerprint
 from foresight_os.controller.task_shape import TaskShape
 from foresight_os.domain.analysis_inputs import NormalizedIntent, normalize_work_brief
 from foresight_os.domain.models import ResearchNeed, ResearchNeedKind, WorkBrief
@@ -402,16 +403,21 @@ def _recipe_for_patterns(
         if not contracts:
             return ()
         stage_id = str(getattr(stage, "stage_id", f"stage-{index}"))
-        domains = [contract.domain for contract in contracts if contract.stage_id is None]
-        domains.extend(contract.domain for contract in contracts if contract.stage_id == stage_id)
-        return tuple(dict.fromkeys(domains))
+        return tuple(dict.fromkeys(contract.domain for contract in contracts if contract.stage_id == stage_id))
 
     def stage_contract_fingerprints(stage: object, index: int) -> tuple[tuple[str, str], ...]:
         if not contracts:
             return ()
         stage_id = str(getattr(stage, "stage_id", f"stage-{index}"))
-        selected = [contract for contract in contracts if contract.stage_id is None or contract.stage_id == stage_id]
+        selected = [contract for contract in contracts if contract.stage_id == stage_id]
         return tuple((contract.domain, contract.fingerprint) for contract in selected)
+
+    def stage_analyzer_fingerprints(stage: object, index: int) -> tuple[tuple[str, str], ...]:
+        if not contracts:
+            return ()
+        stage_id = str(getattr(stage, "stage_id", f"stage-{index}"))
+        selected = [contract for contract in contracts if contract.stage_id == stage_id]
+        return tuple((contract.domain, workbook_analyzer_fingerprint(contract.domain)) for contract in selected)
 
     stages = tuple(
         RecipeStage(
@@ -486,6 +492,7 @@ def _recipe_for_patterns(
             analysis_domains=stage_analysis_domains(work_stages[index - 1] if index <= len(work_stages) else object(), index),
             executor_kind="deterministic_local" if stage_analysis_domains(work_stages[index - 1] if index <= len(work_stages) else object(), index) else "agent",
             analysis_contract_fingerprints=stage_contract_fingerprints(work_stages[index - 1] if index <= len(work_stages) else object(), index),
+            analysis_analyzer_fingerprints=stage_analyzer_fingerprints(work_stages[index - 1] if index <= len(work_stages) else object(), index),
         )
         for index in range(1, stage_count + 1)
     )

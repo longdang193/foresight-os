@@ -63,6 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
     execute.add_argument("--run-id")
     execute.add_argument("--env-file", type=Path, default=Path(".env"))
     execute.add_argument("--config-file", type=Path, default=Path.home() / ".codex" / "config.toml")
+    execute.add_argument("--workbook", type=Path)
 
     for name in ("pause", "cancel"):
         control = subparsers.add_parser(name)
@@ -229,9 +230,18 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": record.status.value, "fingerprint": record.projection_fingerprint, "approval_source": record.approval_source}, sort_keys=True))
         return 0
     if args.command == "execute":
+        store = AnalysisStore(args.work_dir)
         try:
             import asyncio
-            client = build_configured_client(args.env_file, args.config_file)
+            try:
+                recipe = store.load_recipe_bundle().recipe
+                needs_provider = any(
+                    str(getattr(stage, "executor_kind", "agent")) != "deterministic_local"
+                    for stage in recipe.stages or ()
+                )
+            except (FileNotFoundError, OSError, ValueError):
+                needs_provider = True
+            client = build_configured_client(args.env_file, args.config_file) if needs_provider else None
         except (ImportError, OSError):
             print(json.dumps({"status": "BLOCKED_EXTERNAL", "error": "execution requires configured provider credentials"}))
             return 2
@@ -247,6 +257,7 @@ def main(argv: list[str] | None = None) -> int:
                     client,
                     args.run_id,
                     run_context=run_context,
+                    workbook_source=args.workbook,
                 )
             )
         except ExecutionAdmissionError as exc:

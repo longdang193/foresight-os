@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import date
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
@@ -11,6 +12,7 @@ from foresight_os.domain.models import Evidence, SourceLocator
 from foresight_os.runtime.local_toolbelt import (
     CellProvenance,
     MissingWorkbookInputError,
+    SheetSelection,
     SourceSnapshot,
     ToolbeltError,
     ToolbeltLimits,
@@ -18,6 +20,78 @@ from foresight_os.runtime.local_toolbelt import (
     WorkbookReadResult,
     spreadsheet_read,
 )
+
+
+def default_workbook_contract(domain: str) -> AnalysisInputContract:
+    defaults = {
+        "portfolio_resilience": AnalysisInputContract(
+            domain="portfolio_resilience",
+            required_tables=("Brief", "Sales_History", "Fixed_Costs", "Scenario_Assumptions", "Strategic_Options", "Reported_KPIs"),
+            periods=("2026", "2025"),
+            baseline_period="2026",
+            comparison_period="2025",
+            scenarios=("Downside", "Base", "Upside"),
+            units="EUR",
+            reporting_currency="EUR",
+            compatibility_assumption="legacy workbook metadata defaults",
+        ),
+        "supplier_resilience": AnalysisInputContract(
+            domain="supplier_resilience",
+            required_tables=("Brief", "Supplier_Master", "Incidents", "Scenario_Assumptions", "Mitigation_Options"),
+            units="EUR",
+            reporting_currency="EUR",
+            conversion_rates={"EUR": 1.0, "USD": 0.92, "CNY": 0.13},
+            compatibility_assumption="legacy supplier workbook FX map: EUR=1.0, USD=0.92, CNY=0.13",
+        ),
+        "ev_capacity_investment": AnalysisInputContract(
+            domain="ev_capacity_investment",
+            required_tables=("Brief", "Demand_History", "Demand_Scenarios", "Capacity", "Infrastructure", "Policy_Signals", "Strategic_Options", "Reported_KPIs"),
+            periods=("2025", "2026", "2030"),
+            scenarios=("Low", "Base", "High"),
+            units="units",
+            compatibility_assumption="legacy workbook scenario defaults",
+        ),
+        "technology_radar": AnalysisInputContract(
+            domain="technology_radar",
+            required_tables=("Brief", "Signals", "Company_Relevance", "Competitor_Actions", "Scenario_Signposts", "Priority_Scoring"),
+            units="index",
+            compatibility_assumption="legacy technology radar scope",
+        ),
+        "powerbi_strategic_portfolio": AnalysisInputContract(
+            domain="powerbi_strategic_portfolio",
+            required_tables=("Brief", "Dim_Region", "Dim_Segment", "Fact_Performance", "Targets", "Forward_Signals", "Measure_Definitions", "Dashboard_Snapshot", "Strategic_Options", "Change_One_Input"),
+            baseline_period="2025-01:2025-09",
+            comparison_period="2026-01:2026-09",
+            units="EUR",
+            periods=("2025-01:2025-09", "2026-01:2026-09"),
+            compatibility_assumption="legacy Power BI comparable-period defaults",
+        ),
+    }
+    try:
+        return defaults[str(domain)]
+    except KeyError as exc:
+        raise ValueError(f"unsupported workbook analysis domain: {domain}") from exc
+
+
+_WORKBOOK_ANALYZER_VERSIONS = {
+    "portfolio_resilience": "1",
+    "supplier_resilience": "1",
+    "ev_capacity_investment": "1",
+    "technology_radar": "1",
+    "powerbi_strategic_portfolio": "1",
+}
+
+
+def workbook_analyzer_version(domain: str) -> str:
+    try:
+        return _WORKBOOK_ANALYZER_VERSIONS[str(domain)]
+    except KeyError as exc:
+        raise ValueError(f"unsupported workbook analysis domain: {domain}") from exc
+
+
+def workbook_analyzer_fingerprint(domain: str) -> str:
+    payload = f"{domain}:{workbook_analyzer_version(domain)}".encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -28,17 +102,83 @@ class WorkbookLayoutSpec:
     required_tables: tuple[str, ...] = ()
     table_aliases: tuple[tuple[str, str], ...] = ()
     required_columns: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    selection: SheetSelection | None = None
+    scope_columns: tuple[tuple[str, tuple[tuple[str, tuple[str, ...]], ...]], ...] = ()
+    required_scope_dimensions: tuple[tuple[str, tuple[str, ...]], ...] = ()
     unit_policy: str = "preserve"
 
     @classmethod
     def from_contract(cls, contract: AnalysisInputContract) -> "WorkbookLayoutSpec":
+        raw_selection = dict(contract.workbook_selection)
+        aliases = {str(key): str(value) for key, value in raw_selection.get("table_aliases", {}).items()}
+        sheet_aliases = {str(key): str(value) for key, value in raw_selection.get("sheet_aliases", {}).items()}
+        explicit_selection = any(
+            key in raw_selection
+            for key in ("sheet", "sheet_names", "ranges", "range", "tables", "table")
+        )
+        if explicit_selection:
+            sheet_names = raw_selection.get("sheet_names", raw_selection.get("sheet", ())) or ()
+            if isinstance(sheet_names, str):
+                sheet_names = (sheet_names,)
+            sheet_names = tuple(sheet_aliases.get(str(item), str(item)) for item in sheet_names)
+            ranges = raw_selection.get("ranges", raw_selection.get("range", ())) or ()
+            if isinstance(ranges, str):
+                ranges = ((raw_selection.get("sheet", ""), ranges),)
+            if ranges and isinstance(ranges[0], str):
+                ranges = ((raw_selection.get("sheet", ""), ranges[0]),)
+            normalized_ranges = tuple((sheet_aliases.get(str(item[0]), str(item[0])), str(item[1])) for item in ranges)
+            tables = raw_selection.get("tables", raw_selection.get("table", ())) or ()
+            if isinstance(tables, str):
+                tables = (tables,)
+            if tables and isinstance(tables[0], str):
+                tables = (tables,)
+            normalized_tables = tuple(
+                (sheet_aliases.get(str(item[0]), str(item[0])), aliases.get(str(item[1]), str(item[1])))
+                for item in tables
+            )
+            selection = SheetSelection(
+                sheet_names=sheet_names,
+                ranges=normalized_ranges,
+                tables=normalized_tables,
+                include_hidden=bool(raw_selection.get("include_hidden", False)),
+                include_hidden_rows=bool(raw_selection.get("include_hidden_rows", False)),
+            )
+        else:
+            physical_names = tuple(dict.fromkeys(aliases.get(str(item), str(item)) for item in contract.required_tables))
+            selection = SheetSelection(
+                sheet_names=physical_names,
+                include_hidden=bool(raw_selection.get("include_hidden", True)),
+                include_hidden_rows=bool(raw_selection.get("include_hidden_rows", True)),
+            ) if physical_names else None
+
+        raw_scope_columns = raw_selection.get("scope_columns", {})
+        scope_columns: list[tuple[str, tuple[tuple[str, tuple[str, ...]], ...]]] = []
+        if isinstance(raw_scope_columns, Mapping):
+            for logical_name, dimensions in raw_scope_columns.items():
+                normalized_dimensions: list[tuple[str, tuple[str, ...]]] = []
+                if isinstance(dimensions, Mapping):
+                    for dimension, columns in dimensions.items():
+                        if isinstance(columns, str):
+                            columns = (columns,)
+                        normalized_dimensions.append((str(dimension), tuple(str(column) for column in columns)))
+                scope_columns.append((str(logical_name), tuple(sorted(normalized_dimensions))))
+        raw_required_scope = raw_selection.get("required_scope_dimensions", {})
+        required_scope_dimensions: list[tuple[str, tuple[str, ...]]] = []
+        if isinstance(raw_required_scope, Mapping):
+            for logical_name, dimensions in raw_required_scope.items():
+                if isinstance(dimensions, str):
+                    dimensions = (dimensions,)
+                required_scope_dimensions.append((str(logical_name), tuple(str(item) for item in dimensions)))
         return cls(
             domain=contract.domain,
             required_tables=tuple(contract.required_tables),
-            table_aliases=tuple(sorted((str(key), str(value)) for key, value in contract.workbook_selection.get("table_aliases", {}).items())),
+            table_aliases=tuple(sorted(aliases.items())),
             required_columns=tuple(
-                sorted((str(key), tuple(str(item) for item in value)) for key, value in contract.workbook_selection.get("required_columns", {}).items())
+                sorted((str(key), tuple(str(item) for item in value)) for key, value in raw_selection.get("required_columns", {}).items())
             ),
+            selection=selection,
+            scope_columns=tuple(sorted(scope_columns)),
+            required_scope_dimensions=tuple(sorted(required_scope_dimensions)),
             unit_policy="preserve",
         )
 
@@ -49,6 +189,8 @@ class ResolvedWorkbookLayout:
     source_sha256: str
     domain: str
     bindings: tuple[tuple[str, TypedTable], ...]
+    scope_columns: tuple[tuple[str, tuple[tuple[str, tuple[str, ...]], ...]], ...] = ()
+    required_scope_dimensions: tuple[tuple[str, tuple[str, ...]], ...] = ()
     unit_policy: str = "preserve"
     fingerprint: str = field(default="", init=False)
 
@@ -58,6 +200,8 @@ class ResolvedWorkbookLayout:
             "source_sha256": self.source_sha256,
             "domain": self.domain,
             "bindings": [(logical, table.sheet, table.name, table.source_range, table.material_fingerprint) for logical, table in self.bindings],
+            "scope_columns": self.scope_columns,
+            "required_scope_dimensions": self.required_scope_dimensions,
             "unit_policy": self.unit_policy,
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
@@ -111,8 +255,13 @@ def resolve_workbook_layout(workbook: WorkbookReadResult, spec: WorkbookLayoutSp
         source_sha256=workbook.workbook_sha256,
         domain=spec.domain,
         bindings=tuple(bindings),
+        scope_columns=spec.scope_columns,
+        required_scope_dimensions=spec.required_scope_dimensions,
         unit_policy=spec.unit_policy,
     )
+
+
+_MISSING = object()
 
 
 def _scope_value(row: Mapping[str, Any], names: tuple[str, ...]) -> Any:
@@ -120,7 +269,23 @@ def _scope_value(row: Mapping[str, Any], names: tuple[str, ...]) -> Any:
     for name in names:
         if name in normalized:
             return normalized[name]
-    return None
+    return _MISSING
+
+
+def _period_interval(value: Any) -> tuple[tuple[int, int], tuple[int, int]] | None:
+    text = str(value).strip()
+    match = re.fullmatch(r"(\d{4})(?:-Q([1-4])|-(\d{2}))?(?::(\d{4})(?:-Q([1-4])|-(\d{2}))?)?", text)
+    if match is None:
+        return None
+    start_year = int(match.group(1))
+    start_quarter = int(match.group(2)) if match.group(2) else None
+    start_month = int(match.group(3)) if match.group(3) else None
+    end_year = int(match.group(4) or start_year)
+    end_quarter = int(match.group(5)) if match.group(5) else None
+    end_month = int(match.group(6)) if match.group(6) else None
+    start_key = (start_year, (start_quarter - 1) * 3 + 1 if start_quarter else start_month or 1)
+    end_key = (end_year, end_quarter * 3 if end_quarter else end_month or 12)
+    return start_key, end_key
 
 
 def _scope_matches(value: Any, allowed: tuple[str, ...], label: str) -> bool:
@@ -128,25 +293,54 @@ def _scope_matches(value: Any, allowed: tuple[str, ...], label: str) -> bool:
     permitted = {str(item).strip() for item in allowed}
     if observed in permitted:
         return True
-    if label == "unit" and any(item.lower() in {"unit", "units", "count"} for item in permitted):
-        return True
     if label == "period":
-        observed_year = observed[:4]
-        return any(observed_year and observed_year == item[:4] for item in permitted)
+        observed_interval = _period_interval(observed)
+        if observed_interval is None:
+            return False
+        observed_start, observed_end = observed_interval
+        for item in permitted:
+            permitted_interval = _period_interval(item)
+            if permitted_interval is None:
+                continue
+            permitted_start, permitted_end = permitted_interval
+            if permitted_start <= observed_end and observed_start <= permitted_end:
+                return True
     return False
 
 
-def _row_matches_scope(row: Mapping[str, Any], contract: AnalysisInputContract) -> tuple[bool, str]:
+def _row_matches_scope(
+    row: Mapping[str, Any],
+    contract: AnalysisInputContract,
+    *,
+    scope_columns: Mapping[str, tuple[str, ...]] | None = None,
+    required_dimensions: tuple[str, ...] = (),
+) -> tuple[bool, str]:
+    scope_columns = dict(scope_columns or {})
     checks = (
         (contract.entity_scope, ("entity", "entity_name", "company", "supplier", "region", "market"), "entity"),
         (contract.periods, ("period", "year", "date", "period_name", "quarter"), "period"),
         (contract.scenarios, ("scenario", "scenario_name"), "scenario"),
+        ((contract.units,) if contract.units else (), ("unit", "units", "currency"), "unit"),
     )
     for allowed, names, label in checks:
         if not allowed:
             continue
-        value = _scope_value(row, names)
-        if value is not None and not _scope_matches(value, allowed, label):
+        explicitly_bound = label in scope_columns or label in required_dimensions
+        if label == "unit" and not explicitly_bound:
+            continue
+        bound_names = tuple(scope_columns[label]) if label in scope_columns else names
+        value = _scope_value(row, bound_names)
+        if value is _MISSING:
+            if label in required_dimensions:
+                return False, f"required_scope_{label}_missing"
+            continue
+        if value in (None, ""):
+            if label in required_dimensions:
+                return False, f"required_scope_{label}_missing"
+            continue
+        if not _scope_matches(value, allowed, label):
+            if label == "period" and not explicitly_bound and _period_interval(value) is None:
+                continue
             return False, f"out_of_scope_{label}"
     return True, ""
 
@@ -154,13 +348,20 @@ def _row_matches_scope(row: Mapping[str, Any], contract: AnalysisInputContract) 
 def build_material_view(workbook: WorkbookReadResult, layout: ResolvedWorkbookLayout, contract: AnalysisInputContract) -> MaterialView:
     material_tables: list[tuple[str, TypedTable]] = []
     rejected: list[tuple[str, int, str, tuple[CellProvenance, ...]]] = []
+    scope_columns_by_table = dict(layout_scope for layout_scope in layout.scope_columns) if hasattr(layout, "scope_columns") else {}
+    required_dimensions_by_table = dict(layout_required for layout_required in layout.required_scope_dimensions) if hasattr(layout, "required_scope_dimensions") else {}
     for logical_name, table in layout.bindings:
         retained_rows: list[tuple[Any, ...]] = []
         retained_provenance: list[tuple[CellProvenance, ...]] = []
         retained_measurements: list[tuple[Any, ...]] = []
         for index, row in enumerate(table.rows):
             row_mapping = dict(zip(table.columns, row, strict=False))
-            keep, reason = _row_matches_scope(row_mapping, contract)
+            keep, reason = _row_matches_scope(
+                row_mapping,
+                contract,
+                scope_columns=dict(scope_columns_by_table.get(logical_name, ())),
+                required_dimensions=required_dimensions_by_table.get(logical_name, ()),
+            )
             provenance = table.row_provenance[index] if index < len(table.row_provenance) else ()
             if keep:
                 retained_rows.append(row)

@@ -81,6 +81,26 @@ def test_runner_keeps_pending_state_without_rendering(tmp_path):
     assert store.pending_analysis_path.exists()
 
 
+def test_runner_keeps_accepted_state_when_report_rendering_fails(tmp_path):
+    store = AnalysisStore(tmp_path / "artifact-failure")
+
+    def render(*args):
+        raise OSError("renderer unavailable")
+
+    outcome = WorkbookWorkflowRunner(store).run(
+        _source(tmp_path),
+        _contract(),
+        _analyzer,
+        human_decision="ACCEPT",
+        render_report=render,
+    )
+
+    assert outcome.status == "accepted"
+    assert outcome.artifact_status == "failed"
+    assert "renderer unavailable" in (outcome.artifact_error or "")
+    assert store.load_analysis().revision_status == RevisionStatus.ACCEPTED
+
+
 def test_runner_rejects_without_rendering(tmp_path):
     store = AnalysisStore(tmp_path / "rejected")
     report_calls = []

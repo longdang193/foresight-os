@@ -11,10 +11,12 @@ from foresight_os.controller.recipes import ExecutionPattern
 from foresight_os.controller.proposal import build_execution_recipe
 from foresight_os.domain.approval import AdaptationEnvelope, ApprovalRecord, ApprovalStatus
 from foresight_os.domain.analysis_inputs import AnalysisInputContract
+from foresight_os.domain.models import WorkStage
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.persistence.ids import canonical_json_hash
 from foresight_os.runtime.execution_gate import ExecutionAdmissionError, ExecutionGate
 from foresight_os.runtime.capabilities import CapabilityBinding, CapabilityBindingKind, CapabilityOwnership
+from foresight_os.runtime.local_toolbelt import SourceSnapshot
 from foresight_os.wayfinding import create_work_brief
 
 
@@ -143,6 +145,49 @@ def test_admitted_execution_forwards_persisted_analysis_contract_identity(monkey
     asyncio.run(ExecutionGate(store).execute(prompt="Question", client=object(), run_id="run-contract"))
 
     assert seen["analysis_contract_fingerprints"]["portfolio_resilience"]
+    assert seen["analysis_analyzer_fingerprints"]["portfolio_resilience"]
+
+
+def test_all_local_approved_workbook_execution_commits_source_sha_without_client(tmp_path):
+    source = Path("tests/fixtures/exercise/04_Technology_Radar.xlsx").resolve()
+    brief = create_work_brief(
+        "Assess technology readiness",
+        investigation_id="local-workbook-gate",
+        stages=[WorkStage("stage-1", "Assess technology readiness")],
+        analysis_inputs={
+            "technology_radar": AnalysisInputContract(
+                domain="technology_radar",
+                stage_id="stage-1",
+                required_tables=(
+                    "Brief",
+                    "Signals",
+                    "Company_Relevance",
+                    "Competitor_Actions",
+                    "Scenario_Signposts",
+                    "Priority_Scoring",
+                ),
+                units="index",
+            ).to_dict(),
+        },
+    )
+    recipe = build_execution_recipe(brief).recipe
+    store = AnalysisStore(tmp_path / "local-workbook-gate")
+    store.save_brief(brief)
+    store.save_recipe(recipe)
+    approve_recipe(store, recipe)
+
+    result = asyncio.run(ExecutionGate(store).execute(
+        prompt=brief.decision_question,
+        client=None,
+        run_id="run-local-workbook-gate",
+        workbook_source=source,
+    ))
+
+    receipt = store.load_stage_receipts()["stage-1"]
+    assert result.metrics.runtime_status == "SETTLED"
+    assert result.metrics.persistence_status == "PERSISTED"
+    assert receipt.status == "committed"
+    assert receipt.source_revision == SourceSnapshot.capture(source).sha256
 
 
 def test_admitted_execution_without_client_is_blocked(tmp_path):

@@ -204,7 +204,9 @@ class AnalysisInputContract:
 
     @property
     def fingerprint(self) -> str:
-        payload = json.dumps(_canonical(self.to_dict()), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        payload_value = self.to_dict()
+        payload_value.pop("stage_id", None)
+        payload = json.dumps(_canonical(payload_value), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     @property
