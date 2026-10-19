@@ -39,6 +39,13 @@ ANALYSIS_INPUT_CONTRACT_FIELDS = frozenset(
 )
 GLOBAL_SCOPE = "GLOBAL_SCOPE"
 
+_DECLARATION_ALIASES = {
+    "tables": "required_tables",
+    "entities": "entity_scope",
+    "currency": "reporting_currency",
+    "validation_checks": "required_validation_checks",
+}
+
 
 def _tuple(value: Any) -> tuple[str, ...]:
     if value is None:
@@ -80,8 +87,19 @@ class AnalysisInputDeclaration:
     @classmethod
     def from_dict(cls, value: Mapping[str, Any], *, domain: str | None = None) -> "AnalysisInputDeclaration":
         data = dict(value)
-        if domain is not None:
-            data["domain"] = str(domain)
+        domain_values = [candidate for candidate in (data.get("domain"), data.get("name"), domain) if candidate is not None]
+        if domain_values and len({_canonical(candidate) for candidate in domain_values}) > 1:
+            raise ValueError("conflicting analysis input domain aliases: domain, name, or scope")
+        if domain_values:
+            data["domain"] = str(domain_values[0])
+        data.pop("name", None)
+        for alias, canonical in _DECLARATION_ALIASES.items():
+            if alias not in data:
+                continue
+            if canonical in data and _canonical(data[canonical]) != _canonical(data[alias]):
+                raise ValueError(f"conflicting analysis input aliases: {canonical} and {alias}")
+            data[canonical] = data.get(canonical, data[alias])
+            data.pop(alias, None)
         if not str(data.get("domain", "")).strip():
             raise ValueError("analysis input declaration requires a domain")
         return cls(data)

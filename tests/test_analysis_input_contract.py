@@ -7,7 +7,7 @@ from foresight_os.analysis.supplier_resilience import analyze_supplier_resilienc
 from foresight_os.analysis.portfolio_resilience import analyze_portfolio_resilience
 from foresight_os.analysis.powerbi_strategic_portfolio import analyze_powerbi_strategic_portfolio
 from foresight_os.analysis.technology_radar import analyze_technology_radar
-from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
+from foresight_os.domain.analysis_inputs import AnalysisInputContract, AnalysisInputDeclaration, normalize_work_brief
 from foresight_os.domain.models import WorkBrief, WorkStage
 from foresight_os.domain.validation import ValidationError, validate_work_brief
 from foresight_os.runtime.local_toolbelt import ToolbeltError
@@ -77,6 +77,54 @@ def test_invalid_contract_policy_is_rejected_before_analysis():
 def test_unknown_analysis_input_contract_fields_are_rejected_before_normalization():
     with pytest.raises(ValidationError, match="unsupported fields: entity_scoep"):
         validate_work_brief(_brief(supplier_resilience={"domain": "supplier_resilience", "entity_scoep": ["Power Electronics"]}))
+
+
+def test_sparse_declaration_aliases_canonicalize_before_defaults_and_persist_canonically():
+    declaration = AnalysisInputDeclaration.from_dict({
+        "name": "supplier_resilience",
+        "tables": ["Supplier_Master"],
+        "entities": ["Cetus Electronics"],
+        "currency": "EUR",
+        "validation_checks": ["required_columns"],
+    })
+
+    assert declaration.to_dict() == {
+        "domain": "supplier_resilience",
+        "required_tables": ["Supplier_Master"],
+        "entity_scope": ["Cetus Electronics"],
+        "reporting_currency": "EUR",
+        "required_validation_checks": ["required_columns"],
+    }
+    assert declaration.resolve().fingerprint == AnalysisInputContract(
+        domain="supplier_resilience",
+        required_tables=("Supplier_Master",),
+        entity_scope=("Cetus Electronics",),
+        reporting_currency="EUR",
+        required_validation_checks=("required_columns",),
+    ).fingerprint
+
+
+@pytest.mark.parametrize(
+    ("canonical", "alias", "canonical_value", "alias_value"),
+    (
+        ("required_tables", "tables", ["Canonical"], ["Alias"]),
+        ("entity_scope", "entities", ["Canonical"], ["Alias"]),
+        ("reporting_currency", "currency", "EUR", "USD"),
+        ("required_validation_checks", "validation_checks", ["canonical"], ["alias"]),
+    ),
+)
+def test_sparse_declaration_conflicting_aliases_fail_closed(canonical, alias, canonical_value, alias_value):
+    with pytest.raises(ValueError, match="conflicting analysis input aliases"):
+        AnalysisInputDeclaration.from_dict({
+            "domain": "supplier_resilience",
+            canonical: canonical_value,
+            alias: alias_value,
+        })
+
+
+def test_sparse_declaration_conflicting_name_and_domain_fail_closed():
+    with pytest.raises(ValueError, match="conflicting analysis input domain aliases"):
+        AnalysisInputDeclaration.from_dict({"domain": "supplier_resilience", "name": "portfolio_resilience"})
 
 
 def test_analysis_input_contract_freezes_mappings_and_validates_periods():
