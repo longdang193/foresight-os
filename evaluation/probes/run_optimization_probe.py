@@ -841,7 +841,7 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
         same_view_samples.append((time.perf_counter() - started) * 1000)
     validator_samples: list[float] = []
     validator_report = None
-    for _ in range(3):
+    for _ in range(10):
         validator_started = time.perf_counter()
         validator_report = run_independent_validation(path, selection=context_selection, workbook_context=context)
         validator_samples.append((time.perf_counter() - validator_started) * 1000)
