@@ -18,7 +18,7 @@ from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.runtime.local_toolbelt import AnalysisOperation, SheetSelection, ToolbeltLimits
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 HARNESS_VERSION = "optimization-harness-v1"
 HARNESS_PATHS = (
     "evaluation/probes/optimization_measurement.py",
@@ -38,8 +38,10 @@ MANDATORY_XLSX_WORKLOADS = (
 )
 DETERMINISTIC_XLSX_WORKLOADS = MANDATORY_XLSX_WORKLOADS + ("public_workflow_context_reuse",)
 SCENARIO_XLSX_WORKLOADS = (
+    "approved_changed_brief",
     "changed_brief",
     "changed_selection",
+    "selected_sheet_stress",
     "history-10",
     "history-100",
     "history-1000",
@@ -217,6 +219,19 @@ def _percentile(values: list[float], percentile: float) -> float:
     ordered = sorted(float(value) for value in values)
     index = min(len(ordered) - 1, max(0, int((len(ordered) - 1) * percentile)))
     return round(ordered[index], 3)
+
+
+def timing_statistics(values: list[float]) -> dict[str, Any]:
+    samples = [round(float(value), 3) for value in values]
+    p50 = _percentile(samples, 0.50)
+    p95 = _percentile(samples, 0.95)
+    return {
+        "sample_count": len(samples),
+        "samples_ms": samples,
+        "p50_ms": p50,
+        "p95_ms": p95,
+        "noise_floor_ms": round(max(0.0, p95 - p50), 3),
+    }
 
 
 def _metric_snapshot(metrics: Any, wall_time_ms: float) -> dict[str, Any]:

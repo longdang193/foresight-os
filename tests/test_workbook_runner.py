@@ -144,6 +144,21 @@ def test_runner_reuses_existing_lifecycle_for_repeated_source_and_contract(tmp_p
     assert second.state is not None and second.state.revision > first.state.revision
 
 
+def test_runner_preserves_explicit_empty_effective_contract(tmp_path):
+    store = AnalysisStore(tmp_path / "explicit-empty")
+    contract = AnalysisInputContract(domain="runner", required_tables=())
+
+    outcome = WorkbookWorkflowRunner(store).run(
+        _source(tmp_path),
+        contract,
+        _analyzer,
+        human_decision="REJECT",
+    )
+
+    assert outcome.status == "rejected"
+    assert outcome.contract_fingerprint == contract.fingerprint
+
+
 def test_runner_cancellation_settles_before_persistence(tmp_path):
     store = AnalysisStore(tmp_path / "cancelled")
     outcome = WorkbookWorkflowRunner(store).run(

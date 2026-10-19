@@ -71,13 +71,16 @@ class WorkbookWorkflowRunner:
         render_report: Callable[[Path, Any, AnalysisState], None] | None = None,
         cancel_check: Callable[[], bool] | None = None,
     ) -> WorkbookWorkflowResult:
-        domain = contract.domain if isinstance(contract, AnalysisInputContract) else dict(contract).get("domain", "")
-        try:
-            normalized = resolve_workbook_contract(domain, contract)
-        except ValueError as error:
-            if not str(error).startswith("unsupported workbook analysis domain:"):
-                raise
-            normalized = AnalysisInputContract.from_dict(contract.to_dict() if isinstance(contract, AnalysisInputContract) else contract)
+        if isinstance(contract, AnalysisInputContract):
+            normalized = contract
+        else:
+            domain = dict(contract).get("domain", "")
+            try:
+                normalized = resolve_workbook_contract(domain, contract)
+            except ValueError as error:
+                if not str(error).startswith("unsupported workbook analysis domain:"):
+                    raise
+                normalized = AnalysisInputContract.from_dict(contract)
         engine_result = self.engine.run(
             source,
             normalized,

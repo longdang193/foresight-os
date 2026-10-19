@@ -5,6 +5,7 @@ import foresight_os.runtime.workflow as workflow_module
 from foresight_os.controller.policy import select_recipe
 from foresight_os.controller.recipes import ExecutionPattern, RecipeStage, StageInput
 from foresight_os.controller.skills import ResolvedSkill, SkillManifest
+from foresight_os.analysis.workbook_inputs import resolve_workbook_contract
 from foresight_os.domain.models import WorkBrief, WorkStage
 from foresight_os.domain.analysis_inputs import AnalysisInputContract
 from foresight_os.runtime.workflow import _stage_cache_key, _stage_fingerprints, run_recipe_async
@@ -56,6 +57,24 @@ def test_recipe_compiles_explicit_contract_domains_without_wire_field_drift():
     assert restored.stages[0].analysis_domains == ("portfolio_resilience",)
     assert recipe.to_dict()["stages"][0]["analysis_domains"] == ["portfolio_resilience"]
     assert "analysis_contract_domains" not in recipe.metadata
+
+
+def test_recipe_stage_contract_fingerprint_uses_effective_workbook_contract():
+    brief = _brief([WorkStage("supplier", "assess suppliers", participants=["analyst"])])
+    brief = WorkBrief(
+        **{
+            **brief.__dict__,
+            "analysis_inputs": [{"domain": "supplier_resilience", "stage_id": "supplier", "entity_scope": []}],
+        }
+    )
+
+    recipe = select_recipe(brief)
+    expected = resolve_workbook_contract(
+        "supplier_resilience",
+        {"domain": "supplier_resilience", "stage_id": "supplier", "entity_scope": []},
+    )
+
+    assert recipe.stages[0].analysis_contract_fingerprints == (("supplier_resilience", expected.fingerprint),)
 
 
 def test_global_contracts_do_not_select_deterministic_stage_domains():

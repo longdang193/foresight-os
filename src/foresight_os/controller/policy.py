@@ -398,26 +398,33 @@ def _recipe_for_patterns(
         )
         max_total_agent_calls = max(max_total_agent_calls, planned_agent_calls)
 
-    contracts = tuple(normalized_intent.contracts) if normalized_intent is not None else ()
     def stage_analysis_domains(stage: object, index: int) -> tuple[str, ...]:
-        if not contracts:
+        if normalized_intent is None:
             return ()
         stage_id = str(getattr(stage, "stage_id", f"stage-{index}"))
-        return tuple(dict.fromkeys(contract.domain for contract in contracts if contract.stage_id == stage_id))
+        return tuple(dict.fromkeys(
+            declaration.domain
+            for declaration in normalized_intent.declarations
+            if declaration.stage_id == stage_id
+        ))
 
     def stage_contract_fingerprints(stage: object, index: int) -> tuple[tuple[str, str], ...]:
-        if not contracts:
+        if normalized_intent is None:
             return ()
         stage_id = str(getattr(stage, "stage_id", f"stage-{index}"))
-        selected = [contract for contract in contracts if contract.stage_id == stage_id]
-        return tuple((contract.domain, contract.fingerprint) for contract in selected)
+        domains = stage_analysis_domains(stage, index)
+        return tuple(
+            (domain, normalized_intent.effective_contract_for_domain(domain, stage_id).fingerprint)
+            for domain in domains
+        )
 
     def stage_analyzer_fingerprints(stage: object, index: int) -> tuple[tuple[str, str], ...]:
-        if not contracts:
+        if normalized_intent is None:
             return ()
-        stage_id = str(getattr(stage, "stage_id", f"stage-{index}"))
-        selected = [contract for contract in contracts if contract.stage_id == stage_id]
-        return tuple((contract.domain, workbook_analyzer_fingerprint(contract.domain)) for contract in selected)
+        return tuple(
+            (domain, workbook_analyzer_fingerprint(domain))
+            for domain in stage_analysis_domains(stage, index)
+        )
 
     stages = tuple(
         RecipeStage(

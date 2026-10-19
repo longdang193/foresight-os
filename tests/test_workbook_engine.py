@@ -81,6 +81,21 @@ def test_engine_returns_typed_domain_result_without_persistence_side_effects(tmp
     assert result.metrics["capture_count"] == 1
 
 
+def test_engine_does_not_re_resolve_effective_contract_with_explicit_empty_tables(tmp_path):
+    source = _workbook(tmp_path)
+    contract = AnalysisInputContract(domain="test", required_tables=())
+
+    result = WorkbookAnalysisEngine().run(
+        source,
+        contract,
+        lambda material, normalized: DomainAnalysis(result=normalized.required_tables),
+    )
+
+    assert result.status == "completed"
+    assert result.domain_result is not None
+    assert result.domain_result.result == ()
+
+
 def test_engine_maps_missing_selection_to_blocked_input(tmp_path):
     source = _workbook(tmp_path)
     contract = AnalysisInputContract(
