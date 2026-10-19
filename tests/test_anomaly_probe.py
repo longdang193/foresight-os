@@ -18,9 +18,19 @@ def test_anomaly_probe_is_deterministic_for_short_run():
     assert not report["failures"]
 
 
-def test_anomaly_probe_cli_emits_sanitized_measurement_report():
+def test_anomaly_probe_cli_emits_sanitized_measurement_report(tmp_path):
+    output_root = tmp_path / "probe-output"
     result = subprocess.run(
-        [sys.executable, "evaluation/probes/run_anomaly_probe.py", "--runs", "3", "--seed", "test-seed"],
+        [
+            sys.executable,
+            "evaluation/probes/run_anomaly_probe.py",
+            "--runs",
+            "3",
+            "--seed",
+            "test-seed",
+            "--output-root",
+            str(output_root),
+        ],
         cwd=ROOT,
         check=True,
         capture_output=True,

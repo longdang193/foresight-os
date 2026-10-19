@@ -7,7 +7,7 @@ from typing import Any, Callable, Mapping
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
 from foresight_os.analysis.workbook_engine import DomainAnalyzer, DomainAnalysis, WorkbookAnalysisEngine
-from foresight_os.analysis.workbook_inputs import WorkbookLayoutSpec
+from foresight_os.analysis.workbook_inputs import WorkbookLayoutSpec, resolve_workbook_contract
 from foresight_os.domain.analysis_inputs import AnalysisInputContract
 from foresight_os.domain.models import AnalysisState
 from foresight_os.persistence.analysis_store import AnalysisStore
@@ -71,7 +71,13 @@ class WorkbookWorkflowRunner:
         render_report: Callable[[Path, Any, AnalysisState], None] | None = None,
         cancel_check: Callable[[], bool] | None = None,
     ) -> WorkbookWorkflowResult:
-        normalized = AnalysisInputContract.from_dict(contract)
+        domain = contract.domain if isinstance(contract, AnalysisInputContract) else dict(contract).get("domain", "")
+        try:
+            normalized = resolve_workbook_contract(domain, contract)
+        except ValueError as error:
+            if not str(error).startswith("unsupported workbook analysis domain:"):
+                raise
+            normalized = AnalysisInputContract.from_dict(contract.to_dict() if isinstance(contract, AnalysisInputContract) else contract)
         engine_result = self.engine.run(
             source,
             normalized,
@@ -79,6 +85,7 @@ class WorkbookWorkflowRunner:
             layout_spec=layout_spec,
             context=workbook_context,
             cancel_check=cancel_check,
+            materialize_scope=False,
         )
         layout = engine_result.layout
         fingerprints = {
@@ -191,15 +198,43 @@ class WorkbookWorkflowRunner:
                 **fingerprints,
             )
 
+    def retry_render(
+        self,
+        result: WorkbookWorkflowResult,
+        *,
+        render_report: Callable[[Path, Any, AnalysisState], None],
+        output_dir: Path | None = None,
+        report_name: str = "executive-report.md",
+    ) -> WorkbookWorkflowResult:
+        """Retry only artifact rendering for an already accepted revision."""
+        if result.status != "accepted" or result.state is None or result.domain_result is None:
+            return replace(
+                result,
+                artifact_status="failed",
+                artifact_error="retry render requires an accepted analysis result",
+            )
+        report_root = Path(output_dir) if output_dir is not None else self.store.root / "artifacts"
+        report_path = report_root / report_name
+        try:
+            render_report(report_path, result.domain_result, result.state)
+        except Exception as error:
+            return replace(
+                result,
+                report_path=report_path,
+                artifact_status="failed",
+                artifact_error=f"{type(error).__name__}: {error}",
+            )
+        return replace(
+            result,
+            report_path=report_path,
+            artifact_status="accepted",
+            artifact_error=None,
+        )
+
 
 def merge_input_contract(
     default: AnalysisInputContract,
     value: AnalysisInputContract | Mapping[str, Any] | None,
 ) -> AnalysisInputContract:
-    """Merge compatibility defaults with partial legacy caller contracts."""
-    if value is None:
-        return default
-    overrides = value.to_dict() if isinstance(value, AnalysisInputContract) else dict(value)
-    if not overrides.get("required_tables"):
-        overrides.pop("required_tables", None)
-    return AnalysisInputContract.from_dict({**default.to_dict(), **overrides})
+    """Compatibility wrapper for the canonical workbook contract resolver."""
+    return resolve_workbook_contract(default.domain, value)

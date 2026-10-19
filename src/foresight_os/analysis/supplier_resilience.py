@@ -8,14 +8,14 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
-from foresight_os.analysis.workbook_inputs import MaterialView, apply_table_column_mappings, default_workbook_contract, read_workbook, require_row_columns, require_table, row_evidence, table_rows
-from foresight_os.analysis.workbook_engine import DomainAnalysis
-from foresight_os.analysis.workbook_runner import WorkbookWorkflowRunner, merge_input_contract
+from foresight_os.analysis.workbook_inputs import MaterialView, WorkbookLayoutSpec, apply_table_column_mappings, require_row_columns, require_table, resolve_workbook_contract, row_evidence, table_rows
+from foresight_os.analysis.workbook_engine import DomainAnalysis, WorkbookAnalysisEngine, require_completed
+from foresight_os.analysis.workbook_runner import WorkbookWorkflowRunner
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
 from foresight_os.persistence.analysis_store import AnalysisStore
-from foresight_os.runtime.local_toolbelt import SheetSelection, ToolbeltError
+from foresight_os.runtime.local_toolbelt import ToolbeltError
 
 
 @dataclass(frozen=True)
@@ -81,6 +81,8 @@ class SupplierWorkflowResult:
     review: ReviewResult | None
     report_path: Path | None
     failure: str | None = None
+    artifact_status: str = "not_requested"
+    artifact_error: str | None = None
 
 
 def _number(value: Any) -> float | None:
@@ -114,15 +116,36 @@ def _record(record_id: str, statement: str, evidence_ids: list[str], assumptions
     return AnalyticalRecord(record_id, statement, Basis.DERIVED, Assessment.SUPPORTED, evidence_ids=list(dict.fromkeys(evidence_ids)), assumptions=assumptions, uncertainty=uncertainty, confidence_rationale="Derived from deterministic row-level calculations with explicit exclusions and assumptions.", disconfirmation_conditions=disconfirmation, monitoring_indicators=monitoring)
 
 def analyze_supplier_resilience(source: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None, *, workbook_context: Any | None = None) -> SupplierAnalysis:
-    source = Path(source)
-    contract = default_workbook_contract("supplier_resilience") if input_contract is None else AnalysisInputContract.from_dict(input_contract)
+    contract = resolve_workbook_contract("supplier_resilience", input_contract)
     contract.validate()
-    workbook = workbook_context if isinstance(workbook_context, MaterialView) else read_workbook(source, SheetSelection(sheet_names=("Brief", "Supplier_Master", "Incidents", "Scenario_Assumptions", "Mitigation_Options"), include_hidden=True, include_hidden_rows=True), workbook_context=workbook_context)
+    result = WorkbookAnalysisEngine().run(
+        Path(source),
+        contract,
+        lambda material, normalized: _analyze_supplier_material(
+            material,
+            normalized,
+            legacy_conversion=input_contract is None,
+        ),
+        layout_spec=WorkbookLayoutSpec.from_contract(contract),
+        context=workbook_context,
+        materialize_scope=False,
+    )
+    return require_completed(result).result
+
+
+def _analyze_supplier_material(
+    material: MaterialView,
+    contract: AnalysisInputContract,
+    *,
+    legacy_conversion: bool = False,
+) -> DomainAnalysis:
+    material.check_cancel()
+    contract.validate()
+    workbook = material
     digest = workbook.workbook_sha256
     brief, supplier_table, incident_table, scenario_table, option_table = [_table(workbook, name) for name in ("Brief", "Supplier_Master", "Incidents", "Scenario_Assumptions", "Mitigation_Options")]
     conversion_rates = contract.conversion_rates
     reporting_unit = contract.reporting_currency or contract.units or "EUR"
-    legacy_conversion = input_contract is None
     required_columns = (
         (supplier_table, ("Line_ID", "Supplier", "Country", "Part_Family", "Annual_Spend", "Currency", "Criticality_1_5", "Lead_Time_Days", "Defect_PPM", "Qualified_Alternatives", "Geo_Risk_1_5", "Unit_Cost")),
         (incident_table, ("Incident_ID", "Date", "Supplier", "Part_Family", "Disruption_Days", "Expedite_Premium_pct")),
@@ -246,7 +269,8 @@ def analyze_supplier_resilience(source: Path, input_contract: AnalysisInputContr
     state = AnalysisState("supplier-resilience", 1, evidence=evidence, claims=claims, implications=[implication], recommendations=[recommendation], relationships=relationships, revisions=[Revision("revision-1", 1, "supplier resilience analysis pending acceptance", [item.id for item in [*evidence, *calculations, *claims, implication, recommendation]])], invalidation=Invalidation(), revision_status=RevisionStatus.DRAFT, calculations=calculations)
     decision_question = next((str(row[1]) for row in brief.rows if row and row[0] == "Decision question" and len(row) > 1), "Does purchasing concentration create unacceptable strategic exposure?")
     horizon = next((str(row[1]) for row in brief.rows if row and row[0] == "Horizon" and len(row) > 1), "12–36 months")
-    return SupplierAnalysis(digest, decision_question, horizon, assumptions, tuple(issues), tuple(metrics), tuple(scenarios), options, ("Supplier-part HHI and top supplier share", "Qualified alternatives by critical family", "Disruption days and expedite premium", "Defect PPM and lead-time excursions", "Open data-quality exceptions"), recommendation.statement, state, contract.fingerprint, reporting_unit)
+    value = SupplierAnalysis(digest, decision_question, horizon, assumptions, tuple(issues), tuple(metrics), tuple(scenarios), options, ("Supplier-part HHI and top supplier share", "Qualified alternatives by critical family", "Disruption days and expedite premium", "Defect PPM and lead-time excursions", "Open data-quality exceptions"), recommendation.statement, state, contract.fingerprint, reporting_unit)
+    return DomainAnalysis(result=value, state=state)
 
 def _money(value: float | None, currency: str = "EUR") -> str:
     return "n/a" if value is None else f"{currency} {value:,.0f}"
@@ -285,19 +309,11 @@ def write_supplier_report(path: Path, supplier: SupplierAnalysis, state: Analysi
     path.write_text(render_supplier_report(supplier, state), encoding="utf-8")
 
 
-def _analyze_supplier_material(material: MaterialView, contract: AnalysisInputContract) -> DomainAnalysis:
-    value = analyze_supplier_resilience(
-        Path(material.source),
-        merge_input_contract(default_workbook_contract("supplier_resilience"), contract),
-        workbook_context=material,
-    )
-    return DomainAnalysis(result=value, state=value.state)
-
 def run_supplier_resilience_workflow(store: AnalysisStore, source: Path, *, human_decision: str = "REJECT", output_dir: Path | None = None, input_contract: AnalysisInputContract | dict[str, Any] | None = None, workbook_context: Any | None = None) -> SupplierWorkflowResult:
     try:
         if input_contract is None and store.brief_path.exists():
             input_contract = normalize_work_brief(store.load_brief()).contract_for_domain("supplier_resilience")
-        contract = merge_input_contract(default_workbook_contract("supplier_resilience"), input_contract)
+        contract = resolve_workbook_contract("supplier_resilience", input_contract)
         result = WorkbookWorkflowRunner(store).run(
             Path(source),
             contract,
@@ -307,6 +323,15 @@ def run_supplier_resilience_workflow(store: AnalysisStore, source: Path, *, huma
             output_dir=output_dir,
             render_report=lambda path, value, state: write_supplier_report(path, value, state),
         )
-        return SupplierWorkflowResult(result.status, result.state, result.domain_result, result.review, result.report_path, result.failure)
+        return SupplierWorkflowResult(
+            result.status,
+            result.state,
+            result.domain_result,
+            result.review,
+            result.report_path,
+            result.failure,
+            result.artifact_status,
+            result.artifact_error,
+        )
     except Exception as error:
         return SupplierWorkflowResult("failed", None, None, None, None, f"{type(error).__name__}: {error}")

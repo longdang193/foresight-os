@@ -26,9 +26,48 @@ def test_stage_receipt_reuse_revalidates_semantic_scope_and_provenance():
     assert receipt.reusable_for(input_fingerprint="input-v1", skill_hashes=("skill-v1",), capability_fingerprints=("local-v1",), model_config_fingerprint="model-v1", authorization_scope_fingerprint="scope-v1")
     assert not receipt.reusable_for(input_fingerprint="input-v1", skill_hashes=("skill-v1",), capability_fingerprints=("local-v1",), model_config_fingerprint="model-v1", authorization_scope_fingerprint="scope-v1", analyzer_fingerprints=(("portfolio_resilience", "analyzer-v2"),))
     assert not receipt.reusable_for(input_fingerprint="input-v1", authorization_scope_fingerprint="scope-v2")
+    assert receipt.reusable_for(input_fingerprint="input-v1", source_revision="", skill_hashes=("skill-v1",), capability_fingerprints=("local-v1",), model_config_fingerprint="model-v1", authorization_scope_fingerprint="scope-v1")
+    assert not receipt.reusable_for(input_fingerprint="input-v1", source_revision="changed-source")
     assert not receipt.reusable_for(input_fingerprint="input-v1", execution_policy_fingerprint="policy-v2", skill_hashes=("skill-v1",), capability_fingerprints=("local-v1",), model_config_fingerprint="model-v1", authorization_scope_fingerprint="scope-v1")
     assert classify_reuse(receipt, reusable=True)["status"] == "reusable"
     assert classify_reuse(None, reusable=False)["status"] == "fresh"
+
+
+def test_workbook_source_revision_changes_stage_identity_and_blocks_receipt_reuse():
+    base = make_recipe(RecipeName.DIRECT)
+    stage = RecipeStage("first", ExecutionPattern.DIRECT, ({"id": "first"},), "prompt", "typed-result", {}, analysis_domains=("test",), executor_kind="deterministic_local")
+    recipe = ExecutionRecipe(
+        base.name,
+        base.pattern,
+        base.roles,
+        base.max_agent_steps,
+        base.max_correction_rounds,
+        base.max_total_agent_calls,
+        base.completion,
+        base.escalation,
+        base.partial_result,
+        stages=(stage,),
+    )
+    output = {"stage": "old"}
+    first_input = StageInput("start", "unspecified", "execute declared stage", "", workbook_source_sha256="source-v1")
+    receipt = StageReceipt(
+        "first",
+        _stage_cache_key(stage, first_input, ()),
+        result_references=("claim-1",),
+        result_hashes=(_canonical_result_hash(output),),
+        status="committed",
+        committed=True,
+        provenance_complete=True,
+        source_revision="source-v1",
+    )
+
+    changed_input = StageInput("start", "unspecified", "execute declared stage", "", workbook_source_sha256="source-v2")
+
+    assert _stage_cache_key(stage, first_input, ()) != _stage_cache_key(stage, changed_input, ())
+    assert not receipt.reusable_for(
+        input_fingerprint=_stage_cache_key(stage, first_input, ()),
+        source_revision="source-v2",
+    )
 
 
 def test_committed_stage_cache_hits_complete_ordered_stages_without_new_calls():

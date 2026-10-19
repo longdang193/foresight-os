@@ -4,6 +4,7 @@ import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Mapping
 
 import yaml
@@ -94,6 +95,7 @@ class StageReceipt:
         self,
         *,
         input_fingerprint: str,
+        source_revision: str | None = None,
         execution_policy_fingerprint: str = "",
         skill_hashes: tuple[str, ...] = (),
         capability_fingerprints: tuple[str, ...] = (),
@@ -111,6 +113,7 @@ class StageReceipt:
             and self.model_config_fingerprint == model_config_fingerprint
             and self.authorization_scope_fingerprint == authorization_scope_fingerprint
             and self.analyzer_fingerprints == tuple(analyzer_fingerprints)
+            and (source_revision in (None, "") or self.source_revision == source_revision)
             and (not result_hashes or self.result_hashes == tuple(result_hashes))
         )
 
@@ -122,9 +125,30 @@ class LoadedRecipe:
     persisted_fingerprint: str
 
 
+@dataclass
+class AnalysisStoreStats:
+    load_count: int = 0
+    load_time_ms: float = 0.0
+    merge_count: int = 0
+    merge_time_ms: float = 0.0
+    validation_count: int = 0
+    validation_time_ms: float = 0.0
+    pending_write_count: int = 0
+    pending_write_bytes: int = 0
+    pending_write_time_ms: float = 0.0
+    committed_write_count: int = 0
+    committed_write_bytes: int = 0
+    committed_write_time_ms: float = 0.0
+    review_attach_count: int = 0
+    review_attach_time_ms: float = 0.0
+    receipt_write_count: int = 0
+    receipt_write_time_ms: float = 0.0
+
+
 class AnalysisStore:
     def __init__(self, root: Path):
         self.root = Path(root)
+        self.stats = AnalysisStoreStats()
 
     @property
     def brief_path(self) -> Path:
@@ -264,6 +288,7 @@ class AnalysisStore:
         return {key: StageReceipt.from_dict(item) for key, item in value.get("receipts", {}).items()}
 
     def save_stage_receipt(self, receipt: StageReceipt) -> None:
+        started = perf_counter()
         if receipt.status == "committed" and not receipt.reusable():
             raise ValueError("committed stage receipt requires canonical result references, hashes, and complete provenance")
         with FileLock(str(self.lock_path)):
@@ -273,9 +298,11 @@ class AnalysisStore:
                 self.stage_receipts_path,
                 json.dumps({"schema_version": 1, "receipts": {key: item.to_dict() for key, item in sorted(receipts.items())}}, sort_keys=True, indent=2) + "\n",
             )
+        self.stats.receipt_write_count += 1
+        self.stats.receipt_write_time_ms += (perf_counter() - started) * 1000
 
     def save_analysis(self, state: AnalysisState) -> None:
-        value = validate_analysis(state)
+        value = self._validate_analysis(state)
         with FileLock(str(self.lock_path)):
             self._write_validated(value)
 
@@ -329,6 +356,7 @@ class AnalysisStore:
             return pending, self._revision_snapshot_unlocked()
 
     def save_delivery_receipt(self, artifact_id: str, receipt: dict[str, object]) -> AnalysisState:
+        started = perf_counter()
         with FileLock(str(self.lock_path)):
             if self.pending_analysis_path.exists():
                 raise ValueError("cannot persist delivery receipt while a pending analysis revision exists")
@@ -351,7 +379,9 @@ class AnalysisStore:
             if not found:
                 raise ValueError(f"unknown artifact for delivery receipt: {artifact_id}")
             updated = replace(state, artifacts=artifacts)
-            self._write_validated(validate_analysis(updated))
+            self._write_validated(self._validate_analysis(updated))
+            self.stats.review_attach_count += 1
+            self.stats.review_attach_time_ms += (perf_counter() - started) * 1000
             return updated
 
     def commit_revision(self, state: AnalysisState, expected_revision: int, accepted: bool) -> AnalysisState:
@@ -376,7 +406,10 @@ class AnalysisStore:
             status = RevisionStatus.ACCEPTED if accepted else RevisionStatus.REJECTED
             committed = replace(state, revision_status=status, pending_token=None)
             if pending is not None and current is not None and accepted:
+                merge_started = perf_counter()
                 committed = self._merge_states(current, committed)
+                self.stats.merge_count += 1
+                self.stats.merge_time_ms += (perf_counter() - merge_started) * 1000
             elif current is not None and current.revision_status != RevisionStatus.PENDING_REVIEW and committed.revision <= current.revision:
                 number = current.revision + 1
                 revision = Revision(
@@ -386,7 +419,7 @@ class AnalysisStore:
                     [item.id for collection in [committed.evidence, committed.claims, committed.implications, committed.recommendations, committed.artifacts] for item in collection] + [item.id for item in committed.calculations],
                 )
                 committed = replace(committed, revision=number, revisions=[*current.revisions, revision])
-            self._write_validated(validate_analysis(committed))
+            self._write_validated(self._validate_analysis(committed))
             if pending is not None:
                 self._remember_consumed_pending_token(pending.pending_token)
             self.pending_analysis_path.unlink(missing_ok=True)
@@ -409,8 +442,11 @@ class AnalysisStore:
                 [item.id for collection in [pending.evidence, pending.claims, pending.implications, pending.recommendations, pending.artifacts] for item in collection] + [item.id for item in pending.calculations],
             )
             pending = replace(pending, revision=number, revisions=[*current.revisions, revision])
+            merge_started = perf_counter()
             pending = self._merge_states(current, pending)
-        self._write_validated(validate_analysis(pending), self.pending_analysis_path)
+            self.stats.merge_count += 1
+            self.stats.merge_time_ms += (perf_counter() - merge_started) * 1000
+        self._write_validated(self._validate_analysis(pending), self.pending_analysis_path)
         if existing_pending is not None:
             self._remember_consumed_pending_token(existing_pending.pending_token)
         return pending
@@ -450,7 +486,7 @@ class AnalysisStore:
             if pending.revision != state.revision or pending.pending_token != state.pending_token:
                 raise ValueError("stale pending identity")
             updated = replace(state, revision_status=RevisionStatus.PENDING_REVIEW)
-            self._write_validated(validate_analysis(updated), self.pending_analysis_path)
+            self._write_validated(self._validate_analysis(updated), self.pending_analysis_path)
             return updated
 
     def load_pending(self) -> AnalysisState:
@@ -466,8 +502,10 @@ class AnalysisStore:
         return self._load_path(self.analysis_path)
 
     def _load_path(self, path: Path) -> AnalysisState:
+        started = perf_counter()
+        self.stats.load_count += 1
         value = migrate_analysis_dict(json.loads(path.read_text(encoding="utf-8")))
-        value = validate_analysis(value)
+        value = self._validate_analysis(value)
         evidence = [
             Evidence(
                 item["id"],
@@ -564,7 +602,7 @@ class AnalysisStore:
             )
             for item in value.get("review_records", ())
         ]
-        return AnalysisState(
+        result = AnalysisState(
             investigation_id=value["investigation_id"],
             revision=value["revision"],
             evidence=evidence,
@@ -591,9 +629,30 @@ class AnalysisStore:
             pending_token=value.get("pending_token"),
             review_records=review_records,
         )
+        self.stats.load_time_ms += (perf_counter() - started) * 1000
+        return result
+
+    def _validate_analysis(self, value: AnalysisState | dict) -> dict:
+        started = perf_counter()
+        result = validate_analysis(value)
+        self.stats.validation_count += 1
+        self.stats.validation_time_ms += (perf_counter() - started) * 1000
+        return result
 
     def _write_validated(self, value: dict, path: Path | None = None) -> None:
-        self._atomic_write(path or self.analysis_path, json.dumps(value, indent=2) + "\n")
+        target = path or self.analysis_path
+        started = perf_counter()
+        content = json.dumps(value, indent=2) + "\n"
+        self._atomic_write(target, content)
+        elapsed_ms = (perf_counter() - started) * 1000
+        if target == self.pending_analysis_path:
+            self.stats.pending_write_count += 1
+            self.stats.pending_write_bytes += len(content.encode("utf-8"))
+            self.stats.pending_write_time_ms += elapsed_ms
+        elif target == self.analysis_path:
+            self.stats.committed_write_count += 1
+            self.stats.committed_write_bytes += len(content.encode("utf-8"))
+            self.stats.committed_write_time_ms += elapsed_ms
 
     def _load_consumed_pending_tokens(self) -> set[str]:
         if not self.pending_tokens_path.exists():

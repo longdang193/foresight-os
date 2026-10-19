@@ -190,6 +190,52 @@ def test_all_local_approved_workbook_execution_commits_source_sha_without_client
     assert receipt.source_revision == SourceSnapshot.capture(source).sha256
 
 
+def test_workbook_capture_runs_outside_persistence_lock(monkeypatch, tmp_path):
+    source = Path("tests/fixtures/exercise/04_Technology_Radar.xlsx").resolve()
+    brief = create_work_brief(
+        "Assess technology readiness",
+        investigation_id="lock-scope",
+        stages=[WorkStage("stage-1", "Assess technology readiness")],
+        analysis_inputs={
+            "technology_radar": AnalysisInputContract(
+                domain="technology_radar",
+                stage_id="stage-1",
+                required_tables=("Brief", "Signals", "Company_Relevance", "Competitor_Actions", "Scenario_Signposts", "Priority_Scoring"),
+                units="index",
+            ).to_dict(),
+        },
+    )
+    recipe = build_execution_recipe(brief).recipe
+    store = AnalysisStore(tmp_path / "lock-scope")
+    store.save_brief(brief)
+    store.save_recipe(recipe)
+    approve_recipe(store, recipe)
+    events = []
+    original_capture = SourceSnapshot.capture
+
+    class RecordingLock:
+        def __init__(self, path):
+            self.path = path
+
+        def __enter__(self):
+            events.append("lock-enter")
+            return self
+
+        def __exit__(self, *_args):
+            events.append("lock-exit")
+
+    def capture(*args, **kwargs):
+        events.append("capture")
+        return original_capture(*args, **kwargs)
+
+    monkeypatch.setattr("foresight_os.runtime.execution_gate.FileLock", RecordingLock)
+    monkeypatch.setattr(SourceSnapshot, "capture", capture)
+
+    ExecutionGate(store).admit(prompt=brief.decision_question, workbook_source=source)
+
+    assert events.index("lock-exit") < events.index("capture")
+
+
 def test_admitted_execution_without_client_is_blocked(tmp_path):
     store = prepared_store(tmp_path)
 

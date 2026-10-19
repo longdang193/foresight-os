@@ -142,3 +142,71 @@ def test_runner_reuses_existing_lifecycle_for_repeated_source_and_contract(tmp_p
     assert first.source_fingerprint == second.source_fingerprint
     assert first.contract_fingerprint == second.contract_fingerprint
     assert second.state is not None and second.state.revision > first.state.revision
+
+
+def test_runner_cancellation_settles_before_persistence(tmp_path):
+    store = AnalysisStore(tmp_path / "cancelled")
+    outcome = WorkbookWorkflowRunner(store).run(
+        _source(tmp_path),
+        _contract(),
+        _analyzer,
+        human_decision="ACCEPT",
+        cancel_check=lambda: True,
+    )
+
+    assert outcome.status == "cancelled"
+    assert outcome.metrics["cancellation_settled"] == 1
+    assert outcome.state is None
+    assert not store.pending_analysis_path.exists()
+    assert not store.analysis_path.exists()
+
+
+def test_runner_retry_render_does_not_repeat_analysis_or_review(tmp_path, monkeypatch):
+    store = AnalysisStore(tmp_path / "retry")
+    analyzer_calls = 0
+    review_calls = 0
+
+    def analyzer(material, contract):
+        nonlocal analyzer_calls
+        analyzer_calls += 1
+        return _analyzer(material, contract)
+
+    import foresight_os.analysis.workbook_runner as runner_module
+
+    original_review = runner_module.review_analysis_state
+
+    def review(state):
+        nonlocal review_calls
+        review_calls += 1
+        return original_review(state)
+
+    monkeypatch.setattr(runner_module, "review_analysis_state", review)
+    first = WorkbookWorkflowRunner(store).run(
+        _source(tmp_path),
+        _contract(),
+        analyzer,
+        human_decision="ACCEPT",
+        render_report=lambda *args: (_ for _ in ()).throw(OSError("renderer unavailable")),
+    )
+
+    assert first.status == "accepted"
+    assert first.artifact_status == "failed"
+    assert analyzer_calls == 1
+    assert review_calls == 1
+
+    calls = []
+
+    def retry_renderer(path, value, state):
+        calls.append((path, value, state.revision))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("retry", encoding="utf-8")
+
+    retried = WorkbookWorkflowRunner(store).retry_render(first, render_report=retry_renderer)
+
+    assert retried.status == "accepted"
+    assert retried.artifact_status == "accepted"
+    assert retried.artifact_error is None
+    assert retried.report_path is not None and retried.report_path.read_text(encoding="utf-8") == "retry"
+    assert len(calls) == 1
+    assert analyzer_calls == 1
+    assert review_calls == 1

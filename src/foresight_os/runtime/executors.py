@@ -10,6 +10,7 @@ from agent_framework import Agent, ChatMiddleware
 from agent_framework._tools import FunctionInvocationLayer
 
 from foresight_os.analysis.result_committer import decode_stage_output
+from foresight_os.domain.analysis_inputs import GLOBAL_SCOPE
 from foresight_os.runtime.participants import AgentFactory, ParticipantConfig
 from foresight_os.runtime.metrics import BudgetExceededError
 
@@ -260,7 +261,14 @@ class DeterministicLocalExecutor:
             raise ValueError("deterministic-local stage requires one workbook domain, source, and analyzer")
         domain = domains[0]
         analyzer = analyzers.get(domain)
-        contract = contracts.get(domain) if isinstance(contracts, Mapping) else None
+        contract = None
+        if isinstance(contracts, Mapping):
+            stage_id = str(getattr(self.stage, "stage_id", "stage"))
+            contract = contracts.get(f"{stage_id}:{domain}") or contracts.get(f"{GLOBAL_SCOPE}:{domain}") or contracts.get(domain)
+        if contract is None:
+            resolver = self.run_context.get("analysis_contract_resolver")
+            if resolver is not None:
+                contract = resolver(domain, str(getattr(self.stage, "stage_id", "stage"))).to_dict()
         if analyzer is None or contract is None:
             raise ValueError(f"deterministic-local stage is not bound to workbook domain: {domain}")
         from foresight_os.analysis.workbook_engine import WorkbookAnalysisEngine
@@ -274,6 +282,13 @@ class DeterministicLocalExecutor:
 
             workbook_context = WorkbookContext()
             scope.workbook_context = workbook_context
+        snapshot = self.run_context.get("workbook_snapshot")
+        if snapshot is not None:
+            if workbook_context is None:
+                from foresight_os.runtime.local_toolbelt import WorkbookContext
+
+                workbook_context = WorkbookContext()
+            workbook_context.adopt_snapshot(snapshot)
         engine = self.run_context.get("workbook_engine") or WorkbookAnalysisEngine(context=workbook_context)
         cancel_event = threading.Event()
         original_cancel_check = self.run_context.get("cancel_check")
@@ -282,7 +297,7 @@ class DeterministicLocalExecutor:
             return cancel_event.is_set() or bool(original_cancel_check and original_cancel_check())
 
         def run_blocking() -> Any:
-            return engine.run(source, contract, analyzer, cancel_check=cancelled)
+            return engine.run(source, contract, analyzer, cancel_check=cancelled, materialize_scope=False)
 
         if scope is not None and getattr(scope, "executor", None) is None:
             scope.executor = ThreadPoolExecutor(max_workers=1)
@@ -319,20 +334,10 @@ class DeterministicLocalExecutor:
         return result.domain_result.result
 
 
-def _default_workbook_analyzers() -> dict[str, Callable[..., Any]]:
-    from foresight_os.analysis.ev_capacity_investment import _analyze_ev_material
-    from foresight_os.analysis.portfolio_resilience import _analyze_portfolio_material
-    from foresight_os.analysis.powerbi_strategic_portfolio import _analyze_powerbi_material
-    from foresight_os.analysis.supplier_resilience import _analyze_supplier_material
-    from foresight_os.analysis.technology_radar import _analyze_technology_material
+def _default_workbook_analyzers() -> Mapping[str, Callable[..., Any]]:
+    from foresight_os.analysis.workbook_registry import workbook_analyzer_map
 
-    return {
-        "ev_capacity_investment": _analyze_ev_material,
-        "portfolio_resilience": _analyze_portfolio_material,
-        "powerbi_strategic_portfolio": _analyze_powerbi_material,
-        "supplier_resilience": _analyze_supplier_material,
-        "technology_radar": _analyze_technology_material,
-    }
+    return workbook_analyzer_map()
 
 
 @dataclass

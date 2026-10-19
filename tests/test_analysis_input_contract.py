@@ -87,6 +87,58 @@ def test_period_spec_preserves_cross_year_range_meaning():
     assert spec.is_cross_year
 
 
+@pytest.mark.parametrize(
+    ("period", "start", "end", "granularity"),
+    (
+        ("2026", (2026, 1), (2026, 12), "year"),
+        ("2026-01", (2026, 1), (2026, 1), "month"),
+        ("2026-Q1", (2026, 1), (2026, 3), "quarter"),
+        ("2025-01:2026-03", (2025, 1), (2026, 3), "range"),
+        ("2025-Q4:2026-Q2", (2025, 10), (2026, 6), "range"),
+    ),
+)
+def test_period_spec_normalizes_year_month_quarter_and_range(period, start, end, granularity):
+    spec = AnalysisInputContract(domain="supplier_resilience", periods=(period,)).period_specs[0]
+
+    assert spec.start_key == start
+    assert spec.end_key == end
+    assert spec.granularity == granularity
+
+
+def test_contract_resolver_fails_closed_for_missing_stage_binding():
+    normalized = normalize_work_brief({
+        "decision_question": "Question",
+        "stages": [{"stage_id": "stage-a", "objective": "Assess A"}],
+        "analysis_inputs": [{"domain": "shared", "stage_id": "stage-a"}],
+    })
+
+    with pytest.raises(ValueError, match="missing analysis input contract"):
+        normalized.resolve_contract_for_domain("other", "stage-a")
+
+
+def test_contract_resolver_fails_closed_for_ambiguous_manual_intent():
+    contract = AnalysisInputContract(domain="shared")
+    normalized = normalize_work_brief({
+        "decision_question": "Question",
+        "stages": [{"stage_id": "stage-a", "objective": "Assess A"}],
+        "analysis_inputs": [{"domain": "shared", "stage_id": "stage-a"}],
+    })
+    object.__setattr__(normalized, "contracts", (contract, contract))
+
+    with pytest.raises(ValueError, match="ambiguous analysis input contract"):
+        normalized.resolve_contract_for_domain("shared", "stage-a")
+
+
+def test_workbook_contract_resolution_preserves_omitted_vs_explicit_empty_tables():
+    from foresight_os.analysis.workbook_inputs import resolve_workbook_contract
+
+    omitted = resolve_workbook_contract("supplier_resilience", {"domain": "supplier_resilience"})
+    explicit_empty = resolve_workbook_contract("supplier_resilience", {"domain": "supplier_resilience", "required_tables": []})
+
+    assert omitted.required_tables
+    assert explicit_empty.required_tables == ()
+
+
 def test_normalized_intent_freezes_nested_policy_and_stage_values():
     normalized = normalize_work_brief({
         "decision_question": "Question",

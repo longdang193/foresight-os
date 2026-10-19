@@ -8,14 +8,14 @@ from typing import Any
 
 from foresight_os.analysis.reviewer import ReviewResult, review_analysis_state
 from foresight_os.analysis.review_workflow import review_and_accept_pending_analysis
-from foresight_os.analysis.workbook_inputs import MaterialView, apply_table_column_mappings, default_workbook_contract, read_workbook, require_row_columns, require_table, row_evidence, table_rows
-from foresight_os.analysis.workbook_engine import DomainAnalysis
-from foresight_os.analysis.workbook_runner import WorkbookWorkflowRunner, merge_input_contract
+from foresight_os.analysis.workbook_inputs import MaterialView, WorkbookLayoutSpec, apply_table_column_mappings, require_row_columns, require_table, resolve_workbook_contract, row_evidence, table_rows
+from foresight_os.analysis.workbook_engine import DomainAnalysis, WorkbookAnalysisEngine, require_completed
+from foresight_os.analysis.workbook_runner import WorkbookWorkflowRunner
 from foresight_os.domain.analysis_inputs import AnalysisInputContract, _PeriodSpec, _parse_period, normalize_work_brief
 from foresight_os.domain.challenge import derive_finding_views
 from foresight_os.domain.models import AnalyticalRecord, AnalysisState, Assessment, Basis, CalculationRecord, Evidence, Invalidation, MeasurementKey, Relationship, Revision, RevisionStatus, SourceLocator
 from foresight_os.persistence.analysis_store import AnalysisStore
-from foresight_os.runtime.local_toolbelt import SheetSelection, ToolbeltError
+from foresight_os.runtime.local_toolbelt import ToolbeltError
 
 
 @dataclass(frozen=True)
@@ -74,6 +74,8 @@ class PowerBIWorkflowResult:
     review: ReviewResult | None
     report_path: Path | None
     failure: str | None = None
+    artifact_status: str = "not_requested"
+    artifact_error: str | None = None
 
 
 def _table(workbook: Any, sheet: str) -> Any:
@@ -149,10 +151,25 @@ def _forward_signal_index(signal_rows: list[dict[str, Any]], segment: str | None
     return sum(values) / len(values) if values else 0.0
 
 def analyze_powerbi_strategic_portfolio(source: Path, input_contract: AnalysisInputContract | dict[str, Any] | None = None, *, workbook_context: Any | None = None) -> PowerBIAnalysis:
-    source = Path(source)
-    sheets = ("Brief", "Dim_Region", "Dim_Segment", "Fact_Performance", "Targets", "Forward_Signals", "Measure_Definitions", "Dashboard_Snapshot", "Strategic_Options", "Change_One_Input")
-    contract = default_workbook_contract("powerbi_strategic_portfolio") if input_contract is None else AnalysisInputContract.from_dict(input_contract)
+    contract = resolve_workbook_contract("powerbi_strategic_portfolio", input_contract)
     contract.validate()
+    _select_period_spec(contract, contract.baseline_period, 2025)
+    _select_period_spec(contract, contract.comparison_period, 2026)
+    result = WorkbookAnalysisEngine().run(
+        Path(source),
+        contract,
+        _analyze_powerbi_material,
+        layout_spec=WorkbookLayoutSpec.from_contract(contract),
+        context=workbook_context,
+        materialize_scope=False,
+    )
+    return require_completed(result).result
+
+
+def _analyze_powerbi_material(material: MaterialView, contract: AnalysisInputContract) -> DomainAnalysis:
+    material.check_cancel()
+    contract.validate()
+    sheets = ("Brief", "Dim_Region", "Dim_Segment", "Fact_Performance", "Targets", "Forward_Signals", "Measure_Definitions", "Dashboard_Snapshot", "Strategic_Options", "Change_One_Input")
     baseline_spec = _select_period_spec(contract, contract.baseline_period, 2025)
     comparison_spec = _select_period_spec(contract, contract.comparison_period, 2026)
     baseline_year = baseline_spec.start_year
@@ -161,7 +178,7 @@ def analyze_powerbi_strategic_portfolio(source: Path, input_contract: AnalysisIn
     comparison_window = _period_window(comparison_spec)
     baseline_label = _period_label(baseline_spec, baseline_window)
     comparison_label = _period_label(comparison_spec, comparison_window)
-    workbook = workbook_context if isinstance(workbook_context, MaterialView) else read_workbook(source, SheetSelection(sheet_names=sheets, include_hidden=True, include_hidden_rows=True), workbook_context=workbook_context)
+    workbook = material
     digest = workbook.workbook_sha256
     tables = {name: _table(workbook, name) for name in sheets}
     selected_segments = set(contract.entity_scope)
@@ -271,7 +288,8 @@ def analyze_powerbi_strategic_portfolio(source: Path, input_contract: AnalysisIn
     decision_question = next((str(row[1]) for row in tables["Brief"].rows if row and row[0] == "Decision question" and len(row) > 1), "Should management accelerate investment?")
     horizon = next((str(row[1]) for row in tables["Brief"].rows if row and row[0] == "Horizon" and len(row) > 1), "Next 12–24 months")
     options = tuple(dict(row) for row in rows["Strategic_Options"])
-    return PowerBIAnalysis(digest, decision_question, horizon, assumptions, tuple(issues), revenue_2025, revenue_2026, yoy, gp_2026, gp_2026 / revenue_2026 if revenue_2026 else 0.0, weighted_forward, tuple(segment_assessments), options, changes, ("Comparable-period revenue and YoY growth", "Analytics pipeline coverage and customer budget scrutiny", "Services renewal intent and aftermarket utilization", "Hardware order/tender signals", "Target completeness and dashboard refresh age"), recommendation.statement, state, contract.fingerprint, baseline_label, comparison_label)
+    value = PowerBIAnalysis(digest, decision_question, horizon, assumptions, tuple(issues), revenue_2025, revenue_2026, yoy, gp_2026, gp_2026 / revenue_2026 if revenue_2026 else 0.0, weighted_forward, tuple(segment_assessments), options, changes, ("Comparable-period revenue and YoY growth", "Analytics pipeline coverage and customer budget scrutiny", "Services renewal intent and aftermarket utilization", "Hardware order/tender signals", "Target completeness and dashboard refresh age"), recommendation.statement, state, contract.fingerprint, baseline_label, comparison_label)
+    return DomainAnalysis(result=value, state=state)
 
 def _citations(state: AnalysisState, ids: tuple[str, ...] | list[str]) -> str:
     by_id = {item.id: item for item in state.evidence}
@@ -299,20 +317,12 @@ def render_powerbi_report(powerbi: PowerBIAnalysis, state: AnalysisState | None 
     return "\n".join(lines) + "\n"
 
 
-def _analyze_powerbi_material(material: MaterialView, contract: AnalysisInputContract) -> DomainAnalysis:
-    value = analyze_powerbi_strategic_portfolio(
-        Path(material.source),
-        merge_input_contract(default_workbook_contract("powerbi_strategic_portfolio"), contract),
-        workbook_context=material,
-    )
-    return DomainAnalysis(result=value, state=value.state)
-
 def run_powerbi_strategic_portfolio_workflow(store: AnalysisStore, source: Path, *, human_decision: str = "REJECT", output_dir: Path | None = None, input_contract: AnalysisInputContract | dict[str, Any] | None = None, workbook_context: Any | None = None) -> PowerBIWorkflowResult:
     try:
         if input_contract is None and store.brief_path.exists():
             input_contract = normalize_work_brief(store.load_brief()).contract_for_domain("powerbi_strategic_portfolio")
         sheets = ("Brief", "Dim_Region", "Dim_Segment", "Fact_Performance", "Targets", "Forward_Signals", "Measure_Definitions", "Dashboard_Snapshot", "Strategic_Options", "Change_One_Input")
-        contract = merge_input_contract(default_workbook_contract("powerbi_strategic_portfolio"), input_contract)
+        contract = resolve_workbook_contract("powerbi_strategic_portfolio", input_contract)
         result = WorkbookWorkflowRunner(store).run(
             Path(source),
             contract,
@@ -322,6 +332,15 @@ def run_powerbi_strategic_portfolio_workflow(store: AnalysisStore, source: Path,
             output_dir=output_dir,
             render_report=lambda path, value, state: (path.parent.mkdir(parents=True, exist_ok=True), path.write_text(render_powerbi_report(value, state), encoding="utf-8"))[1],
         )
-        return PowerBIWorkflowResult(result.status, result.state, result.domain_result, result.review, result.report_path, result.failure)
+        return PowerBIWorkflowResult(
+            result.status,
+            result.state,
+            result.domain_result,
+            result.review,
+            result.report_path,
+            result.failure,
+            result.artifact_status,
+            result.artifact_error,
+        )
     except Exception as error:
         return PowerBIWorkflowResult("failed", None, None, None, None, f"{type(error).__name__}: {error}")

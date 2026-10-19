@@ -284,6 +284,7 @@ def _repeated_workflow(path: Path) -> dict[str, object]:
         and first_hash == second_hash
         and first_value == second_value
     )
+    store_stats = getattr(store, "stats", None)
     return {
         "executed": True,
         "status": "VERIFIED" if correct else "FAILED",
@@ -304,6 +305,25 @@ def _repeated_workflow(path: Path) -> dict[str, object]:
         "retained_read_result_bytes": context.stats.retained_read_result_bytes,
         "retained_analysis_result_bytes": context.stats.retained_analysis_result_bytes,
         "retained_authority_record_bytes": context.stats.retained_authority_record_bytes,
+        "persistence": {
+            "instrumentation_available": store_stats is not None,
+            "load_count": int(getattr(store_stats, "load_count", 0)),
+            "load_time_ms": round(float(getattr(store_stats, "load_time_ms", 0.0) or 0.0), 3),
+            "merge_count": int(getattr(store_stats, "merge_count", 0)),
+            "merge_time_ms": round(float(getattr(store_stats, "merge_time_ms", 0.0) or 0.0), 3),
+            "validation_count": int(getattr(store_stats, "validation_count", 0)),
+            "validation_time_ms": round(float(getattr(store_stats, "validation_time_ms", 0.0) or 0.0), 3),
+            "pending_write_count": int(getattr(store_stats, "pending_write_count", 0)),
+            "pending_write_bytes": int(getattr(store_stats, "pending_write_bytes", 0)),
+            "pending_write_time_ms": round(float(getattr(store_stats, "pending_write_time_ms", 0.0) or 0.0), 3),
+            "committed_write_count": int(getattr(store_stats, "committed_write_count", 0)),
+            "committed_write_bytes": int(getattr(store_stats, "committed_write_bytes", 0)),
+            "committed_write_time_ms": round(float(getattr(store_stats, "committed_write_time_ms", 0.0) or 0.0), 3),
+            "review_attach_count": int(getattr(store_stats, "review_attach_count", 0)),
+            "review_attach_time_ms": round(float(getattr(store_stats, "review_attach_time_ms", 0.0) or 0.0), 3),
+            "receipt_write_count": int(getattr(store_stats, "receipt_write_count", 0)),
+            "receipt_write_time_ms": round(float(getattr(store_stats, "receipt_write_time_ms", 0.0) or 0.0), 3),
+        },
         "limitation": None,
     }
 
@@ -398,6 +418,41 @@ def _retained_bytes(context: WorkbookContext) -> int:
         + context.stats.retained_analysis_result_bytes
         + context.stats.retained_authority_record_bytes
     )
+
+
+def _process_cold_samples(path: Path, sample_count: int = 10) -> dict[str, object]:
+    script = """
+import sys
+import time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from foresight_os.runtime.local_toolbelt import SheetSelection, spreadsheet_read
+started = time.perf_counter()
+spreadsheet_read(Path(sys.argv[2]), SheetSelection(include_hidden=True, include_hidden_rows=True))
+print((time.perf_counter() - started) * 1000)
+"""
+    samples: list[float] = []
+    environment = os.environ.copy()
+    for _ in range(sample_count):
+        completed = subprocess.run(
+            [sys.executable, "-c", script, str(TARGET_ROOT / "src"), str(path.resolve())],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        samples.append(float(completed.stdout.strip()))
+    p50 = _percentile(samples, 0.50)
+    p95 = _percentile(samples, 0.95)
+    return {
+        "status": "VERIFIED" if len(samples) >= sample_count else "NOT_MEASURED",
+        "sample_count": len(samples),
+        "samples_ms": [round(value, 3) for value in samples],
+        "p50_ms": p50,
+        "p95_ms": p95,
+        "noise_floor_ms": round(max(0.0, p95 - p50), 3),
+        "limitation": None,
+    }
 
 
 @contextmanager
@@ -519,6 +574,7 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
             allocations.append(peak)
     if result is None:
         result = spreadsheet_read(path, selection)
+    cold_noise_floor = _process_cold_samples(path)
     table = result.tables[0]
     value_column = "Value" if "Value" in table.columns else table.columns[-1]
     analysis = data_analysis(table, AnalysisOperation("aggregate", value_column=value_column))
@@ -539,6 +595,16 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
     validator_report = run_independent_validation(path, selection=context_selection, workbook_context=context)
     validator_ms = (time.perf_counter() - validator_started) * 1000
     context.currentness(path)
+    reader_instrumentation_available = all(
+        hasattr(context.stats, field)
+        for field in (
+            "archive_sheets_scanned",
+            "selected_sheet_count",
+            "selected_row_count",
+            "selected_cell_count",
+            "formula_count",
+        )
+    )
     sheet_names = tuple(sheet.name for sheet in result.sheets)
     workloads: dict[str, dict[str, object]] = {
         "cold_workbook": {"executed": True, "status": "VERIFIED", "correctness": "VERIFIED", "wall_time_ms": round(cold_read_ms, 3)},
@@ -655,6 +721,7 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
         "peak_allocation_bytes": max(allocations) if allocations else None,
         "peak_retained_bytes": max(_retained_bytes(context), max((item.get("retained_bytes", 0) for item in workloads.values() if isinstance(item, dict)), default=0)),
         "measurement_mode": measurement_mode,
+        "cold_noise_floor": cold_noise_floor,
         "latency": measurement_evidence("VERIFIED", limitation=None) if durations else measurement_evidence("NOT_MEASURED", limitation="timing mode was not selected"),
         "allocation": measurement_evidence("VERIFIED", limitation=None) if allocations else measurement_evidence("NOT_MEASURED", limitation="allocation mode was not selected"),
         "workloads": workloads,
@@ -668,6 +735,12 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
             "currentness_hash_count": context.stats.currentness_hash_count,
             "xlsx_parse_count": context.stats.xlsx_parse_count,
             "openpyxl_load_count": context.stats.openpyxl_load_count,
+            "archive_sheets_scanned": getattr(context.stats, "archive_sheets_scanned", None),
+            "selected_sheet_count": getattr(context.stats, "selected_sheet_count", None),
+            "selected_row_count": getattr(context.stats, "selected_row_count", None),
+            "selected_cell_count": getattr(context.stats, "selected_cell_count", None),
+            "formula_count": getattr(context.stats, "formula_count", None),
+            "materialization_time_ms": round(float(getattr(context.stats, "materialization_time_ms", 0.0) or 0.0), 3),
             "cache_hits": context.stats.cache_hits,
             "analysis_cache_hits": context.stats.analysis_cache_hits,
             "snapshot_bytes": context.stats.snapshot_bytes,
@@ -678,6 +751,8 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
             "peak_retained_bytes": _retained_bytes(context),
             "validator_accepted": validator_report.accepted,
         },
+        "reader_instrumentation_available": reader_instrumentation_available,
+        "persistence": workloads["repeated_investigation"].get("persistence", {}),
         "mandatory_workloads": [name for name in MANDATORY_XLSX_WORKLOADS if name in workloads],
         "deterministic_workloads": [name for name in DETERMINISTIC_XLSX_WORKLOADS if name in workloads],
         "scenario_workloads": {
@@ -828,7 +903,7 @@ async def _run(mode: str, fixture: Path, evidence_root: Path, measurement_mode: 
         external_fixture={"tool_calls": metrics.tool_calls, "external_http_requests": metrics.external_http_requests, "failures": metrics.tool_failures},
         native_mcp=mcp,
         state=state,
-        thresholds={"p95_regression_pct": 20, "peak_allocation_regression_pct": 15, "tool_calls_per_finding_increase": 0, "soak_runs": 100, "gate_pattern_latency": False, "gate_timing_paths": False},
+        thresholds={"p95_regression_pct": 20, "peak_allocation_regression_pct": 15, "tool_calls_per_finding_increase": 0, "soak_runs": 100, "gate_pattern_latency": False, "gate_timing_paths": False, "gate_cold_noise_floor": True, "gate_reader_metrics": bool(workbook.get("reader_instrumentation_available")) and bool(workbook["persistence"].get("instrumentation_available"))},
         evidence=evidence,
         target_root=TARGET_ROOT,
         harness_root=HARNESS_ROOT,

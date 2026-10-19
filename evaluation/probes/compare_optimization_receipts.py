@@ -11,6 +11,22 @@ except ImportError:
 SCHEMA_VERSION = 2
 REQUIRED_PATTERNS = {"DIRECT", "ANALYZE", "CONCURRENT", "HANDOFF", "CHALLENGE_RECOMMENDATION"}
 REQUIRED_TIMING_PATHS = ("cold_workbook", "same_view_repeat", "repeated_investigation", "analyst_validator_reuse")
+READER_COUNTERS = (
+    "archive_sheets_scanned",
+    "selected_sheet_count",
+    "selected_row_count",
+    "selected_cell_count",
+    "formula_count",
+    "openpyxl_load_count",
+    "capture_count",
+    "capture_hash_count",
+)
+PERSISTENCE_COUNTERS = (
+    "pending_write_bytes",
+    "pending_write_time_ms",
+    "committed_write_bytes",
+    "committed_write_time_ms",
+)
 
 
 def _same_revision_snapshot(left: dict, right: dict) -> bool:
@@ -124,6 +140,23 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
         missing.append("xlsx.p95_ms>0")
     if evidence_statuses.get("allocation", "VERIFIED") == "VERIFIED" and (not _is_number(workbook.get("peak_allocation_bytes")) or int(workbook.get("peak_allocation_bytes", 0)) <= 0):
         missing.append("xlsx.peak_allocation_bytes>0")
+    acceptance = receipt.get("acceptance", {})
+    if acceptance.get("gate_cold_noise_floor", False):
+        cold = workbook.get("cold_noise_floor", {})
+        if cold.get("status") != "VERIFIED" or int(cold.get("sample_count", 0) or 0) < 10:
+            missing.append("xlsx.cold_noise_floor=VERIFIED with >=10 samples")
+        for field in ("p50_ms", "p95_ms", "noise_floor_ms"):
+            if not _is_number(cold.get(field)) or float(cold[field]) < 0:
+                missing.append(f"xlsx.cold_noise_floor.{field}>=0")
+    if acceptance.get("gate_reader_metrics", False):
+        reader = workbook.get("run_owned_context", {})
+        for field in READER_COUNTERS:
+            if not _is_nonnegative_count(reader.get(field)):
+                missing.append(f"xlsx.run_owned_context.{field}>=0")
+        persistence = workbook.get("persistence", {})
+        for field in PERSISTENCE_COUNTERS:
+            if not _is_number(persistence.get(field)) or float(persistence[field]) < 0:
+                missing.append(f"xlsx.persistence.{field}>=0")
     patterns = receipt.get("maf_patterns", {})
     missing.extend(f"maf_patterns.{name}" for name in sorted(REQUIRED_PATTERNS - set(patterns)))
     for name, item in patterns.items():
@@ -309,6 +342,16 @@ def compare(baseline: dict, release: dict) -> dict:
         for name in ("latency", "allocation", "soak")
         if release_evidence.get(name, {}).get("status") in {"FAILED", "NOT_MEASURED", "DEFERRED"}
     ]
+    if baseline["acceptance"].get("gate_cold_noise_floor", False) or release["acceptance"].get("gate_cold_noise_floor", False):
+        if not baseline["xlsx"].get("cold_noise_floor") or not release["xlsx"].get("cold_noise_floor"):
+            unavailable_dimensions.append("cold_noise_floor")
+    reader_metrics_available = all(
+        field in baseline["xlsx"].get("run_owned_context", {}) and field in release["xlsx"].get("run_owned_context", {})
+        for field in READER_COUNTERS
+    ) and all(
+        field in baseline["xlsx"].get("persistence", {}) and field in release["xlsx"].get("persistence", {})
+        for field in PERSISTENCE_COUNTERS
+    )
 
     baseline_count = int(baseline["accepted_finding_count"])
     baseline_economics = baseline["economics"]
@@ -336,11 +379,25 @@ def compare(baseline: dict, release: dict) -> dict:
         release_timing = float(release["xlsx"]["timing_paths"][name]["wall_time_ms"])
         timing_path_regressions[name] = _pct(release_timing, baseline_timing)
         timing_path_comparisons[name] = _comparison_metric(baseline_timing, release_timing)
+    cold_comparison = None
+    cold_regression = None
+    cold_gate = True
+    if baseline["xlsx"].get("cold_noise_floor") and release["xlsx"].get("cold_noise_floor"):
+        baseline_cold = baseline["xlsx"]["cold_noise_floor"]
+        release_cold = release["xlsx"]["cold_noise_floor"]
+        baseline_p95 = float(baseline_cold["p95_ms"])
+        release_p95 = float(release_cold["p95_ms"])
+        cold_comparison = _comparison_metric(baseline_p95, release_p95)
+        cold_regression = _pct(release_p95, baseline_p95)
+        absolute_delta = release_p95 - baseline_p95
+        noise_floor = max(float(baseline_cold["noise_floor_ms"]), float(release_cold["noise_floor_ms"]))
+        cold_gate = not (cold_regression > 20 and absolute_delta > noise_floor)
     absolute = {
         "xlsx": {
             "p95_ms": _comparison_metric(float(baseline["xlsx"]["p95_ms"]), float(release["xlsx"]["p95_ms"])) if latency_measured else None,
             "peak_allocation_bytes": _comparison_metric(float(baseline["xlsx"]["peak_allocation_bytes"]), float(release["xlsx"]["peak_allocation_bytes"])) if allocation_measured else None,
             "timing_paths": timing_path_comparisons,
+            "cold_noise_floor": cold_comparison,
         },
         "resource": {
             "rss_bytes": _comparison_metric(float(baseline["resource"]["rss_bytes"]), float(release["resource"]["rss_bytes"])),
@@ -369,6 +426,7 @@ def compare(baseline: dict, release: dict) -> dict:
         and rss_regression <= 15
         and (not baseline["acceptance"].get("gate_pattern_latency", True) or all(value <= 20 for value in pattern_regressions.values()))
         and (not baseline["acceptance"].get("gate_timing_paths", True) or all(value <= 20 for value in timing_path_regressions.values()))
+        and (not baseline["acceptance"].get("gate_cold_noise_floor", False) or cold_gate)
         and non_regressive_economics
         and not reused_stage_new_calls
     )
@@ -415,7 +473,18 @@ def compare(baseline: dict, release: dict) -> dict:
         "baseline": {"p95_ms": baseline["xlsx"]["p95_ms"], "peak_allocation_bytes": baseline["xlsx"]["peak_allocation_bytes"], "timing_paths": baseline["xlsx"]["timing_paths"], "economics_per_accepted_finding": baseline_economics["per_accepted_finding"]},
         "release": {"p95_ms": release["xlsx"]["p95_ms"], "peak_allocation_bytes": release["xlsx"]["peak_allocation_bytes"], "timing_paths": release["xlsx"]["timing_paths"], "economics_per_accepted_finding": release_economics["per_accepted_finding"]},
         "absolute": absolute,
-        "regression": {"p95_pct": p95_regression, "peak_allocation_pct": allocation_regression, "rss_pct": rss_regression, "pattern_p95_pct": pattern_regressions, "timing_paths_pct": timing_path_regressions, "economics_per_accepted_finding_delta": economic_regressions},
+        "regression": {"p95_pct": p95_regression, "peak_allocation_pct": allocation_regression, "rss_pct": rss_regression, "pattern_p95_pct": pattern_regressions, "timing_paths_pct": timing_path_regressions, "cold_p95_pct": cold_regression, "economics_per_accepted_finding_delta": economic_regressions},
+        "instrumentation": {
+            "available": reader_metrics_available,
+            "reader": {
+                field: _comparison_metric(float(baseline["xlsx"]["run_owned_context"][field]), float(release["xlsx"]["run_owned_context"][field]))
+                for field in READER_COUNTERS
+            } if reader_metrics_available else None,
+            "persistence": {
+                field: _comparison_metric(float(baseline["xlsx"]["persistence"][field]), float(release["xlsx"]["persistence"][field]))
+                for field in PERSISTENCE_COUNTERS
+            } if reader_metrics_available else None,
+        },
         "accepted_finding_count": {"baseline": baseline_count, "release": int(release["accepted_finding_count"])},
         "workload": baseline["workload"],
         "native_mcp": {"baseline": baseline["native_mcp"]["status"], "release": release["native_mcp"]["status"]},
