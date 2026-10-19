@@ -324,10 +324,36 @@ def build_material_view(
     cancel_check: Any | None = None,
 ) -> MaterialView:
     active_filter_contract = filter_contract or contract
+    scope_payload = {
+        "entity_scope": contract.entity_scope,
+        "periods": contract.periods,
+        "scenarios": contract.scenarios,
+        "units": contract.units,
+    }
+    scope_fingerprint = hashlib.sha256(json.dumps(scope_payload, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")).hexdigest()
     material_tables: list[tuple[str, TypedTable]] = []
     rejected: list[tuple[str, int, str, tuple[CellProvenance, ...]]] = []
     scope_columns_by_table = dict(layout_scope for layout_scope in layout.scope_columns) if hasattr(layout, "scope_columns") else {}
     required_dimensions_by_table = dict(layout_required for layout_required in layout.required_scope_dimensions) if hasattr(layout, "required_scope_dimensions") else {}
+    effective_scope = bool(active_filter_contract.entity_scope or active_filter_contract.periods or active_filter_contract.scenarios)
+    if active_filter_contract.units:
+        effective_scope = effective_scope or any(
+            "unit" in dict(scope_columns_by_table.get(logical_name, ())) or "unit" in required_dimensions_by_table.get(logical_name, ())
+            for logical_name, _ in layout.bindings
+        )
+    if not effective_scope:
+        if cancel_check is not None and cancel_check():
+            raise CancellationRequested("workbook analysis cancelled")
+        return MaterialView(
+            source=workbook.source,
+            source_sha256=workbook.workbook_sha256,
+            layout_fingerprint=layout.fingerprint,
+            contract_fingerprint=contract.fingerprint,
+            scope_fingerprint=scope_fingerprint,
+            tables=layout.bindings,
+            data_quality_rows=(),
+            cancel_check=cancel_check,
+        )
     for logical_name, table in layout.bindings:
         retained_rows: list[tuple[Any, ...]] = []
         retained_provenance: list[tuple[CellProvenance, ...]] = []
@@ -350,30 +376,26 @@ def build_material_view(
                     retained_measurements.append(table.row_measurements[index])
             else:
                 rejected.append((logical_name, index, reason, provenance))
-        material_tables.append(
-            (
-                logical_name,
-                TypedTable(
-                    id=f"{table.id}:material:{contract.fingerprint[:12]}",
-                    name=table.name,
-                    sheet=table.sheet,
-                    headers=table.headers,
-                    rows=tuple(retained_rows),
-                    row_provenance=tuple(retained_provenance),
-                    hidden=table.hidden,
-                    source_range=table.source_range,
-                    related_provenance=table.related_provenance,
-                    row_measurements=tuple(retained_measurements),
-                ),
+        if len(retained_rows) == len(table.rows) and tuple(retained_measurements) == table.row_measurements:
+            material_tables.append((logical_name, table))
+        else:
+            material_tables.append(
+                (
+                    logical_name,
+                    TypedTable(
+                        id=f"{table.id}:material:{contract.fingerprint[:12]}",
+                        name=table.name,
+                        sheet=table.sheet,
+                        headers=table.headers,
+                        rows=tuple(retained_rows),
+                        row_provenance=tuple(retained_provenance),
+                        hidden=table.hidden,
+                        source_range=table.source_range,
+                        related_provenance=table.related_provenance,
+                        row_measurements=tuple(retained_measurements),
+                    ),
+                )
             )
-        )
-    scope_payload = {
-        "entity_scope": contract.entity_scope,
-        "periods": contract.periods,
-        "scenarios": contract.scenarios,
-        "units": contract.units,
-    }
-    scope_fingerprint = hashlib.sha256(json.dumps(scope_payload, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")).hexdigest()
     return MaterialView(
         source=workbook.source,
         source_sha256=workbook.workbook_sha256,

@@ -97,9 +97,10 @@ remain deterministic.
 Each workbook execution captures one bounded source snapshot before layout and
 materialization. That snapshot supplies reads, provenance, hashes, and receipt
 identity for the run; changing the source path after capture affects only a
-later execution. Artifact rendering is independent of accepted analytical
-state, and an accepted revision can be rendered again without rerunning
-analysis or review.
+later execution. Snapshot-authoritative reads do not re-hash the live path;
+callers that need a live-path comparison must use the explicit currentness API.
+Artifact rendering is independent of accepted analytical state, and an
+accepted revision can be rendered again without rerunning analysis or review.
 
 The deterministic review core is importable without initializing
 `agent_framework`. Agent-assisted review remains behind the compatibility
@@ -109,9 +110,12 @@ workbook analysis or deterministic review checks.
 Reader and persistence counters are exposed only as measurement facts. The
 optimization probe records archive scans, selected material, formula counts,
 openpyxl loads, source capture/hash counts, materialization time, persistence
-bytes/time, and repeated process-cold samples. Candidate XLSX optimizations
-must pass correctness/resource, warm/reuse, and cold-noise-floor gates before
-they are retained; the current baseline retains no unproven reader change.
+bytes/time, and repeated process-cold samples. XLSX preflight applies row,
+cell, merged-range, and formula limits to selected material while retaining
+archive-wide byte and structural safety checks. Formula-free selected material
+uses one openpyxl load; formula-bearing material retains the cached-value load.
+Candidate XLSX optimizations must pass correctness/resource, warm/reuse, and
+cold-noise-floor gates before they are retained.
 
 ### 2. Controller and recipe
 
