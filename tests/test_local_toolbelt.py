@@ -17,6 +17,7 @@ from foresight_os.runtime.local_toolbelt import (
     AnalysisResult,
     AuthorityIndex,
     FormulaStatus,
+    WorkbookStats,
     SheetSelection,
     SourceSnapshot,
     ToolbeltLimits,
@@ -135,7 +136,38 @@ def test_workbook_context_reuses_identical_views_without_reusing_different_selec
     assert context.stats.capture_hash_count == 1
     assert context.stats.xlsx_parse_count == 2
     assert context.stats.cache_hits == 1
-    assert context.stats.openpyxl_load_count == 4
+    assert context.stats.openpyxl_load_count == 3
+
+
+def test_formula_free_xlsx_selection_uses_one_openpyxl_load(tmp_path: Path):
+    source = tmp_path / "formula-free.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Data"
+    sheet.append(["Region", "Value"])
+    sheet.append(["North", 10])
+    workbook.save(source)
+    stats = WorkbookStats()
+
+    result = spreadsheet_read(source, SheetSelection(ranges=(("Data", "A1:B2"),)), _stats=stats)
+
+    assert result.tables[0].rows == (("North", 10),)
+    assert stats.formula_count == 0
+    assert stats.openpyxl_load_count == 1
+
+
+def test_formula_bearing_xlsx_selection_retains_cached_value_load(workbook_path: Path):
+    stats = WorkbookStats()
+
+    result = spreadsheet_read(
+        workbook_path,
+        SheetSelection(tables=(("Demand", "DemandTable"),)),
+        _stats=stats,
+    )
+
+    assert result.tables
+    assert stats.formula_count > 0
+    assert stats.openpyxl_load_count == 2
 
 
 def test_workbook_context_reads_from_adopted_snapshot_after_source_mutation(tmp_path: Path):
@@ -422,7 +454,7 @@ def test_selected_sheet_does_not_inherit_unselected_sheet_row_limit(tmp_path: Pa
     assert result.tables[0].sheet == "Small"
 
 
-def test_unselected_sheet_merge_allocation_is_preflighted(tmp_path: Path):
+def test_unselected_sheet_merge_allocation_is_scoped_out_of_preflight(tmp_path: Path):
     workbook = openpyxl.Workbook()
     selected = workbook.active
     selected.title = "Selected"
@@ -433,8 +465,9 @@ def test_unselected_sheet_merge_allocation_is_preflighted(tmp_path: Path):
     source = tmp_path / "merged-unselected.xlsx"
     workbook.save(source)
 
-    with pytest.raises(ToolbeltError, match="allocation exceeds cell limit"):
-        spreadsheet_read(source, {"sheet": "Selected"}, {"max_cells": 5})
+    result = spreadsheet_read(source, {"sheet": "Selected"}, {"max_cells": 5})
+
+    assert result.tables[0].sheet == "Selected"
 
 
 def test_workbook_read_cache_evicts_old_entries_without_unpacking_error(tmp_path: Path):

@@ -272,13 +272,9 @@ def _run_xlsx_finding_workflow(
             raise ToolbeltError("workbook exceeds byte limit")
         if workbook_context is not None:
             workbook = workbook_context.read(Path(source), selection, read_limits, cancel_check=cancel_check)
-            current = workbook_context.currentness(Path(source), cancel_check=cancel_check)
         else:
             snapshot = snapshot or SourceSnapshot.capture(source, cancel_check=cancel_check, max_bytes=read_limits.max_bytes)
             workbook = spreadsheet_read(Path(source), selection, read_limits, cancel_check=cancel_check, _snapshot=snapshot)
-            current = snapshot.is_current(cancel_check=cancel_check)
-        if not current:
-            raise ToolbeltError("source workbook changed during read")
         if not workbook.tables:
             raise ToolbeltError("workbook selection produced no table")
         table = workbook.tables[0]

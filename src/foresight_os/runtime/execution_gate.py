@@ -2,7 +2,8 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import tempfile
-from typing import Any
+from types import MappingProxyType
+from typing import Any, Mapping
 
 from filelock import FileLock
 
@@ -10,8 +11,8 @@ from foresight_os.domain.approval import AdaptationEnvelope, ApprovalProjection,
 from foresight_os.controller.recipes import ExecutionRecipe
 from foresight_os.analysis.result_committer import ANALYSIS_STAGE_RESULT_CONTRACT, CanonicalResultCommitter, analysis_stage_result_schema
 from foresight_os.persistence.analysis_store import AnalysisStore
-from foresight_os.domain.analysis_inputs import GLOBAL_SCOPE, normalize_work_brief
-from foresight_os.analysis.workbook_inputs import workbook_analyzer_fingerprint
+from foresight_os.domain.analysis_inputs import AnalysisInputContract, GLOBAL_SCOPE, NormalizedIntent, normalize_work_brief
+from foresight_os.analysis.workbook_inputs import resolve_workbook_contract, workbook_analyzer_fingerprint
 from foresight_os.persistence.ids import canonical_json_hash
 from foresight_os.runtime.capabilities import CapabilityUnavailableError, admit_capability_context
 from foresight_os.runtime.local_toolbelt import SourceSnapshot, ToolbeltError, ToolbeltLimits
@@ -120,14 +121,55 @@ class ApprovedExecution:
     approval_fingerprint: str
     run_decisions: dict[str, Any]
     recipe: ExecutionRecipe
+    brief: Any
+    normalized_intent: NormalizedIntent
+    approval_projection: ApprovalProjection
+    brief_fingerprint: str
+    persisted_recipe_fingerprint: str
+    effective_contracts: Mapping[str, AnalysisInputContract]
     workbook_source: Path | None = None
     workbook_source_sha256: str = ""
     workbook_snapshot: SourceSnapshot | None = None
 
 
+def _effective_contract_resolver(
+    contracts: Mapping[str, AnalysisInputContract],
+):
+    def resolve(domain: str, stage_id: str) -> AnalysisInputContract:
+        contract = contracts.get(f"{stage_id}:{domain}") or contracts.get(f"{GLOBAL_SCOPE}:{domain}") or contracts.get(domain)
+        if contract is None:
+            raise ValueError(f"missing effective analysis input contract: {stage_id}:{domain}")
+        return contract
+
+    return resolve
+
+
 class ExecutionGate:
     def __init__(self, store: AnalysisStore):
         self.store = store
+
+    @staticmethod
+    def _effective_contracts(
+        recipe: ExecutionRecipe,
+        normalized_intent: NormalizedIntent,
+    ) -> Mapping[str, AnalysisInputContract]:
+        effective: dict[str, AnalysisInputContract] = {}
+        for declared in normalized_intent.contracts:
+            if declared.stage_id is None:
+                resolved = resolve_workbook_contract(declared.domain, declared)
+                effective[f"{GLOBAL_SCOPE}:{declared.domain}"] = resolved
+                effective.setdefault(declared.domain, resolved)
+        for stage in recipe.stages:
+            if str(getattr(stage, "executor_kind", "agent")) != "deterministic_local":
+                continue
+            stage_id = str(getattr(stage, "stage_id", "stage"))
+            for domain in getattr(stage, "analysis_domains", ()):
+                try:
+                    declared = normalized_intent.resolve_contract_for_domain(str(domain), stage_id)
+                    effective[f"{stage_id}:{domain}"] = resolve_workbook_contract(str(domain), declared)
+                except ValueError as error:
+                    raise ExecutionAdmissionError(str(error)) from error
+        return MappingProxyType(effective)
 
     def admit(
         self,
@@ -166,12 +208,30 @@ class ExecutionGate:
             if approval.investigation_id != brief.investigation_id:
                 raise ExecutionAdmissionError("approval investigation does not match the WorkBrief")
             source_path = Path(workbook_source).resolve() if workbook_source is not None else None
+            normalized_intent = normalize_work_brief(brief)
+            effective_contracts = self._effective_contracts(recipe, normalized_intent)
+            brief_fingerprint = canonical_json_hash(brief.to_dict())
         source_snapshot = _preflight_recipe(
             self.store,
             recipe,
             _local_capability_context(self.store, run_context),
             source_path,
         )
+        with FileLock(str(self.store.lock_path)):
+            current_brief = self.store.load_brief()
+            current_recipe_bundle = self.store.load_recipe_bundle()
+            current_approval = self.store.load_execution_approval()
+            if canonical_json_hash(current_brief.to_dict()) != brief_fingerprint:
+                raise ExecutionAdmissionError("persisted WorkBrief changed during workbook capture")
+            if current_recipe_bundle.persisted_fingerprint != persisted_recipe_fingerprint or canonical_json_hash(current_recipe_bundle.recipe.to_dict()) != recipe_fingerprint:
+                raise ExecutionAdmissionError("persisted ExecutionRecipe changed during workbook capture")
+            if (
+                current_approval is None
+                or current_approval.status != ApprovalStatus.APPROVED
+                or current_approval.projection_fingerprint != approval.projection_fingerprint
+                or current_approval.displayed_fingerprint != approval.displayed_fingerprint
+            ):
+                raise ExecutionAdmissionError("approval changed during workbook capture")
         return ApprovedExecution(
             work_dir=self.store.root,
             prompt=prompt,
@@ -183,6 +243,12 @@ class ExecutionGate:
                 "fallback_on_stale_reuse": envelope.fallback_on_stale_reuse,
             },
             recipe=recipe,
+            brief=brief,
+            normalized_intent=normalized_intent,
+            approval_projection=approval.projection,
+            brief_fingerprint=brief_fingerprint,
+            persisted_recipe_fingerprint=persisted_recipe_fingerprint,
+            effective_contracts=effective_contracts,
             workbook_source=source_path,
             workbook_source_sha256=source_snapshot.sha256 if source_snapshot else "",
             workbook_snapshot=source_snapshot,
@@ -213,8 +279,7 @@ class ExecutionGate:
         )
         if client is None and has_external_stage:
             raise ExecutionAdmissionError("approved execution requires a configured client")
-        brief = self.store.load_brief()
-        normalized_intent = normalize_work_brief(brief)
+        normalized_intent = admission.normalized_intent
         context = _local_capability_context(self.store, run_context)
         context.update({
             "execution_admitted": True,
@@ -226,32 +291,20 @@ class ExecutionGate:
             "analysis_store": self.store,
             "require_structured_output": True,
             "structured_output_schema": analysis_stage_result_schema(),
-            "canonical_result_committer": CanonicalResultCommitter(self.store, self.store.load_brief().investigation_id),
+            "canonical_result_committer": CanonicalResultCommitter(self.store, admission.brief.investigation_id),
             "normalized_intent": normalized_intent,
             "workbook_source": admission.workbook_source,
             "workbook_source_sha256": admission.workbook_source_sha256,
             "workbook_snapshot": admission.workbook_snapshot,
             "source_revision": admission.workbook_source_sha256,
-            "analysis_contracts": {
-                f"{contract.stage_id}:{contract.domain}" if contract.stage_id else f"{GLOBAL_SCOPE}:{contract.domain}": contract.to_dict()
-                for contract in normalized_intent.contracts
-            },
-            "analysis_contract_resolver": normalized_intent.resolve_contract_for_domain,
+            "analysis_contracts": {key: contract.to_dict() for key, contract in admission.effective_contracts.items()},
+            "analysis_contract_resolver": _effective_contract_resolver(admission.effective_contracts),
             "analysis_contract_fingerprints": {
-                key: contract.fingerprint
-                for contract in normalized_intent.contracts
-                for key in (
-                    (f"{contract.stage_id or GLOBAL_SCOPE}:{contract.domain}",)
-                    + ((contract.domain,) if contract.stage_id is None else ())
-                )
+                key: contract.fingerprint for key, contract in admission.effective_contracts.items()
             },
             "analysis_analyzer_fingerprints": {
                 key: workbook_analyzer_fingerprint(contract.domain)
-                for contract in normalized_intent.contracts
-                for key in (
-                    (f"{contract.stage_id or GLOBAL_SCOPE}:{contract.domain}",)
-                    + ((contract.domain,) if contract.stage_id is None else ())
-                )
+                for key, contract in admission.effective_contracts.items()
             },
         })
         return await run_recipe_async(admission.recipe, prompt, client, admission.run_id, context)

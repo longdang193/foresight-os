@@ -77,6 +77,7 @@ def test_acceptance_stays_pending_when_required_category_is_missing(tmp_path: Pa
     assert final.status == "pending"
     assert final.state.revision_status == RevisionStatus.PENDING_REVIEW
     assert final.coverage[0].statuses == (("source_fidelity", ReviewSlotStatus.PASS), ("calculation_reconciliation", ReviewSlotStatus.PENDING))
+    assert store.stats.pending_write_count == 2
 
 
 def test_complete_current_coverage_requires_explicit_human_acceptance(tmp_path: Path):
@@ -97,6 +98,8 @@ def test_complete_current_coverage_requires_explicit_human_acceptance(tmp_path: 
     assert final.status == "accepted"
     assert final.state.revision_status == RevisionStatus.ACCEPTED
     assert final.coverage[0].complete
+    assert store.stats.pending_write_count == 1
+    assert store.stats.committed_write_count == 1
 
 
 def test_blocking_check_rejects_and_persists_rejected_revision(tmp_path: Path):

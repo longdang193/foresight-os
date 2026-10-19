@@ -102,8 +102,7 @@ def review_and_accept_pending_analysis(
     if required_check_ids:
         metadata.setdefault("target_ids", target_ids or tuple(item.id for collection in (state.claims, state.implications, state.recommendations) for item in collection))
     reviewed = attach_review_record(state, review, review_id, **metadata)
-    reviewed = store.update_pending(reviewed)
-    return accept_pending_analysis(
+    result = accept_pending_analysis(
         store,
         state=reviewed,
         review=review,
@@ -112,5 +111,9 @@ def review_and_accept_pending_analysis(
         policy_id=policy_id,
         policy_version=policy_version,
         target_ids=target_ids,
-        expected_revision=reviewed.revision,
+        expected_revision=state.revision,
     )
+    if result.status == "pending":
+        reviewed = store.update_pending(reviewed)
+        return AcceptanceResult("pending", reviewed, result.coverage, result.failure)
+    return result

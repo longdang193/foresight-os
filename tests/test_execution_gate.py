@@ -105,7 +105,7 @@ def test_admission_reads_the_persisted_recipe_once(monkeypatch, tmp_path):
 
     ExecutionGate(store).admit(prompt="Question")
 
-    assert reads == 1
+    assert reads == 2
 
 
 def test_admitted_execution_forwards_persisted_analysis_contract_identity(monkeypatch, tmp_path):
@@ -146,6 +146,105 @@ def test_admitted_execution_forwards_persisted_analysis_contract_identity(monkey
 
     assert seen["analysis_contract_fingerprints"]["portfolio_resilience"]
     assert seen["analysis_analyzer_fingerprints"]["portfolio_resilience"]
+
+
+def test_admitted_execution_resolves_partial_workbook_contract_before_dispatch(monkeypatch, tmp_path):
+    source = Path("tests/fixtures/exercise/04_Technology_Radar.xlsx").resolve()
+    brief = create_work_brief(
+        "Assess technology readiness",
+        investigation_id="partial-contract-gate",
+        stages=[WorkStage("stage-1", "Assess technology readiness")],
+        analysis_inputs={
+            "technology_radar": AnalysisInputContract(
+                domain="technology_radar",
+                stage_id="stage-1",
+            ).to_dict(),
+        },
+    )
+    recipe = build_execution_recipe(brief).recipe
+    store = AnalysisStore(tmp_path / "partial-contract-gate")
+    store.save_brief(brief)
+    store.save_recipe(recipe)
+    approve_recipe(store, recipe)
+    seen = {}
+
+    async def fake_run(recipe, prompt, client=None, run_id=None, run_context=None):
+        seen.update(run_context)
+        return type("Result", (), {"run_id": run_id})()
+
+    monkeypatch.setattr("foresight_os.runtime.execution_gate.run_recipe_async", fake_run)
+    asyncio.run(ExecutionGate(store).execute(
+        prompt=brief.decision_question,
+        client=None,
+        workbook_source=source,
+    ))
+
+    effective = seen["analysis_contracts"]["stage-1:technology_radar"]
+    assert effective["required_tables"]
+    assert seen["analysis_contract_fingerprints"]["stage-1:technology_radar"]
+
+
+def test_admission_rejects_brief_mutation_during_workbook_capture(monkeypatch, tmp_path):
+    source = Path("tests/fixtures/exercise/04_Technology_Radar.xlsx").resolve()
+    brief = create_work_brief(
+        "Assess technology readiness",
+        investigation_id="brief-capture-mutation",
+        stages=[WorkStage("stage-1", "Assess technology readiness")],
+        analysis_inputs={
+            "technology_radar": AnalysisInputContract(
+                domain="technology_radar",
+                stage_id="stage-1",
+                required_tables=("Brief", "Signals", "Company_Relevance", "Competitor_Actions", "Scenario_Signposts", "Priority_Scoring"),
+            ).to_dict(),
+        },
+    )
+    recipe = build_execution_recipe(brief).recipe
+    store = AnalysisStore(tmp_path / "brief-capture-mutation")
+    store.save_brief(brief)
+    store.save_recipe(recipe)
+    approve_recipe(store, recipe)
+    original_capture = SourceSnapshot.capture
+
+    def capture_and_mutate(*args, **kwargs):
+        snapshot = original_capture(*args, **kwargs)
+        store.save_brief(replace(brief, decision_question="mutated after admission began"))
+        return snapshot
+
+    monkeypatch.setattr(SourceSnapshot, "capture", capture_and_mutate)
+    with pytest.raises(ExecutionAdmissionError, match="WorkBrief changed"):
+        ExecutionGate(store).admit(prompt=brief.decision_question, workbook_source=source)
+
+
+def test_admission_rejects_recipe_mutation_during_workbook_capture(monkeypatch, tmp_path):
+    source = Path("tests/fixtures/exercise/04_Technology_Radar.xlsx").resolve()
+    brief = create_work_brief(
+        "Assess technology readiness",
+        investigation_id="recipe-capture-mutation",
+        stages=[WorkStage("stage-1", "Assess technology readiness")],
+        analysis_inputs={
+            "technology_radar": AnalysisInputContract(
+                domain="technology_radar",
+                stage_id="stage-1",
+                required_tables=("Brief", "Signals", "Company_Relevance", "Competitor_Actions", "Scenario_Signposts", "Priority_Scoring"),
+            ).to_dict(),
+        },
+    )
+    recipe = build_execution_recipe(brief).recipe
+    store = AnalysisStore(tmp_path / "recipe-capture-mutation")
+    store.save_brief(brief)
+    store.save_recipe(recipe)
+    approve_recipe(store, recipe)
+    original_capture = SourceSnapshot.capture
+
+    def capture_and_mutate(*args, **kwargs):
+        snapshot = original_capture(*args, **kwargs)
+        mutated = replace(recipe, max_agent_steps=recipe.max_agent_steps + 1)
+        store.save_recipe(mutated)
+        return snapshot
+
+    monkeypatch.setattr(SourceSnapshot, "capture", capture_and_mutate)
+    with pytest.raises(ExecutionAdmissionError, match="ExecutionRecipe changed"):
+        ExecutionGate(store).admit(prompt=brief.decision_question, workbook_source=source)
 
 
 def test_all_local_approved_workbook_execution_commits_source_sha_without_client(tmp_path):

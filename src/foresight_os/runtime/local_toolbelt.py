@@ -1285,6 +1285,78 @@ def _in_selection(sheet: str, selection: SheetSelection | None) -> bool:
     return not selected_sheets or sheet in selected_sheets
 
 
+def _selection_ranges_for_sheet(
+    sheet: str,
+    selection: SheetSelection | None,
+    table_ranges: Mapping[str, str] | None = None,
+) -> tuple[str, ...] | None:
+    """Return explicit ranges, None for the sheet's used area, or () when excluded."""
+    if not _in_selection(sheet, selection):
+        return ()
+    if selection is None:
+        return None
+    selected_tables = [table_name for selected_sheet, table_name in selection.tables if selected_sheet == sheet]
+    if selected_tables:
+        if table_ranges is None or any(table_name not in table_ranges for table_name in selected_tables):
+            return None
+        return tuple(table_ranges[table_name] for table_name in selected_tables)
+    selected_ranges = tuple(cell_range for selected_sheet, cell_range in selection.ranges if selected_sheet == sheet)
+    return selected_ranges or None
+
+
+def _coordinate_in_ranges(coordinate: str, ranges: Sequence[tuple[int, int, int, int]] | None) -> bool:
+    if ranges is None:
+        return True
+    match = re.fullmatch(r"([A-Z]+)(\d+)", coordinate.upper())
+    if not match:
+        return False
+    column = openpyxl.utils.column_index_from_string(match.group(1))
+    row = int(match.group(2))
+    return any(min_col <= column <= max_col and min_row <= row <= max_row for min_col, min_row, max_col, max_row in ranges)
+
+
+def _range_intersection_area(
+    left: tuple[int, int, int, int],
+    right: tuple[int, int, int, int],
+) -> int:
+    min_col = max(left[0], right[0])
+    min_row = max(left[1], right[1])
+    max_col = min(left[2], right[2])
+    max_row = min(left[3], right[3])
+    if min_col > max_col or min_row > max_row:
+        return 0
+    return (max_col - min_col + 1) * (max_row - min_row + 1)
+
+
+def _archive_table_ranges(archive: zipfile.ZipFile, sheet_path: str, namespaces: Mapping[str, str]) -> dict[str, str]:
+    rels_path = posixpath.join(
+        posixpath.dirname(sheet_path),
+        "_rels",
+        posixpath.basename(sheet_path) + ".rels",
+    )
+    try:
+        relationships = ET.fromstring(archive.read(rels_path))
+    except KeyError:
+        return {}
+    ranges: dict[str, str] = {}
+    for relationship in relationships.findall("pkg:Relationship", namespaces):
+        if not relationship.attrib.get("Type", "").endswith("/table"):
+            continue
+        target = relationship.attrib.get("Target")
+        if not target:
+            continue
+        table_path = posixpath.normpath(posixpath.join(posixpath.dirname(sheet_path), target)).lstrip("/")
+        try:
+            table_root = ET.fromstring(archive.read(table_path))
+        except KeyError:
+            continue
+        name = table_root.attrib.get("displayName") or table_root.attrib.get("name")
+        ref = table_root.attrib.get("ref")
+        if name and ref:
+            ranges[name] = ref
+    return ranges
+
+
 def _implicit_xlsx_bounds(ws) -> tuple[int, int, int, int] | None:
     used_cells = [cell for cell in getattr(ws, "_cells", {}).values() if cell.value is not None]
     if not used_cells:
@@ -1425,7 +1497,7 @@ def _preflight_xlsx_archive(
     limits: ToolbeltLimits,
     cancel_check: Callable[[], bool] | None,
     stats: WorkbookStats | None = None,
-) -> None:
+) -> bool:
     namespaces = {
         "main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
         "rel": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
@@ -1439,20 +1511,21 @@ def _preflight_xlsx_archive(
         total_cell_count = 0
         total_merged_range_count = 0
         total_merged_cell_count = 0
+        formula_found = False
         for sheet in workbook_root.findall("main:sheets/main:sheet", namespaces):
             if stats is not None:
                 stats.archive_sheets_scanned += 1
             title = sheet.attrib["name"]
-            selected_sheet = not selection or not selection.sheet_names or title in selection.sheet_names
             target = targets.get(sheet.attrib.get(f"{{{namespaces['rel']}}}id"))
             if not target:
                 continue
             normalized_target = target.lstrip("/")
             sheet_path = posixpath.normpath(normalized_target if normalized_target.startswith("xl/") else posixpath.join("xl", normalized_target))
-            selected_ranges = [cell_range for selected_sheet, cell_range in (selection.ranges if selection else ()) if selected_sheet == title]
-            bounds = [_range_bounds(cell_range) for cell_range in selected_ranges]
+            selected_ranges = _selection_ranges_for_sheet(title, selection, _archive_table_ranges(archive, sheet_path, namespaces))
+            selected_sheet = selected_ranges != ()
+            bounds = [_range_bounds(cell_range) for cell_range in selected_ranges] if selected_ranges is not None else None
             if selected_sheet:
-                for range_bounds in bounds:
+                for range_bounds in bounds or ():
                     if range_bounds[3] - range_bounds[1] + 1 > limits.max_rows:
                         raise ToolbeltError("workbook selection exceeds row limit")
                     if (range_bounds[3] - range_bounds[1] + 1) * (range_bounds[2] - range_bounds[0] + 1) > limits.max_cells:
@@ -1462,24 +1535,32 @@ def _preflight_xlsx_archive(
                     _check_cancel(cancel_check)
                     if element.tag == f"{{{namespaces['main']}}}row":
                         if selected_sheet:
-                            total_row_count += 1
+                            row_selected = bounds is None or any(
+                                range_bounds[1] <= int(element.attrib.get("r", "0")) <= range_bounds[3]
+                                for range_bounds in bounds
+                            )
+                            total_row_count += int(row_selected)
                         if selected_sheet and total_row_count > limits.max_rows:
                             raise ToolbeltError("workbook allocation exceeds row limit")
                     elif element.tag == f"{{{namespaces['main']}}}c":
                         coordinate = element.attrib.get("r", "")
-                        match = re.fullmatch(r"([A-Z]+)(\d+)", coordinate.upper())
-                        if match:
+                        if selected_sheet and _coordinate_in_ranges(coordinate, bounds):
                             total_cell_count += 1
                             if total_cell_count > limits.max_cells:
                                 raise ToolbeltError("workbook allocation exceeds cell limit")
+                            if element.find("main:f", namespaces) is not None:
+                                formula_found = True
                     elif element.tag == f"{{{namespaces['main']}}}mergeCell":
-                        total_merged_range_count += 1
-                        if total_merged_range_count > limits.max_merged_ranges:
-                            raise ToolbeltError("workbook merged range limit exceeded")
                         merged_ref = element.attrib.get("ref")
-                        if merged_ref:
+                        merged_bounds = _range_bounds(merged_ref) if merged_ref else None
+                        if merged_bounds is not None and selected_sheet and (bounds is None or any(_range_intersection_area(merged_bounds, item) for item in bounds)):
+                            total_merged_range_count += 1
+                            if total_merged_range_count > limits.max_merged_ranges:
+                                raise ToolbeltError("workbook merged range limit exceeded")
                             start_col, start_row, end_col, end_row = _range_bounds(merged_ref)
                             area = (end_col - start_col + 1) * (end_row - start_row + 1)
+                            if bounds is not None:
+                                area = sum(_range_intersection_area(merged_bounds, item) for item in bounds)
                             if area > limits.max_merged_cells_per_range:
                                 raise ToolbeltError("workbook merged area exceeds per-range limit")
                             total_merged_cell_count += area
@@ -1487,7 +1568,13 @@ def _preflight_xlsx_archive(
                                 raise ToolbeltError("workbook merged area exceeds total limit")
                             if total_cell_count + total_merged_cell_count > limits.max_cells:
                                 raise ToolbeltError("workbook allocation exceeds cell limit")
-                    element.clear()
+                    if element.tag in {
+                        f"{{{namespaces['main']}}}row",
+                        f"{{{namespaces['main']}}}c",
+                        f"{{{namespaces['main']}}}mergeCell",
+                    }:
+                        element.clear()
+        return formula_found
 
 
 def spreadsheet_read(
@@ -1558,7 +1645,7 @@ def spreadsheet_read(
         raise ToolbeltError("invalid workbook archive") from error
     if expanded_bytes > limits.max_expanded_bytes:
         raise ToolbeltError("workbook expanded content exceeds byte limit")
-    _preflight_xlsx_archive(snapshot, selection, limits, cancel_check, _stats)
+    selected_formulas = _preflight_xlsx_archive(snapshot, selection, limits, cancel_check, _stats)
     if _stats is not None:
         _stats.xlsx_parse_count += 1
     digest = snapshot.sha256
@@ -1568,9 +1655,10 @@ def spreadsheet_read(
         workbook = openpyxl.load_workbook(io.BytesIO(snapshot.content), data_only=False, read_only=False)
         if _stats is not None:
             _stats.openpyxl_load_count += 1
-        cached = openpyxl.load_workbook(io.BytesIO(snapshot.content), data_only=True, read_only=True)
-        if _stats is not None:
-            _stats.openpyxl_load_count += 1
+        if selected_formulas:
+            cached = openpyxl.load_workbook(io.BytesIO(snapshot.content), data_only=True, read_only=True)
+            if _stats is not None:
+                _stats.openpyxl_load_count += 1
         _validate_xlsx_selection(workbook, selection)
         materialization_started = perf_counter()
         sheets: list[SheetSummary] = []
@@ -1588,17 +1676,15 @@ def spreadsheet_read(
                 continue
             if _stats is not None:
                 _stats.selected_sheet_count += 1
-            selected_tables = [table_name for sheet, table_name in (selection.tables if selection else ()) if sheet == ws.title]
-            if selected_tables:
-                selected_ranges = [ws.tables[name].ref for name in selected_tables if name in ws.tables]
-            else:
-                selected_ranges = [cell_range for sheet, cell_range in (selection.ranges if selection else ()) if sheet == ws.title]
-            if not selected_ranges:
+            selected_table_ranges = {name: ws.tables[name].ref for name in ws.tables}
+            selected_ranges = _selection_ranges_for_sheet(ws.title, selection, selected_table_ranges)
+            if selected_ranges is None:
                 implicit_bounds = _implicit_xlsx_bounds(ws)
                 selected_ranges = [
                     f"{openpyxl.utils.get_column_letter(implicit_bounds[0])}{implicit_bounds[1]}:"
                     f"{openpyxl.utils.get_column_letter(implicit_bounds[2])}{implicit_bounds[3]}"
                 ] if implicit_bounds else []
+            selected_tables = [table_name for sheet, table_name in (selection.tables if selection else ()) if sheet == ws.title]
             for source_range in selected_ranges:
                 min_col, min_row, max_col, max_row = _range_bounds(source_range)
                 if max_row - min_row + 1 > limits.max_rows:
@@ -1607,7 +1693,11 @@ def spreadsheet_read(
                 row_provenance: list[tuple[CellProvenance, ...]] = []
                 row_measurements: list[tuple[TypedMeasurement, ...]] = []
                 source_rows = ws.iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col)
-                cached_rows = cached[ws.title].iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col)
+                cached_rows = (
+                    cached[ws.title].iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col)
+                    if cached is not None
+                    else ()
+                )
                 for source_row, cached_row in zip_longest(source_rows, cached_rows, fillvalue=()):
                     _check_cancel(cancel_check)
                     if not source_row:

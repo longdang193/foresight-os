@@ -10,6 +10,7 @@ from foresight_os.analysis.workbook_inputs import (
     WorkbookLayoutSpec,
     build_material_view,
     resolve_workbook_layout,
+    resolve_workbook_contract,
 )
 from foresight_os.domain.analysis_inputs import AnalysisInputContract
 from foresight_os.runtime.local_toolbelt import (
@@ -63,7 +64,15 @@ class WorkbookAnalysisEngine:
         cancel_check: Callable[[], bool] | None = None,
         materialize_scope: bool = True,
     ) -> WorkbookEngineResult:
-        normalized_contract = AnalysisInputContract.from_dict(contract)
+        try:
+            normalized_contract = resolve_workbook_contract(
+                contract.domain if isinstance(contract, AnalysisInputContract) else str(dict(contract).get("domain", "")),
+                contract,
+            )
+        except ValueError as error:
+            if not str(error).startswith("unsupported workbook analysis domain:"):
+                raise
+            normalized_contract = AnalysisInputContract.from_dict(contract)
         active_context = context or self.context or WorkbookContext()
         spec = layout_spec or WorkbookLayoutSpec.from_contract(normalized_contract)
         selection = spec.selection

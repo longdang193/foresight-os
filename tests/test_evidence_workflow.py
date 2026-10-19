@@ -400,6 +400,7 @@ def test_xlsx_finding_workflow_keeps_caller_context_open_and_reuses_snapshot(tmp
 
     assert first.status == second.status == "pending"
     assert context._closed is False
+    assert context.stats.currentness_hash_count == 0
 
 
 def test_xlsx_finding_workflow_cancellation_rolls_back_before_publication(tmp_path: Path, monkeypatch):

@@ -40,6 +40,36 @@ def test_materialize_scope_false_preserves_domain_rows_but_keeps_contract_identi
     assert result.domain_result.result[1] == contract.fingerprint
 
 
+def test_cross_brief_workbook_contracts_keep_scope_and_identity_distinct(tmp_path):
+    source = tmp_path / "supplier.xlsx"
+    source.write_bytes(FIXTURE.read_bytes())
+    engine = WorkbookAnalysisEngine()
+    briefs = (
+        resolve_workbook_contract("supplier_resilience", {"entity_scope": ["Cetus Electronics"], "scenarios": ["Short outage"]}),
+        resolve_workbook_contract("supplier_resilience", {"entity_scope": ["Hansa Controls"], "scenarios": ["Short outage"]}),
+        resolve_workbook_contract("supplier_resilience", {"stage_id": "supplier-stage", "entity_scope": ["Cetus Electronics"]}),
+        resolve_workbook_contract("supplier_resilience", {"stage_id": "defaults"}),
+    )
+
+    results = [
+        engine.run(
+            source,
+            contract,
+            lambda material, normalized: DomainAnalysis(
+                result=(len(material.table("Supplier_Master").rows), normalized.fingerprint),
+            ),
+            materialize_scope=True,
+        )
+        for contract in briefs
+    ]
+
+    assert all(result.status == "completed" for result in results)
+    assert [result.domain_result.result[0] for result in results] == [3, 3, 3, 21]
+    assert len({result.domain_result.result[1] for result in results}) == 4
+    assert briefs[2].fingerprint != briefs[0].fingerprint
+    assert briefs[3].required_tables == briefs[0].required_tables
+
+
 def test_direct_workflow_and_approved_runtime_share_supplier_analysis_identity(tmp_path):
     source = tmp_path / "supplier.xlsx"
     source.write_bytes(FIXTURE.read_bytes())

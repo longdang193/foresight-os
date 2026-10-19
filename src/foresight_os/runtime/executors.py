@@ -262,13 +262,14 @@ class DeterministicLocalExecutor:
         domain = domains[0]
         analyzer = analyzers.get(domain)
         contract = None
-        if isinstance(contracts, Mapping):
-            stage_id = str(getattr(self.stage, "stage_id", "stage"))
+        stage_id = str(getattr(self.stage, "stage_id", "stage"))
+        resolver = self.run_context.get("analysis_contract_resolver")
+        if resolver is not None:
+            contract = resolver(domain, stage_id)
+            if hasattr(contract, "to_dict"):
+                contract = contract.to_dict()
+        elif isinstance(contracts, Mapping):
             contract = contracts.get(f"{stage_id}:{domain}") or contracts.get(f"{GLOBAL_SCOPE}:{domain}") or contracts.get(domain)
-        if contract is None:
-            resolver = self.run_context.get("analysis_contract_resolver")
-            if resolver is not None:
-                contract = resolver(domain, str(getattr(self.stage, "stage_id", "stage"))).to_dict()
         if analyzer is None or contract is None:
             raise ValueError(f"deterministic-local stage is not bound to workbook domain: {domain}")
         from foresight_os.analysis.workbook_engine import WorkbookAnalysisEngine
