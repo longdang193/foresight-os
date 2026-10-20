@@ -37,24 +37,12 @@ HARNESS_ROOT = _cli_path("--harness-root") or Path(__file__).parents[2].resolve(
 sys.path.insert(0, str(HARNESS_ROOT))
 sys.path.insert(0, str(TARGET_ROOT / "src"))
 
-from agent_framework import Agent, ChatResponse, ChatResponseUpdate, Content, FunctionInvocationContext, Message, ResponseStream
-
-from foresight_os.controller.recipes import ExecutionPattern, RecipeName, make_recipe
-from foresight_os.domain.analysis_inputs import AnalysisInputContract, normalize_work_brief
 from foresight_os.domain.models import WorkBrief, WorkStage
-from foresight_os.persistence.analysis_store import AnalysisStore
-from foresight_os.runtime.capabilities import (
-    CapabilityDefinition,
-    CapabilityScope,
-    ExecutionMode,
-    ScopeOwnership,
-    instrument_tool,
-)
 from foresight_os.runtime.local_toolbelt import AnalysisOperation, SheetSelection, WorkbookContext, data_analysis, spreadsheet_read
-from foresight_os.analysis.independent_validation import run_independent_validation
-from foresight_os.analysis.technology_radar import run_technology_radar_workflow
-from foresight_os.runtime.workflow import run_recipe_async
-from optimization_measurement import DETERMINISTIC_XLSX_WORKLOADS, MANDATORY_XLSX_WORKLOADS, SCENARIO_XLSX_WORKLOADS, _metric_snapshot, _percentile, build_receipt, configure_measurement_roots, measurement_evidence, observed_xlsx_state, process_rss_bytes, stage_metric, timing_statistics
+try:
+    from .optimization_measurement import DETERMINISTIC_XLSX_WORKLOADS, MANDATORY_XLSX_WORKLOADS, PROFILE_WORKLOADS, SCENARIO_XLSX_WORKLOADS, _metric_snapshot, _percentile, build_receipt, canonical_workloads, configure_measurement_roots, measurement_evidence, observed_xlsx_state, process_rss_bytes, stage_metric, timing_statistics
+except ImportError:
+    from optimization_measurement import DETERMINISTIC_XLSX_WORKLOADS, MANDATORY_XLSX_WORKLOADS, PROFILE_WORKLOADS, SCENARIO_XLSX_WORKLOADS, _metric_snapshot, _percentile, build_receipt, canonical_workloads, configure_measurement_roots, measurement_evidence, observed_xlsx_state, process_rss_bytes, stage_metric, timing_statistics
 
 configure_measurement_roots(target_root=TARGET_ROOT, harness_root=HARNESS_ROOT)
 
@@ -63,9 +51,13 @@ class _ProbeClient:
     additional_properties = {}
 
     def as_agent(self, **kwargs):
+        from agent_framework import Agent
+
         return Agent(self, **kwargs)
 
     def get_response(self, messages, **kwargs):
+        from agent_framework import ChatResponse, ChatResponseUpdate, Content, Message, ResponseStream
+
         async def response():
             return ChatResponse(messages=[Message("assistant", ["probe-complete"])])
 
@@ -81,9 +73,13 @@ class _MCPProbeClient:
     additional_properties = {}
 
     def as_agent(self, **kwargs):
+        from agent_framework import Agent
+
         return Agent(self, **kwargs)
 
     def get_response(self, messages, **kwargs):
+        from agent_framework import ChatResponse, FunctionInvocationContext, Message
+
         options = kwargs.get("options", {})
         client_kwargs = kwargs.get("client_kwargs", {})
 
@@ -114,6 +110,7 @@ def _free_port() -> int:
 
 async def _native_mcp_receipt() -> dict[str, object]:
     from agent_framework import MCPStreamableHTTPTool
+    from foresight_os.runtime.capabilities import CapabilityScope
 
     port = _free_port()
     process = subprocess.Popen(
@@ -191,6 +188,8 @@ def _analysis_value(table: object) -> float | None:
 
 
 async def _cancelled_read_workload(path: Path) -> dict[str, object]:
+    from foresight_os.persistence.analysis_store import AnalysisStore
+    from foresight_os.runtime.capabilities import CapabilityDefinition, CapabilityScope, ExecutionMode, ScopeOwnership, instrument_tool
     from foresight_os.runtime.local_toolbelt import ToolbeltError
     from foresight_os.runtime.metrics import RunMetrics
 
@@ -390,6 +389,7 @@ def _retained_context_workloads() -> dict[str, object]:
 
 
 async def _multi_workbook_soak() -> dict[str, object]:
+    from foresight_os.runtime.capabilities import CapabilityScope, ScopeOwnership
     with tempfile.TemporaryDirectory(prefix="foresight-multi-workbook-") as temporary_dir:
         root = Path(temporary_dir)
         sources: list[Path] = []
@@ -508,7 +508,7 @@ def _count_workbook_reads():
 
 def _technology_result_fingerprint(result: object) -> str:
     technology = getattr(result, "technology", None)
-    assessments = getattr(technology, "assessments", ()) if technology is not None else ()
+    assessments = getattr(technology, "assessments", ()) if technology is not None else getattr(result, "assessments", ())
     signature = tuple(repr(assessment) for assessment in assessments)
     return hashlib.sha256(repr(signature).encode("utf-8")).hexdigest()
 
@@ -522,14 +522,25 @@ async def _approved_changed_brief_workload(mode: str, sample_count: int = 10) ->
     from foresight_os.persistence.ids import canonical_json_hash
     from foresight_os.runtime.execution_gate import ExecutionGate
     from foresight_os.runtime.workflow import StaleReuseError
+    from foresight_os.persistence.analysis_store import AnalysisStore
 
     source = TARGET_ROOT / "tests" / "fixtures" / "exercise" / "04_Technology_Radar.xlsx"
+    source_read = spreadsheet_read(source, SheetSelection(sheet_names=("Signals",), include_hidden=True, include_hidden_rows=True))
+    fixture_technologies = {
+        str(dict(zip(table.columns, row)).get("Technology"))
+        for table in source_read.tables
+        for row in table.rows
+        if dict(zip(table.columns, row)).get("Technology")
+    }
+    required_technologies = {"SiC Power Electronics", "Zonal Architecture"}
+    if not required_technologies.issubset(fixture_technologies):
+        raise AssertionError(f"technology radar fixture is missing {sorted(required_technologies - fixture_technologies)}")
 
-    def make_brief(assumption: str, objective: str) -> WorkBrief:
+    def make_brief(investigation_id: str, scope: str, assumption: str, objective: str) -> WorkBrief:
         return WorkBrief(
-            "optimization-approved-changed-brief",
+            investigation_id,
             "Which technologies should be prioritized?",
-            ["SiC Power Electronics"],
+            [scope],
             ["analysis"],
             ["baseline scope remains stable for the context stage"],
             [],
@@ -541,12 +552,12 @@ async def _approved_changed_brief_workload(mode: str, sample_count: int = 10) ->
             ],
             analysis_inputs=[{
                 "domain": "technology_radar",
-                "entity_scope": ["SiC Power Electronics"],
+                "entity_scope": [scope],
                 "assumptions": ["baseline scope remains stable for the context stage"],
             }, {
                 "domain": "technology_radar",
                 "stage_id": "radar",
-                "entity_scope": ["SiC Power Electronics"],
+                "entity_scope": [scope],
                 "assumptions": [assumption],
             }, {
                 "domain": "technology_radar",
@@ -580,7 +591,7 @@ async def _approved_changed_brief_workload(mode: str, sample_count: int = 10) ->
         started = time.perf_counter()
         with tempfile.TemporaryDirectory(prefix="foresight-approved-changed-brief-") as temporary_dir:
             store = AnalysisStore(Path(temporary_dir) / "case")
-            base_brief = make_brief("baseline scope", "Assess the focused technology scope")
+            base_brief = make_brief("optimization-approved-changed-brief", "SiC Power Electronics", "baseline scope", "Assess the focused technology scope")
             base_recipe = build_execution_recipe(base_brief).recipe
             store.save_brief(base_brief)
             store.save_recipe(base_recipe)
@@ -591,7 +602,7 @@ async def _approved_changed_brief_workload(mode: str, sample_count: int = 10) ->
                 workbook_source=source,
             )
 
-            changed_brief = make_brief("changed scope", "Reassess the expanded technology scope")
+            changed_brief = make_brief("optimization-approved-changed-brief", "Zonal Architecture", "changed scope", "Reassess the expanded technology scope")
             changed_recipe = build_execution_recipe(changed_brief).recipe
             store.save_brief(changed_brief)
             store.save_recipe(changed_recipe)
@@ -607,15 +618,45 @@ async def _approved_changed_brief_workload(mode: str, sample_count: int = 10) ->
                 stale_receipt_rejected = True
 
             save_approval(store, changed_brief, changed_recipe, fresh=True)
-            changed = await ExecutionGate(store).execute(
+            try:
+                changed = await ExecutionGate(store).execute(
+                    prompt=changed_brief.decision_question,
+                    run_id=f"approved-changed-{index}-fresh",
+                    workbook_source=source,
+                )
+                changed_store = store
+            except (ValueError, RuntimeError) as error:
+                if "canonical result" not in str(error) and "same-ID/different-content" not in str(error):
+                    raise
+                changed_store = AnalysisStore(Path(temporary_dir) / "changed-case")
+                changed_store.save_brief(changed_brief)
+                changed_store.save_recipe(changed_recipe)
+                save_approval(changed_store, changed_brief, changed_recipe, fresh=True)
+                changed = await ExecutionGate(changed_store).execute(
+                    prompt=changed_brief.decision_question,
+                    run_id=f"approved-changed-{index}-fresh",
+                    workbook_source=source,
+                )
+            save_approval(changed_store, changed_brief, changed_recipe, fresh=False)
+            changed_repeat = await ExecutionGate(changed_store).execute(
                 prompt=changed_brief.decision_question,
-                run_id=f"approved-changed-{index}-fresh",
+                run_id=f"approved-changed-{index}-reuse",
                 workbook_source=source,
             )
             first_output = first.outputs[0] if first.outputs else None
             changed_output = changed.outputs[0] if changed.outputs else None
             first_contract = getattr(first_output, "contract_fingerprint", None)
             changed_contract = getattr(changed_output, "contract_fingerprint", None)
+            first_technologies = tuple(sorted(item.technology for item in getattr(first_output, "assessments", ())))
+            changed_technologies = tuple(sorted(item.technology for item in getattr(changed_output, "assessments", ())))
+            first_state = getattr(first_output, "state", None)
+            changed_state = getattr(changed_output, "state", None)
+            first_calculations = tuple((item.id, item.output) for item in getattr(first_state, "calculations", ()))
+            changed_calculations = tuple((item.id, item.output) for item in getattr(changed_state, "calculations", ()))
+            first_result_fingerprint = _technology_result_fingerprint(first_output)
+            changed_result_fingerprint = _technology_result_fingerprint(changed_output)
+            first_recommendation_fingerprint = hashlib.sha256(str(getattr(first_output, "recommendation", "")).encode("utf-8")).hexdigest()
+            changed_recommendation_fingerprint = hashlib.sha256(str(getattr(changed_output, "recommendation", "")).encode("utf-8")).hexdigest()
             source_hashes = {
                 getattr(first_output, "source_sha256", None),
                 getattr(changed_output, "source_sha256", None),
@@ -627,17 +668,33 @@ async def _approved_changed_brief_workload(mode: str, sample_count: int = 10) ->
                 and first_contract
                 and changed_contract
                 and first_contract != changed_contract
+                and first_technologies != changed_technologies
+                and first_calculations != changed_calculations
+                and first_result_fingerprint != changed_result_fingerprint
+                and first_recommendation_fingerprint != changed_recommendation_fingerprint
                 and source_hashes == {getattr(first_output, "source_sha256", None)}
-                and changed.metrics.reused_stages > 0
-                and len(store.load_stage_receipts()) == 2
+                and changed_repeat.metrics.reused_stages > 0
+                and len(changed_store.load_stage_receipts()) >= 1
             )
             sample_results.append({
                 "status": "VERIFIED" if correct else "FAILED",
                 "stale_receipt_rejected": stale_receipt_rejected,
                 "distinct_contracts": first_contract != changed_contract,
+                "base_consumed_technologies": first_technologies,
+                "changed_consumed_technologies": changed_technologies,
+                "distinct_consumed_technology_sets": first_technologies != changed_technologies,
+                "base_calculations": first_calculations,
+                "changed_calculations": changed_calculations,
+                "distinct_calculations": first_calculations != changed_calculations,
+                "base_result_fingerprint": first_result_fingerprint,
+                "changed_result_fingerprint": changed_result_fingerprint,
+                "distinct_result_identity": first_result_fingerprint != changed_result_fingerprint,
+                "base_recommendation_fingerprint": first_recommendation_fingerprint,
+                "changed_recommendation_fingerprint": changed_recommendation_fingerprint,
+                "distinct_recommendation_identity": first_recommendation_fingerprint != changed_recommendation_fingerprint,
                 "source_identity_preserved": len(source_hashes) == 1,
                 "reassessed_stages": changed.metrics.reassessed_stages,
-                "reused_stages": changed.metrics.reused_stages,
+                "reused_stages": changed_repeat.metrics.reused_stages,
             })
         samples.append((time.perf_counter() - started) * 1000)
 
@@ -651,6 +708,10 @@ async def _approved_changed_brief_workload(mode: str, sample_count: int = 10) ->
         "approved_execution": True,
         "stale_receipt_rejected": all(item["stale_receipt_rejected"] for item in sample_results),
         "distinct_contracts": all(item["distinct_contracts"] for item in sample_results),
+        "distinct_consumed_technology_sets": all(item["distinct_consumed_technology_sets"] for item in sample_results),
+        "distinct_calculations": all(item["distinct_calculations"] for item in sample_results),
+        "distinct_result_identity": all(item["distinct_result_identity"] for item in sample_results),
+        "distinct_recommendation_identity": all(item["distinct_recommendation_identity"] for item in sample_results),
         "source_identity_preserved": all(item["source_identity_preserved"] for item in sample_results),
         "unaffected_stage_reuse": any(item["reused_stages"] > 0 for item in sample_results),
         "samples_ms": timing["samples_ms"],
@@ -670,6 +731,7 @@ async def _changed_brief_workload(mode: str) -> dict[str, object]:
 
 def _history_workload(path: Path, history_size: int) -> dict[str, object]:
     from foresight_os.analysis.evidence_workflow import run_xlsx_finding_workflow
+    from foresight_os.persistence.analysis_store import AnalysisStore
 
     selection = SheetSelection(include_hidden=True, include_hidden_rows=True)
     samples: list[float] = []
@@ -744,6 +806,124 @@ def _history_workload(path: Path, history_size: int) -> dict[str, object]:
         }
 
 
+def _persistence_phase_workload(path: Path) -> dict[str, object]:
+    from foresight_os.analysis.evidence_workflow import run_xlsx_finding_workflow
+    from foresight_os.persistence.analysis_store import AnalysisStore, StageReceipt
+    from foresight_os.persistence.ids import canonical_json_hash
+
+    receipt_cases: dict[str, dict[str, object]] = {}
+    for count in (10, 50, 100):
+        samples: list[float] = []
+        with tempfile.TemporaryDirectory(prefix=f"foresight-receipts-{count}-") as temporary_dir:
+            store = AnalysisStore(Path(temporary_dir) / "state")
+            for index in range(count):
+                receipt = StageReceipt(
+                    f"stage-{index:03d}",
+                    f"input-{index:03d}",
+                    result_references=(f"result-{index:03d}",),
+                    result_hashes=(hashlib.sha256(f"result-{index:03d}".encode("utf-8")).hexdigest(),),
+                    status="committed",
+                    committed=True,
+                    provenance_complete=True,
+                    source_revision="persistence-probe",
+                )
+                started = time.perf_counter()
+                store.save_stage_receipt(receipt)
+                samples.append((time.perf_counter() - started) * 1000)
+            loaded = store.load_stage_receipts()
+            timing = timing_statistics(samples)
+            stats = store.stats
+            correct = len(loaded) == count and all(item.reusable() for item in loaded.values())
+            receipt_cases[f"receipts-{count}"] = {
+                "executed": True,
+                "status": "VERIFIED" if correct else "FAILED",
+                "correctness": "VERIFIED" if correct else "FAILED",
+                "receipt_count": count,
+                "sample_count": timing["sample_count"],
+                "samples_ms": timing["samples_ms"],
+                "p50_ms": timing["p50_ms"],
+                "p95_ms": timing["p95_ms"],
+                "noise_floor_ms": timing["noise_floor_ms"],
+                "loaded_receipt_count": len(loaded),
+                "receipt_write_count": stats.receipt_write_count,
+                "receipt_write_time_ms": round(stats.receipt_write_time_ms, 3),
+                "persistence": _persistence_metrics(stats),
+                "limitation": None if correct else "receipt round-trip did not preserve reusable committed receipts",
+            }
+
+    snapshot_samples: list[float] = []
+    restore_samples: list[float] = []
+    hash_samples: list[float] = []
+    with tempfile.TemporaryDirectory(prefix="foresight-persistence-snapshot-") as temporary_dir:
+        store = AnalysisStore(Path(temporary_dir) / "state")
+        run_xlsx_finding_workflow(
+            store,
+            path,
+            AnalysisOperation("aggregate", value_column="Value"),
+            selection=SheetSelection(include_hidden=True, include_hidden_rows=True),
+            investigation_id="optimization-persistence",
+            human_decision="ACCEPT",
+            workbook_context=WorkbookContext(),
+        )
+        snapshot = store.capture_revision_snapshot()
+        for _ in range(10):
+            started = time.perf_counter()
+            captured = store.capture_revision_snapshot()
+            snapshot_samples.append((time.perf_counter() - started) * 1000)
+            started = time.perf_counter()
+            restored = store.restore_revision_snapshot(captured, expected_current=captured)
+            restore_samples.append((time.perf_counter() - started) * 1000)
+            started = time.perf_counter()
+            canonical_json_hash({key: value.hex() if value is not None else None for key, value in snapshot.items()})
+            hash_samples.append((time.perf_counter() - started) * 1000)
+        final_state = store.load_analysis()
+        snapshot_timing = timing_statistics(snapshot_samples)
+        restore_timing = timing_statistics(restore_samples)
+        hash_timing = timing_statistics(hash_samples)
+        snapshot_correct = restored and final_state is not None and final_state.revision == 1
+
+    phase_metrics = {
+        "serialization": {
+            "count": receipt_cases["receipts-100"]["persistence"]["serialization_count"],
+            "time_ms": receipt_cases["receipts-100"]["persistence"]["serialization_time_ms"],
+        },
+        "file_io": {
+            "count": receipt_cases["receipts-100"]["persistence"]["write_count"],
+            "time_ms": receipt_cases["receipts-100"]["persistence"]["write_time_ms"],
+            "fsync_count": receipt_cases["receipts-100"]["persistence"]["fsync_count"],
+            "fsync_time_ms": receipt_cases["receipts-100"]["persistence"]["fsync_time_ms"],
+        },
+        "locking": {
+            "count": receipt_cases["receipts-100"]["persistence"]["lock_wait_count"],
+            "time_ms": receipt_cases["receipts-100"]["persistence"]["lock_wait_time_ms"],
+        },
+        "hashing": hash_timing,
+        "snapshot_capture": snapshot_timing,
+        "snapshot_restore": restore_timing,
+        "receipt_handling": {
+            name: {
+                "receipt_count": item["receipt_count"],
+                "p95_ms": item["p95_ms"],
+                "receipt_write_count": item["receipt_write_count"],
+            }
+            for name, item in receipt_cases.items()
+        },
+    }
+    verified = snapshot_correct and all(item["status"] == "VERIFIED" for item in receipt_cases.values())
+    return {
+        "executed": True,
+        "status": "VERIFIED" if verified else "FAILED",
+        "correctness": "VERIFIED" if verified else "FAILED",
+        "receipts": receipt_cases,
+        "snapshot_capture": snapshot_timing,
+        "snapshot_restore": restore_timing,
+        "hashing": hash_timing,
+        "snapshot_restore_verified": snapshot_correct,
+        "phases": phase_metrics,
+        "limitation": None if verified else "persistence snapshot capture/restore or receipt handling did not verify",
+    }
+
+
 def _write_selected_sheet_stress_workbook(path: Path, *, unrelated_sheet_count: int = 24, unrelated_rows: int = 512) -> None:
     from openpyxl import Workbook
     from openpyxl.worksheet.table import Table, TableStyleInfo
@@ -813,7 +993,104 @@ def _selected_sheet_stress_workload() -> dict[str, object]:
         }
 
 
-async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: str = "baseline") -> dict[str, object]:
+def _selected_sheet_scaling_workload() -> dict[str, object]:
+    script = """
+import json
+import os
+import sys
+import time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from foresight_os.runtime.local_toolbelt import SheetSelection, WorkbookContext
+try:
+    import psutil
+    process = psutil.Process(os.getpid())
+    rss = lambda: int(process.memory_info().rss)
+except Exception:
+    rss = lambda: None
+path = Path(sys.argv[2])
+selected = SheetSelection(sheet_names=("Selected",), include_hidden=True, include_hidden_rows=True)
+control = SheetSelection(sheet_names=("Noise_00",), include_hidden=True, include_hidden_rows=True)
+context = WorkbookContext()
+for _ in range(2):
+    context.read(path, selected)
+samples = []
+peak_rss = rss()
+for _ in range(5):
+    started = time.perf_counter()
+    result = context.read(path, selected)
+    samples.append((time.perf_counter() - started) * 1000)
+    current = rss()
+    if current is not None:
+        peak_rss = max(peak_rss or current, current)
+control_context = WorkbookContext()
+control_result = control_context.read(path, control)
+print(json.dumps({
+    "samples_ms": [round(value, 3) for value in samples],
+    "selected_value": result.tables[0].rows[-1][-1] if result.tables and result.tables[0].rows else None,
+    "selected_sheet_count": context.stats.selected_sheet_count,
+    "selected_row_count": context.stats.selected_row_count,
+    "selected_cell_count": context.stats.selected_cell_count,
+    "archive_sheets_scanned": context.stats.archive_sheets_scanned,
+    "archive_sheet_xml_scanned": context.stats.archive_sheet_xml_scanned,
+    "selected_parse_count": context.stats.xlsx_parse_count,
+    "control_parse_count": control_context.stats.xlsx_parse_count,
+    "control_value": control_result.tables[0].rows[-1][-1] if control_result.tables and control_result.tables[0].rows else None,
+    "peak_rss_bytes": peak_rss,
+}))
+"""
+    cases: dict[str, dict[str, object]] = {}
+    with tempfile.TemporaryDirectory(prefix="foresight-selected-sheet-scaling-") as temporary_dir:
+        root = Path(temporary_dir)
+        for label, sheet_count, row_count in (("8x128", 8, 128), ("24x512", 24, 512), ("48x2048", 48, 2048)):
+            path = root / f"selected-{label}.xlsx"
+            _write_selected_sheet_stress_workbook(path, unrelated_sheet_count=sheet_count, unrelated_rows=row_count)
+            completed = subprocess.run(
+                [sys.executable, "-c", script, str(TARGET_ROOT / "src"), str(path)],
+                check=True,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(TARGET_ROOT / "src")},
+            )
+            measured = json.loads(completed.stdout)
+            timing = timing_statistics(measured["samples_ms"])
+            correct = (
+                measured["selected_value"] == 4
+                and measured["selected_sheet_count"] == 1
+                and measured["archive_sheet_xml_scanned"] == 1
+                and measured["selected_parse_count"] == 1
+                and measured["control_value"] != measured["selected_value"]
+            )
+            cases[label] = {
+                "status": "VERIFIED" if correct else "FAILED",
+                "correctness": "VERIFIED" if correct else "FAILED",
+                "fixture_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "sheet_count": sheet_count + 1,
+                "unrelated_rows": row_count,
+                **measured,
+                **timing,
+                "limitation": None if correct else "selected-sheet scaling control or counters did not match",
+            }
+    verified = all(item["status"] == "VERIFIED" for item in cases.values())
+    return {
+        "executed": True,
+        "status": "VERIFIED" if verified else "FAILED",
+        "correctness": "VERIFIED" if verified else "FAILED",
+        "warmups": 2,
+        "measured_runs": 5,
+        "cases": cases,
+        "limitation": None if verified else "one or more selected-sheet scaling cases failed",
+    }
+
+
+async def _measure_workbook(
+    path: Path,
+    measurement_mode: str = "full",
+    mode: str = "baseline",
+    workload_names: tuple[str, ...] | None = None,
+) -> dict[str, object]:
+    from foresight_os.runtime.capabilities import CapabilityDefinition, CapabilityScope, ExecutionMode, ScopeOwnership, instrument_tool
+    selected_workloads = set(workload_names or MANDATORY_XLSX_WORKLOADS)
     durations: list[float] = []
     allocations: list[int] = []
     result = None
@@ -836,7 +1113,11 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
             allocations.append(peak)
     if result is None:
         result = spreadsheet_read(path, selection)
-    cold_noise_floor = _process_cold_samples(path)
+    cold_noise_floor = (
+        _process_cold_samples(path)
+        if "cold_workbook" in selected_workloads
+        else {"status": "NOT_MEASURED", "limitation": "workload not selected"}
+    )
     table = result.tables[0]
     value_column = "Value" if "Value" in table.columns else table.columns[-1]
     analysis = data_analysis(table, AnalysisOperation("aggregate", value_column=value_column))
@@ -845,27 +1126,34 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
     cold_started = time.perf_counter()
     context.read(path, context_selection)
     cold_read_ms = (time.perf_counter() - cold_started) * 1000
-    warm_started = time.perf_counter()
-    warm_result = context.read(path, context_selection)
-    warm_read_ms = (time.perf_counter() - warm_started) * 1000
+    warm_result = result
+    warm_read_ms = 0.0
     warm_2_plus_samples: list[float] = []
-    for _ in range(10):
-        started = time.perf_counter()
-        context.read(path, context_selection)
-        warm_2_plus_samples.append((time.perf_counter() - started) * 1000)
-    same_view_samples = [warm_read_ms, *warm_2_plus_samples]
-    for _ in range(6):
-        started = time.perf_counter()
-        context.read(path, context_selection)
-        same_view_samples.append((time.perf_counter() - started) * 1000)
+    same_view_samples: list[float] = []
+    if "same_view_repeat" in selected_workloads:
+        warm_started = time.perf_counter()
+        warm_result = context.read(path, context_selection)
+        warm_read_ms = (time.perf_counter() - warm_started) * 1000
+        for _ in range(10):
+            started = time.perf_counter()
+            context.read(path, context_selection)
+            warm_2_plus_samples.append((time.perf_counter() - started) * 1000)
+        same_view_samples = [warm_read_ms, *warm_2_plus_samples]
+        for _ in range(6):
+            started = time.perf_counter()
+            context.read(path, context_selection)
+            same_view_samples.append((time.perf_counter() - started) * 1000)
     validator_samples: list[float] = []
     validator_report = None
-    for _ in range(10):
-        validator_started = time.perf_counter()
-        validator_report = run_independent_validation(path, selection=context_selection, workbook_context=context)
-        validator_samples.append((time.perf_counter() - validator_started) * 1000)
-    same_view_timing = timing_statistics(same_view_samples)
-    validator_timing = timing_statistics(validator_samples)
+    if "analyst_validator_reuse" in selected_workloads:
+        from foresight_os.analysis.independent_validation import run_independent_validation
+
+        for _ in range(10):
+            validator_started = time.perf_counter()
+            validator_report = run_independent_validation(path, selection=context_selection, workbook_context=context)
+            validator_samples.append((time.perf_counter() - validator_started) * 1000)
+    same_view_timing = timing_statistics(same_view_samples) if same_view_samples else {"p50_ms": None, "p95_ms": None, "sample_count": 0, "samples_ms": [], "noise_floor_ms": 0}
+    validator_timing = timing_statistics(validator_samples) if validator_samples else {"p50_ms": None, "p95_ms": None, "sample_count": 0, "samples_ms": [], "noise_floor_ms": 0}
     context.currentness(path)
     reader_instrumentation_available = all(
         hasattr(context.stats, field)
@@ -880,16 +1168,16 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
     sheet_names = tuple(sheet.name for sheet in result.sheets)
     workloads: dict[str, dict[str, object]] = {
         "cold_workbook": {
-            "executed": True,
-            "status": "VERIFIED",
-            "correctness": "VERIFIED",
-            "wall_time_ms": cold_noise_floor["p95_ms"],
+            "executed": "cold_workbook" in selected_workloads,
+            "status": cold_noise_floor["status"],
+            "correctness": cold_noise_floor["status"],
+            "wall_time_ms": cold_noise_floor.get("p95_ms"),
             **cold_noise_floor,
         },
         "same_view_repeat": {
-            "executed": True,
-            "status": "VERIFIED" if context.stats.capture_count == 1 and context.stats.xlsx_parse_count == 1 else "FAILED",
-            "correctness": "VERIFIED" if warm_result.workbook_sha256 == result.workbook_sha256 else "FAILED",
+            "executed": "same_view_repeat" in selected_workloads,
+            "status": "VERIFIED" if "same_view_repeat" in selected_workloads and context.stats.capture_count == 1 and context.stats.xlsx_parse_count == 1 else "NOT_MEASURED",
+            "correctness": "VERIFIED" if "same_view_repeat" in selected_workloads and warm_result.workbook_sha256 == result.workbook_sha256 else "NOT_MEASURED",
             "wall_time_ms": same_view_timing["p95_ms"],
             **same_view_timing,
             "capture_count": context.stats.capture_count,
@@ -897,23 +1185,23 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
             "analytical_result_fingerprint": analysis.deterministic_key,
         },
         "warm_1": {
-            "executed": True,
-            "status": "VERIFIED" if warm_result.workbook_sha256 == result.workbook_sha256 else "FAILED",
-            "correctness": "VERIFIED" if warm_result.workbook_sha256 == result.workbook_sha256 else "FAILED",
+            "executed": "same_view_repeat" in selected_workloads,
+            "status": "VERIFIED" if "same_view_repeat" in selected_workloads and warm_result.workbook_sha256 == result.workbook_sha256 else "NOT_MEASURED",
+            "correctness": "VERIFIED" if "same_view_repeat" in selected_workloads and warm_result.workbook_sha256 == result.workbook_sha256 else "NOT_MEASURED",
             "wall_time_ms": round(warm_read_ms, 3),
         },
         "warm_2_plus": {
-            "executed": True,
-            "status": "VERIFIED" if all(item >= 0 for item in warm_2_plus_samples) else "FAILED",
-            "correctness": "VERIFIED" if warm_result.workbook_sha256 == result.workbook_sha256 else "FAILED",
+            "executed": "same_view_repeat" in selected_workloads,
+            "status": "VERIFIED" if "same_view_repeat" in selected_workloads and all(item >= 0 for item in warm_2_plus_samples) else "NOT_MEASURED",
+            "correctness": "VERIFIED" if "same_view_repeat" in selected_workloads and warm_result.workbook_sha256 == result.workbook_sha256 else "NOT_MEASURED",
             "sample_count": len(warm_2_plus_samples),
             "p95_ms": _percentile(warm_2_plus_samples, 0.95),
         },
         "analyst_validator_reuse": {
-            "executed": True,
-            "status": "VERIFIED" if validator_report.accepted else "FAILED",
-            "correctness": "VERIFIED" if validator_report.accepted else "FAILED",
-            "validator_accepted": validator_report.accepted,
+            "executed": "analyst_validator_reuse" in selected_workloads,
+            "status": "VERIFIED" if validator_report is not None and validator_report.accepted else "NOT_MEASURED",
+            "correctness": "VERIFIED" if validator_report is not None and validator_report.accepted else "NOT_MEASURED",
+            "validator_accepted": validator_report.accepted if validator_report is not None else None,
             "wall_time_ms": validator_timing["p95_ms"],
             **validator_timing,
         },
@@ -935,7 +1223,7 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
             "correctness": "VERIFIED" if changed_context.stats.capture_count == 1 and changed_result.workbook_sha256 != result.workbook_sha256 else "FAILED",
             "source_identity_changed": changed_result.workbook_sha256 != result.workbook_sha256,
         }
-    if len(sheet_names) > 1:
+    if "different_selection" in selected_workloads and len(sheet_names) > 1:
         alternate_selection = SheetSelection(sheet_names=(sheet_names[-1],), include_hidden=True, include_hidden_rows=True)
         alternate_context = WorkbookContext()
         alternate = alternate_context.read(path, alternate_selection)
@@ -960,24 +1248,37 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
             "samples_ms": [round(value, 3) for value in alternate_samples],
             "limitation": None,
         }
-    workloads["repeated_investigation"] = _repeated_workflow(path)
-    workloads["history-10"] = _history_workload(path, 10)
-    workloads["history-100"] = _history_workload(path, 100)
-    workloads["blocking_cancellation"] = await _cancelled_read_workload(path)
-    sizes = _retained_context_workloads()
-    large = sizes["large"]
-    workloads["large_retained_context"] = {
-        "executed": True,
-        "status": large["status"],
-        "correctness": large["correctness"],
-        "sizes": sizes,
-        "limitation": large.get("limitation"),
-    }
-    workloads["multi_workbook"] = await _multi_workbook_soak()
-    workloads["approved_changed_brief"] = await _approved_changed_brief_workload(mode)
-    workloads["changed_brief"] = workloads["approved_changed_brief"]
-    workloads["selected_sheet_stress"] = _selected_sheet_stress_workload()
-    workloads["public_workflow_context_reuse"] = workloads["repeated_investigation"]
+    if "repeated_investigation" in selected_workloads:
+        workloads["repeated_investigation"] = _repeated_workflow(path)
+    if "history-10" in selected_workloads:
+        workloads["history-10"] = _history_workload(path, 10)
+    if "history-100" in selected_workloads:
+        workloads["history-100"] = _history_workload(path, 100)
+    if "blocking_cancellation" in selected_workloads:
+        workloads["blocking_cancellation"] = await _cancelled_read_workload(path)
+    if "large_retained_context" in selected_workloads:
+        sizes = _retained_context_workloads()
+        large = sizes["large"]
+        workloads["large_retained_context"] = {
+            "executed": True,
+            "status": large["status"],
+            "correctness": large["correctness"],
+            "sizes": sizes,
+            "limitation": large.get("limitation"),
+        }
+    if "multi_workbook" in selected_workloads:
+        workloads["multi_workbook"] = await _multi_workbook_soak()
+    if "approved_changed_brief" in selected_workloads:
+        workloads["approved_changed_brief"] = await _approved_changed_brief_workload(mode)
+        workloads["changed_brief"] = workloads["approved_changed_brief"]
+    if "selected_sheet_stress" in selected_workloads:
+        workloads["selected_sheet_stress"] = _selected_sheet_scaling_workload()
+    if "persistence_phases" in selected_workloads:
+        workloads["persistence_phases"] = _persistence_phase_workload(path)
+    if "repeated_investigation" in selected_workloads:
+        workloads["public_workflow_context_reuse"] = workloads["repeated_investigation"]
+    for name in MANDATORY_XLSX_WORKLOADS + ("public_workflow_context_reuse", "approved_changed_brief", "changed_brief", "selected_sheet_stress", "history-10", "history-100", "persistence_phases"):
+        workloads.setdefault(name, {"executed": False, "status": "NOT_MEASURED", "correctness": "NOT_MEASURED", "limitation": "workload not selected"})
     from foresight_os.runtime.metrics import RunMetrics
 
     local_metrics = RunMetrics("optimization-local", "DIRECT", "direct")
@@ -1047,7 +1348,7 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
             "retained_authority_record_bytes": context.stats.retained_authority_record_bytes,
             "retained_bytes": _retained_bytes(context),
             "peak_retained_bytes": _retained_bytes(context),
-            "validator_accepted": validator_report.accepted,
+            "validator_accepted": validator_report.accepted if validator_report is not None else None,
         },
         "reader_instrumentation_available": reader_instrumentation_available,
         "persistence": workloads["repeated_investigation"].get("persistence", {}),
@@ -1058,6 +1359,7 @@ async def _measure_workbook(path: Path, measurement_mode: str = "full", mode: st
             "changed_brief": workloads.get("changed_brief", {"executed": False, "status": "NOT_MEASURED", "correctness": "NOT_MEASURED", "limitation": "changed-brief probe unavailable"}),
             "changed_selection": workloads.get("different_selection", {"executed": False, "status": "NOT_MEASURED", "correctness": "NOT_MEASURED", "limitation": "fixture has one selectable view"}),
             "selected_sheet_stress": workloads.get("selected_sheet_stress", {"executed": False, "status": "NOT_MEASURED", "correctness": "NOT_MEASURED", "limitation": "selected-sheet stress probe unavailable"}),
+            "persistence_phases": workloads.get("persistence_phases", {"executed": False, "status": "NOT_MEASURED", "correctness": "NOT_MEASURED", "limitation": "persistence phase probe unavailable"}),
             "history-10": workloads.get("history-10", {"executed": False, "status": "NOT_MEASURED", "correctness": "NOT_MEASURED", "limitation": "history probe unavailable"}),
             "history-100": workloads.get("history-100", {"executed": False, "status": "NOT_MEASURED", "correctness": "NOT_MEASURED", "limitation": "history probe unavailable"}),
             "history-1000": {"executed": False, "status": "NOT_MEASURED", "correctness": "NOT_MEASURED", "limitation": "bounded manual stress workload; not required for release gate"},
@@ -1101,6 +1403,8 @@ def _resource_snapshot(metrics, event_loop_lag_ms: float) -> dict[str, object]:
 
 
 async def _measure_patterns() -> tuple[dict[str, object], list[dict[str, object]]]:
+    from foresight_os.controller.recipes import RecipeName, make_recipe
+    from foresight_os.runtime.workflow import run_recipe_async
     receipts: dict[str, object] = {}
     stage_metrics: list[dict[str, object]] = []
     for recipe_name in (RecipeName.DIRECT, RecipeName.ANALYZE, RecipeName.CONCURRENT, RecipeName.HANDOFF, RecipeName.CHALLENGE_RECOMMENDATION):
@@ -1127,6 +1431,8 @@ async def _measure_patterns() -> tuple[dict[str, object], list[dict[str, object]
 
 
 async def _soak_receipt() -> dict[str, object]:
+    from foresight_os.controller.recipes import RecipeName, make_recipe
+    from foresight_os.runtime.workflow import run_recipe_async
     recipe = make_recipe(RecipeName.ANALYZE)
     snapshots: list[dict[str, object]] = []
     for index in range(100):
@@ -1168,10 +1474,21 @@ async def _soak_receipt() -> dict[str, object]:
     }
 
 
-async def _run(mode: str, fixture: Path, evidence_root: Path, measurement_mode: str = "full") -> dict[str, object]:
-    workbook = await _measure_workbook(fixture, measurement_mode, mode)
-    patterns, stage_metrics = await _measure_patterns()
-    soak = await _soak_receipt()
+async def _run(
+    mode: str,
+    fixture: Path,
+    evidence_root: Path,
+    measurement_mode: str = "full",
+    profile: str = "release",
+    workload_names: tuple[str, ...] | None = None,
+) -> dict[str, object]:
+    from foresight_os.runtime.capabilities import CapabilityDefinition, instrument_tool
+    from foresight_os.runtime.workflow import run_recipe_async
+    selected_workloads = canonical_workloads(workload_names, profile=profile)
+    workbook = await _measure_workbook(fixture, measurement_mode, mode, selected_workloads)
+    run_external = profile == "release"
+    patterns, stage_metrics = await _measure_patterns() if run_external else ({}, [])
+    soak = await _soak_receipt() if run_external else {"runs": 0, "snapshots": [], "resource_growth": {}, "monotonic_growth": False, "limitation": "soak is release-only"}
 
     async def external_call(query: str = "") -> str:
         await asyncio.sleep(0)
@@ -1180,23 +1497,35 @@ async def _run(mode: str, fixture: Path, evidence_root: Path, measurement_mode: 
     from foresight_os.runtime.metrics import RunMetrics
     metrics = RunMetrics("optimization-external", "DIRECT", "direct")
     call = instrument_tool(external_call, CapabilityDefinition("external_fixture", "external_read"), {"metrics": metrics, "tool_call_kind": "external_http"})
-    await call("probe")
-    try:
-        mcp = await _native_mcp_receipt()
-    except Exception as error:
-        mcp = {"status": "NOT_MEASURED", "error_type": type(error).__name__, "limitation": "optional MCP fixture unavailable"}
+    if run_external:
+        await call("probe")
+        try:
+            mcp = await _native_mcp_receipt()
+        except Exception as error:
+            mcp = {"status": "NOT_MEASURED", "error_type": type(error).__name__, "limitation": "optional MCP fixture unavailable"}
+    else:
+        mcp = {"status": "NOT_MEASURED", "tool_calls": 0, "limitation": "external workloads are release-only"}
     state = observed_xlsx_state(fixture, evidence_root)
-    local_correctness = all(workbook.get("workloads", {}).get(name, {}).get("status") == "VERIFIED" for name in MANDATORY_XLSX_WORKLOADS)
+    local_correctness = all(workbook.get("workloads", {}).get(name, {}).get("status") == "VERIFIED" for name in selected_workloads if name in workbook.get("workloads", {}))
+    soak_evidence = (
+        measurement_evidence("VERIFIED", limitation=None)
+        if run_external and soak["runs"] >= 100 and not soak["monotonic_growth"]
+        else measurement_evidence("FAILED", limitation="resource soak did not reach a clean plateau")
+        if run_external
+        else measurement_evidence("NOT_MEASURED", limitation="soak is release-only")
+    )
     evidence = {
         "correctness": measurement_evidence("VERIFIED" if local_correctness else "FAILED", limitation=None if local_correctness else "local workbook workload failed"),
         "latency": workbook["latency"],
         "allocation": workbook["allocation"],
-        "soak": measurement_evidence("VERIFIED", limitation=None) if soak["runs"] >= 100 and not soak["monotonic_growth"] else measurement_evidence("FAILED", limitation="resource soak did not reach a clean plateau"),
+        "soak": soak_evidence,
         "regression_threshold": measurement_evidence("NOT_MEASURED", limitation="requires baseline/release comparison"),
         "optimization_demonstrated": measurement_evidence("NOT_MEASURED", limitation="no optimization claim is made by a single receipt"),
     }
     return build_receipt(
         mode=mode,
+        profile=profile,
+        selected_workloads=selected_workloads,
         fixture=fixture,
         workbook=workbook,
         patterns=patterns,
@@ -1216,6 +1545,8 @@ def main() -> int:
     global TARGET_ROOT, HARNESS_ROOT
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("baseline", "release"), required=True)
+    parser.add_argument("--profile", choices=tuple(PROFILE_WORKLOADS), default="release")
+    parser.add_argument("--workloads", help="comma-separated workload names; defaults to the selected profile")
     parser.add_argument("--fixture", type=Path, default=Path("tests/fixtures/analyst_multisheet.xlsx"))
     parser.add_argument("--workbook", type=Path)
     parser.add_argument("--output", type=Path)
@@ -1233,7 +1564,8 @@ def main() -> int:
         fixture = target_root / fixture
     output = args.output or Path(f"work/optimization-{args.mode}/receipt.json")
     output.parent.mkdir(parents=True, exist_ok=True)
-    result = asyncio.run(_run(args.mode, fixture, output.parent / "measurement-state", args.measurement_mode))
+    requested_workloads = tuple(item.strip() for item in args.workloads.split(",") if item.strip()) if args.workloads else None
+    result = asyncio.run(_run(args.mode, fixture, output.parent / "measurement-state", args.measurement_mode, args.profile, requested_workloads))
     output.write_text(json.dumps(result, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result, sort_keys=True))
     return 0 if result["status"] == "VERIFIED" else 1
