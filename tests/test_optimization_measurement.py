@@ -9,6 +9,7 @@ from evaluation.probes.optimization_measurement import (
     MANDATORY_XLSX_WORKLOADS,
     PROFILE_SCHEMA_VERSION,
     PROFILE_WORKLOADS,
+    SCENARIO_ONLY_XLSX_WORKLOADS,
     SCENARIO_XLSX_WORKLOADS,
     SCHEMA_VERSION,
     canonical_workloads,
@@ -49,6 +50,21 @@ def test_profile_validator_allows_only_selected_nonrelease_workloads():
                 "correctness": "NOT_MEASURED",
                 "limitation": "workload not selected",
             }
+    assert _validate_measurement_receipt(receipt) == []
+
+
+def test_release_validator_keeps_scenario_only_workloads_out_of_deterministic_requirements():
+    receipt = _profiled_receipt("release")
+    receipt["xlsx"]["timing_paths"].pop("selected_sheet_stress")
+    receipt["xlsx"]["workloads"].pop("synthesis_cancellation")
+    receipt["xlsx"]["scenario_workloads"]["synthesis_cancellation"] = {
+        "executed": False,
+        "status": "NOT_MEASURED",
+        "correctness": "NOT_MEASURED",
+        "limitation": "synthesis cancellation is outside deterministic workbook scope",
+    }
+
+    assert "synthesis_cancellation" in SCENARIO_ONLY_XLSX_WORKLOADS
     assert _validate_measurement_receipt(receipt) == []
 
 

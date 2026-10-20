@@ -48,6 +48,9 @@ SCENARIO_XLSX_WORKLOADS = (
     "synthesis_cancellation",
     "persistence_phases",
 )
+# These scenarios are recorded for release transparency but are not part of
+# the deterministic workbook workload contract.
+SCENARIO_ONLY_XLSX_WORKLOADS = ("synthesis_cancellation",)
 PROFILE_SCHEMA_VERSION = 1
 WORKLOAD_ALIASES = {
     "changed_brief": "approved_changed_brief",

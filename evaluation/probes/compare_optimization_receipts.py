@@ -7,10 +7,17 @@ try:
         MANDATORY_XLSX_WORKLOADS,
         PROFILE_SCHEMA_VERSION,
         SCENARIO_XLSX_WORKLOADS,
+        SCENARIO_ONLY_XLSX_WORKLOADS,
         canonical_workloads,
     )
 except ImportError:
-    from optimization_measurement import MANDATORY_XLSX_WORKLOADS, PROFILE_SCHEMA_VERSION, SCENARIO_XLSX_WORKLOADS, canonical_workloads
+    from optimization_measurement import (
+        MANDATORY_XLSX_WORKLOADS,
+        PROFILE_SCHEMA_VERSION,
+        SCENARIO_ONLY_XLSX_WORKLOADS,
+        SCENARIO_XLSX_WORKLOADS,
+        canonical_workloads,
+    )
 
 
 SCHEMA_VERSION = 4
@@ -23,7 +30,6 @@ REQUIRED_TIMING_PATHS = (
     "approved_changed_brief",
     "history-10",
     "history-100",
-    "selected_sheet_stress",
 )
 REQUIRED_SCENARIO_WORKLOADS = ("approved_changed_brief", "changed_brief", "history-10", "history-100", "selected_sheet_stress")
 READER_COUNTERS = (
@@ -251,7 +257,11 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
     if not receipt.get("workload", {}).get("patterns"):
         missing.append("workload.patterns")
     workloads = receipt.get("xlsx", {}).get("workloads", {})
-    required_workloads = profile_workloads or MANDATORY_XLSX_WORKLOADS
+    required_workloads = tuple(
+        name
+        for name in (profile_workloads or MANDATORY_XLSX_WORKLOADS)
+        if name not in SCENARIO_ONLY_XLSX_WORKLOADS
+    )
     for name in required_workloads:
         item = workloads.get(name)
         if not isinstance(item, dict):
