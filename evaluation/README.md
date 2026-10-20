@@ -169,13 +169,21 @@ This probe uses the five production XLSX analyzers and reports exact fixture
 hashes, contract fingerprints, selected inputs, and structural outcome
 assertions. It does not measure provider quality or human acceptance.
 
-`run_optimization_probe.py` is the release-level measurement entry point. It compares cold/warm XLSX reads and all five native MAF patterns, proves a credential-free native Streamable HTTP MCP discovery path, records separate model/local/MCP/external economics, token counters, accepted-finding-normalized values, per-pattern latency components, portable RSS/resource snapshots, and runs a 100-run resource soak. The XLSX receipt requires the same eight workloads on both revisions: `cold_workbook`, `same_view_repeat`, `different_selection`, `analyst_validator_reuse`, `repeated_investigation`, `large_retained_context`, `multi_workbook`, and `blocking_cancellation`. Baseline and release receipts share the schema owned by `optimization_measurement.py`; missing required evidence, workload/schema mismatches, zero denominators, resource growth, or threshold regressions fail comparison closed. Freeze the harness outside both worktrees when comparing revisions so the base revision does not provide a different probe implementation.
+`run_optimization_probe.py` is the release-level measurement entry point. It compares cold/warm XLSX reads and all five native MAF patterns, proves a credential-free native Streamable HTTP MCP discovery path, records separate model/local/MCP/external economics, token counters, accepted-finding-normalized values, per-pattern latency components, portable RSS/resource snapshots, and runs a 100-run resource soak. Use `--profile smoke` for provider-free correctness, `--profile targeted` for selected local workloads, and `--profile release` for the only release-qualified receipt. Profile receipts record `profile_schema_version`, canonical deduplicated workloads, harness/source revisions, and environment identity; the comparator rejects profile/workload mismatches and any non-release comparison. The release workload set includes the eight mandatory workloads, changed-brief and selected-sheet scaling evidence, histories `10/100`, cancellation settlement, and persistence phases with receipt counts `10/50/100` plus hashing and snapshot capture/restore timings. Missing required evidence, workload/schema mismatches, zero denominators, resource growth, or threshold regressions fail comparison closed. Freeze the harness outside both worktrees when comparing revisions so the base revision does not provide a different probe implementation.
 
 The comparator treats differing measured source-tree digests as distinct
 worktree revisions even when both worktrees share the same Git `HEAD`. A
 failed latency or resource threshold does not authorize an optimization claim;
 record the regression and defer the optimization until matched evidence proves
 it safe and material.
+
+The persistence lane is measurement-first. It records serialization, file I/O,
+locking, receipt writes, hashing, snapshot capture, and snapshot restore before
+allowing a store optimization. If no phase projects to a statistically
+distinguishable end-to-end improvement on the history workload, the result is a
+measured deferral rather than an optimization claim. Release evidence for the
+consolidated verdict is retained under
+`work/optimization-runs/consolidated-verdict-reviewed/manifest.json`.
 
 `run_selective_reuse_probe.py` validates fresh-process reuse and sidecar receipt provenance. `run_strategic_exercise.py` stages participant-visible workbooks without the validator key and proves filesystem scope denial. `run_clean_wheel_smoke.py` builds and installs only the new wheel in a disposable environment outside the repository tree.
 

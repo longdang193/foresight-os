@@ -11,10 +11,8 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
-from foresight_os.analysis.evidence_workflow import run_xlsx_finding_workflow
 from foresight_os.domain.challenge import ReviewOutcome, ReviewRecord, build_material_fingerprint, derive_finding_views
 from foresight_os.domain.models import AnalysisState
-from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.runtime.local_toolbelt import AnalysisOperation, SheetSelection, ToolbeltLimits
 
 
@@ -48,7 +46,28 @@ SCENARIO_XLSX_WORKLOADS = (
     "correction",
     "workbook_cancellation",
     "synthesis_cancellation",
+    "persistence_phases",
 )
+# These scenarios are recorded for release transparency but are not part of
+# the deterministic workbook workload contract.
+SCENARIO_ONLY_XLSX_WORKLOADS = ("synthesis_cancellation",)
+PROFILE_SCHEMA_VERSION = 1
+WORKLOAD_ALIASES = {
+    "changed_brief": "approved_changed_brief",
+    "changed_selection": "different_selection",
+    "public_workflow_context_reuse": "repeated_investigation",
+    "workbook_cancellation": "blocking_cancellation",
+}
+PROFILE_WORKLOADS = {
+    "smoke": ("cold_workbook", "same_view_repeat"),
+    "targeted": MANDATORY_XLSX_WORKLOADS + ("approved_changed_brief", "selected_sheet_stress", "history-10", "history-100", "persistence_phases"),
+    "release": DETERMINISTIC_XLSX_WORKLOADS + ("approved_changed_brief", "changed_selection", "selected_sheet_stress", "history-10", "history-100", "workbook_cancellation", "synthesis_cancellation", "persistence_phases"),
+}
+
+
+def canonical_workloads(names: list[str] | tuple[str, ...] | None, *, profile: str) -> tuple[str, ...]:
+    selected = tuple(names) if names is not None else PROFILE_WORKLOADS[profile]
+    return tuple(dict.fromkeys(WORKLOAD_ALIASES.get(name, name) for name in selected))
 
 _TARGET_ROOT: Path | None = None
 _HARNESS_ROOT: Path | None = None
@@ -191,6 +210,9 @@ def accepted_finding_count(state: AnalysisState | None) -> int:
 
 
 def observed_xlsx_state(fixture: Path, root: Path) -> AnalysisState | None:
+    from foresight_os.analysis.evidence_workflow import run_xlsx_finding_workflow
+    from foresight_os.persistence.analysis_store import AnalysisStore
+
     store = AnalysisStore(root / "finding-state")
     result = run_xlsx_finding_workflow(
         store,
@@ -317,6 +339,8 @@ def stage_metric(stage_id: str, pattern: str, result: Any, elapsed_ms: float, sa
 def build_receipt(
     *,
     mode: str,
+    profile: str = "release",
+    selected_workloads: list[str] | tuple[str, ...] | None = None,
     fixture: Path,
     workbook: dict[str, Any],
     patterns: dict[str, Any],
@@ -330,6 +354,9 @@ def build_receipt(
     target_root: Path | None = None,
     harness_root: Path | None = None,
 ) -> dict[str, Any]:
+    if profile not in PROFILE_WORKLOADS:
+        raise ValueError(f"unsupported optimization profile: {profile}")
+    canonical_selected_workloads = canonical_workloads(selected_workloads, profile=profile)
     accepted_count = accepted_finding_count(state)
     economics = {
         "model_calls": sum(int(item.get("model_calls", 0) or 0) for item in patterns.values()),
@@ -356,6 +383,8 @@ def build_receipt(
     return {
         "schema_version": SCHEMA_VERSION,
         "mode": mode,
+        "profile": profile,
+        "profile_schema_version": PROFILE_SCHEMA_VERSION,
         "status": evidence["correctness"]["status"],
         "environment": _environment_metadata(),
         "harness": _harness_metadata(harness_root),
@@ -370,6 +399,7 @@ def build_receipt(
             "patterns": sorted(patterns),
             "deterministic_workloads": list(DETERMINISTIC_XLSX_WORKLOADS),
             "scenario_workloads": list(SCENARIO_XLSX_WORKLOADS),
+            "canonical_workloads": list(canonical_selected_workloads),
             "parameters": {
                 "history_sizes": [10, 100, 1000],
                 "timing_sample_count": 10,

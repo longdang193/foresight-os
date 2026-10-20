@@ -7,6 +7,7 @@ import pytest
 from agent_framework import WorkflowCheckpoint
 
 from foresight_os.artifacts.report import render_report
+from foresight_os.domain.models import AnalysisState, Revision
 from foresight_os.persistence.analysis_store import AnalysisStore
 from foresight_os.persistence.invalidation import invalidate_dependencies
 from foresight_os.persistence.recovery import continue_investigation, resume_checkpoint
@@ -60,6 +61,26 @@ print(json.dumps({'revision': state.revision, 'status': state.revision_status.va
     assert pending.revision == restored["revision"]
     assert restored["status"] == "PENDING_REVIEW"
     assert restored["evidence"] == sorted(item.id for item in pending.evidence)
+
+
+def test_restore_revision_snapshot_writes_revision_scoped_token_ledger(tmp_path: Path):
+    store = AnalysisStore(tmp_path / "snapshot-tokens")
+    accepted = AnalysisState(
+        "snapshot-tokens",
+        7,
+        revisions=[Revision(f"revision-{number}", number, "accepted", []) for number in range(1, 8)],
+    )
+    store.save_analysis(accepted)
+    accepted_snapshot = store.capture_revision_snapshot()
+    pending = store.save_pending(accepted)
+    current_snapshot = store.capture_revision_snapshot()
+
+    assert store.restore_revision_snapshot(accepted_snapshot, expected_current=current_snapshot)
+
+    ledger = json.loads(store.pending_tokens_path.read_text(encoding="utf-8"))
+    assert ledger == {"revision": 7, "tokens": [pending.pending_token]}
+    with pytest.raises(ValueError, match="stale pending identity"):
+        store.commit_revision(pending, expected_revision=7, accepted=True)
 
 
 def test_stale_artifact_cannot_be_rendered_as_current(tmp_path: Path):

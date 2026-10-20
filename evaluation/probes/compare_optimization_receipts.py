@@ -3,9 +3,21 @@ import json
 from pathlib import Path
 
 try:
-    from .optimization_measurement import MANDATORY_XLSX_WORKLOADS, SCENARIO_XLSX_WORKLOADS
+    from .optimization_measurement import (
+        MANDATORY_XLSX_WORKLOADS,
+        PROFILE_SCHEMA_VERSION,
+        SCENARIO_XLSX_WORKLOADS,
+        SCENARIO_ONLY_XLSX_WORKLOADS,
+        canonical_workloads,
+    )
 except ImportError:
-    from optimization_measurement import MANDATORY_XLSX_WORKLOADS, SCENARIO_XLSX_WORKLOADS
+    from optimization_measurement import (
+        MANDATORY_XLSX_WORKLOADS,
+        PROFILE_SCHEMA_VERSION,
+        SCENARIO_ONLY_XLSX_WORKLOADS,
+        SCENARIO_XLSX_WORKLOADS,
+        canonical_workloads,
+    )
 
 
 SCHEMA_VERSION = 4
@@ -18,7 +30,6 @@ REQUIRED_TIMING_PATHS = (
     "approved_changed_brief",
     "history-10",
     "history-100",
-    "selected_sheet_stress",
 )
 REQUIRED_SCENARIO_WORKLOADS = ("approved_changed_brief", "changed_brief", "history-10", "history-100", "selected_sheet_stress")
 READER_COUNTERS = (
@@ -119,6 +130,24 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
     missing.extend(key for key in required if key not in receipt)
     if receipt.get("schema_version") != SCHEMA_VERSION:
         missing.append(f"schema_version={SCHEMA_VERSION}")
+    profile = receipt.get("profile")
+    profile_workloads: tuple[str, ...] | None = None
+    if "profile" in receipt:
+        if profile not in {"smoke", "targeted", "release"}:
+            missing.append("profile")
+        if receipt.get("profile_schema_version") != PROFILE_SCHEMA_VERSION:
+            missing.append(f"profile_schema_version={PROFILE_SCHEMA_VERSION}")
+        selected = receipt.get("workload", {}).get("canonical_workloads")
+        if not isinstance(selected, list) or not selected:
+            missing.append("workload.canonical_workloads")
+        elif profile in {"smoke", "targeted", "release"}:
+            try:
+                profile_workloads = canonical_workloads(selected, profile=profile)
+            except (KeyError, TypeError, ValueError):
+                missing.append("workload.canonical_workloads=valid")
+            else:
+                if list(profile_workloads) != selected:
+                    missing.append("workload.canonical_workloads=deduplicated")
     harness = receipt.get("harness", {})
     for field in ("version", "source_tree_sha256"):
         if not isinstance(harness.get(field), str) or not harness[field].strip():
@@ -228,7 +257,12 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
     if not receipt.get("workload", {}).get("patterns"):
         missing.append("workload.patterns")
     workloads = receipt.get("xlsx", {}).get("workloads", {})
-    for name in MANDATORY_XLSX_WORKLOADS:
+    required_workloads = tuple(
+        name
+        for name in (profile_workloads or MANDATORY_XLSX_WORKLOADS)
+        if name not in SCENARIO_ONLY_XLSX_WORKLOADS
+    )
+    for name in required_workloads:
         item = workloads.get(name)
         if not isinstance(item, dict):
             missing.append(f"xlsx.workloads.{name}")
@@ -258,7 +292,8 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
     if not isinstance(timing_paths, dict):
         missing.append("xlsx.timing_paths")
     else:
-        for name in REQUIRED_TIMING_PATHS:
+        required_timing_paths = REQUIRED_TIMING_PATHS if profile in (None, "release") else ()
+        for name in required_timing_paths:
             item = timing_paths.get(name)
             if not isinstance(item, dict):
                 missing.append(f"xlsx.timing_paths.{name}")
@@ -273,7 +308,8 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
             if isinstance(item, dict) and (not _is_number(item.get("noise_floor_ms")) or float(item["noise_floor_ms"]) < 0):
                 missing.append(f"xlsx.timing_paths.{name}.noise_floor_ms>=0")
     scenario_workloads = workbook.get("scenario_workloads", {})
-    for name in REQUIRED_SCENARIO_WORKLOADS:
+    required_scenarios = REQUIRED_SCENARIO_WORKLOADS if profile in (None, "release") else ()
+    for name in required_scenarios:
         item = scenario_workloads.get(name)
         if not isinstance(item, dict):
             missing.append(f"xlsx.scenario_workloads.{name}")
@@ -285,7 +321,7 @@ def _validate_measurement_receipt(receipt: dict) -> list[str]:
         if item.get("correctness") != "VERIFIED":
             missing.append(f"xlsx.scenario_workloads.{name}.correctness=VERIFIED")
     matrix = receipt.get("acceptance_matrix", {})
-    for name in MANDATORY_XLSX_WORKLOADS:
+    for name in MANDATORY_XLSX_WORKLOADS if profile in (None, "release") else ():
         entry = matrix.get(name)
         if not isinstance(entry, dict):
             missing.append(f"acceptance_matrix.{name}")
@@ -381,6 +417,13 @@ def compare(baseline: dict, release: dict) -> dict:
         mismatches.append("revision")
     if baseline.get("harness") != release.get("harness"):
         mismatches.append("harness")
+    if "profile" in baseline or "profile" in release:
+        if baseline.get("profile") != release.get("profile"):
+            mismatches.append("profile")
+        if baseline.get("profile_schema_version") != release.get("profile_schema_version"):
+            mismatches.append("profile_schema_version")
+        if baseline.get("profile") != "release":
+            mismatches.append("profile=release_required")
     if baseline.get("workload") != release.get("workload"):
         mismatches.append("workload")
     if baseline.get("xlsx", {}).get("deterministic_key") != release.get("xlsx", {}).get("deterministic_key"):

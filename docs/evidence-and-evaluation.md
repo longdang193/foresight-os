@@ -126,14 +126,27 @@ not be copied into a new page without checking the receipt and its scope.
 
 The optimization probe is the release-level measurement entry point. It records
 baseline/release receipts, stage and resource metrics, tool-call economics,
-accepted-finding-normalized values, and a no-growth soak. Comparisons fail
-closed on missing evidence, schema or workload mismatch, zero denominators,
-resource growth, or threshold regressions. Correctness, resource safety,
-lifecycle settlement, and optimization claims remain separate evidence
-dimensions; a latency regression cannot be converted into an optimization
-claim. Baseline and release receipts may come from worktrees sharing the same
-Git `HEAD` when their measured source-tree digests differ; the comparison still
-requires the harness, fixture, workload, and limits to match.
+accepted-finding-normalized values, and a no-growth soak. `smoke` and
+`targeted` profiles are iteration evidence only; `release` is the only profile
+eligible for baseline/release comparison. Each receipt records its profile,
+profile schema, canonical workload set, harness digest, source revision, and
+environment identity. Comparisons fail closed on missing evidence, schema or
+workload mismatch, non-release profiles, zero denominators, resource growth, or
+threshold regressions. Correctness, resource safety, lifecycle settlement, and
+optimization claims remain separate evidence dimensions; a latency regression
+cannot be converted into an optimization claim. Baseline and release receipts
+may come from worktrees sharing the same Git `HEAD` when their measured
+source-tree digests differ; the comparison still requires the harness, fixture,
+workload, and limits to match.
+
+The release persistence lane measures history sizes `10/100`, stage-receipt
+stores `10/50/100`, lock/file-I/O/serialization counters, hashing, and
+revision-snapshot capture/restore. A persistence change is retained only when
+correctness remains verified and the relevant end-to-end improvement is
+statistically distinguishable from the measured noise floor. Otherwise the
+manifest records a measured deferral, not an optimization claim. The current
+consolidated verdict is packaged in
+`work/optimization-runs/consolidated-verdict-reviewed/manifest.json`.
 
 The local XLSX path is provider-free and structurally verifiable. A receipt can
 prove source/layout/contract identity, provenance retention, review and

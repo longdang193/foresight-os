@@ -134,6 +134,11 @@ def _analyze_technology_material(material: MaterialView, contract: AnalysisInput
     ]
     for (table, columns), rows in zip(required_columns, (signals, relevances, competitors, signposts, priorities), strict=True):
         require_row_columns(rows, table.sheet, columns)
+    record_namespace = f"-{contract.stage_id}" if contract.stage_id else ""
+
+    def record_id(base: str) -> str:
+        return f"{base}{record_namespace}"
+
     evidence: list[Evidence] = []
     by_row: dict[tuple[str, int], Evidence] = {}
     for table in (signal_table, relevance_table, competitor_table, signpost_table, priority_table):
@@ -180,7 +185,8 @@ def _analyze_technology_material(material: MaterialView, contract: AnalysisInput
     relationships: list[Relationship] = []
     claims: list[AnalyticalRecord] = []
     for item in assessments:
-        claim = _record(f"technology-signal-{item.technology.lower().replace(' ', '-')}", f"{item.technology} has {item.signal_count} signals, {item.independent_source_families} independent source families, evidence strength {item.evidence_strength:.1f}/5, and is categorized as {item.action_category}.", list(item.evidence_ids), assumptions, ("Source-family dependence can overstate corroboration when media volume rises without deployment evidence.",), (f"Independent evidence and deployment signposts change the {item.technology} action category.",), (f"Independent source count, deployment evidence, and signpost progress for {item.technology}.",))
+        technology_slug = item.technology.lower().replace(" ", "-")
+        claim = _record(record_id(f"technology-signal-{technology_slug}"), f"{item.technology} has {item.signal_count} signals, {item.independent_source_families} independent source families, evidence strength {item.evidence_strength:.1f}/5, and is categorized as {item.action_category}.", list(item.evidence_ids), assumptions, ("Source-family dependence can overstate corroboration when media volume rises without deployment evidence.",), (f"Independent evidence and deployment signposts change the {item.technology} action category.",), (f"Independent source count, deployment evidence, and signpost progress for {item.technology}.",))
         claims.append(claim)
         relationships.extend(Relationship(f"{claim.id}-supports-{evidence_id}", evidence_id, claim.id, "supports") for evidence_id in claim.evidence_ids)
     scenarios: list[TechnologyScenario] = []
@@ -192,17 +198,17 @@ def _analyze_technology_material(material: MaterialView, contract: AnalysisInput
         )
         scenarios.extend(candidate for candidate in candidates if not selected_scenarios or candidate.scenario in selected_scenarios)
     quality_ids = [evidence_id for issue in issues for evidence_id in issue.evidence_ids]
-    quality = _record("technology-data-quality", f"The technology radar contains {len(issues)} source-independence or scoring caveats that must be retained in the recommendation.", quality_ids or [item.id for item in evidence], assumptions, ("Removing syndicated stories or changing source quality can change evidence rankings.",), ("Independent deployment evidence resolves the source-family and scoring caveats.",), ("Source-family count, media-to-deployment ratio, and signpost status.",))
+    quality = _record(record_id("technology-data-quality"), f"The technology radar contains {len(issues)} source-independence or scoring caveats that must be retained in the recommendation.", quality_ids or [item.id for item in evidence], assumptions, ("Removing syndicated stories or changing source quality can change evidence rankings.",), ("Independent deployment evidence resolves the source-family and scoring caveats.",), ("Source-family count, media-to-deployment ratio, and signpost status.",))
     claims.append(quality)
     relationships.extend(Relationship(f"{quality.id}-supports-{evidence_id}", evidence_id, quality.id, "supports") for evidence_id in quality.evidence_ids)
     action_by_technology = {item.technology: item.action_category for item in assessments}
-    implication = _record("technology-priority-implication", "; ".join(f"{technology}: {action.lower()}" for technology, action in sorted(action_by_technology.items())) + ".", [item.id for item in evidence], assumptions, ("Priority scores are not causal return forecasts and do not capture execution capacity.",), ("Independent deployment evidence reverses the relative ranking or materially changes reversibility.",), ("Technology-specific signposts, competitor actions, and deployment evidence.",))
+    implication = _record(record_id("technology-priority-implication"), "; ".join(f"{technology}: {action.lower()}" for technology, action in sorted(action_by_technology.items())) + ".", [item.id for item in evidence], assumptions, ("Priority scores are not causal return forecasts and do not capture execution capacity.",), ("Independent deployment evidence reverses the relative ranking or materially changes reversibility.",), ("Technology-specific signposts, competitor actions, and deployment evidence.",))
     relationships.extend(Relationship(f"{claim.id}-informs-{implication.id}", claim.id, implication.id, "informs") for claim in claims)
     recommendation_text = "Use a conditional radar posture: " + ", ".join(f"{technology} = {action.lower()}" for technology, action in sorted(action_by_technology.items())) + " until independent deployment signposts exceed the workbook thresholds."
-    recommendation = _record("technology-recommendation", recommendation_text, [item.id for item in evidence], assumptions, ("The workbook does not quantify investment returns or implementation cost.",), ("Signposts fail for two review windows or independent deployment evidence changes the action category.",), ("Independent design wins, SOP platforms, measured productivity, qualified battery pilots, and regulator-approved routes.",))
+    recommendation = _record(record_id("technology-recommendation"), recommendation_text, [item.id for item in evidence], assumptions, ("The workbook does not quantify investment returns or implementation cost.",), ("Signposts fail for two review windows or independent deployment evidence changes the action category.",), ("Independent design wins, SOP platforms, measured productivity, qualified battery pilots, and regulator-approved routes.",))
     relationships.append(Relationship(f"{implication.id}-informs-{recommendation.id}", implication.id, recommendation.id, "informs"))
     recommendation = replace(recommendation, relationship_ids=[item.id for item in relationships if item.to_id == recommendation.id])
-    calculations = [CalculationRecord(f"technology-{item.technology.lower().replace(' ', '-')}-evidence", MeasurementKey(item.technology, "independent_source_families", "current", "families"), "count(distinct canonical_source_family)", list(item.evidence_ids), float(item.independent_source_families), "families", [f"Signals:{item}" for item in item.evidence_ids]) for item in assessments]
+    calculations = [CalculationRecord(record_id(f"technology-{item.technology.lower().replace(' ', '-')}-evidence"), MeasurementKey(item.technology, "independent_source_families", "current", "families"), "count(distinct canonical_source_family)", list(item.evidence_ids), float(item.independent_source_families), "families", [f"Signals:{item}" for item in item.evidence_ids]) for item in assessments]
     state = AnalysisState("technology-radar", 1, evidence=evidence, claims=claims, implications=[implication], recommendations=[recommendation], relationships=relationships, revisions=[Revision("revision-1", 1, "technology radar analysis pending acceptance", [item.id for item in [*evidence, *calculations, *claims, implication, recommendation]])], invalidation=Invalidation(), revision_status=RevisionStatus.DRAFT, calculations=calculations)
     decision_question = next((str(row[1]) for row in brief.rows if row and row[0] == "Decision question" and len(row) > 1), "Which emerging technologies should the company prioritize?")
     horizon = next((str(row[1]) for row in brief.rows if row and row[0] == "Horizon" and len(row) > 1), "24–36 months")

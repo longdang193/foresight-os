@@ -1,11 +1,111 @@
 from copy import deepcopy
+import os
+from pathlib import Path
+import subprocess
+import sys
 
-from evaluation.probes.compare_optimization_receipts import compare, compare_repeats, validate_stability
-from evaluation.probes.optimization_measurement import MANDATORY_XLSX_WORKLOADS, SCENARIO_XLSX_WORKLOADS, SCHEMA_VERSION
+from evaluation.probes.compare_optimization_receipts import _validate_measurement_receipt, compare, compare_repeats, validate_stability
+from evaluation.probes.optimization_measurement import (
+    MANDATORY_XLSX_WORKLOADS,
+    PROFILE_SCHEMA_VERSION,
+    PROFILE_WORKLOADS,
+    SCENARIO_ONLY_XLSX_WORKLOADS,
+    SCENARIO_XLSX_WORKLOADS,
+    SCHEMA_VERSION,
+    canonical_workloads,
+)
 from foresight_os.runtime.metrics import RunMetrics
 
 
 PATTERNS = ("DIRECT", "ANALYZE", "CONCURRENT", "HANDOFF", "CHALLENGE_RECOMMENDATION")
+
+
+def _profiled_receipt(profile: str) -> dict:
+    receipt = _receipt()
+    selected = list(canonical_workloads(None, profile=profile))
+    receipt["profile"] = profile
+    receipt["profile_schema_version"] = PROFILE_SCHEMA_VERSION
+    receipt["workload"]["canonical_workloads"] = selected
+    for name in selected:
+        receipt["xlsx"]["workloads"].setdefault(
+            name,
+            {"executed": True, "status": "VERIFIED", "correctness": "VERIFIED", "limitation": None},
+        )
+    return receipt
+
+
+def test_profile_workloads_are_canonical_and_aliases_are_counted_once():
+    assert canonical_workloads(None, profile="smoke") == PROFILE_WORKLOADS["smoke"]
+    assert canonical_workloads(("changed_selection", "different_selection"), profile="targeted") == ("different_selection",)
+
+
+def test_profile_validator_allows_only_selected_nonrelease_workloads():
+    receipt = _profiled_receipt("smoke")
+    selected = set(receipt["workload"]["canonical_workloads"])
+    for name in MANDATORY_XLSX_WORKLOADS:
+        if name not in selected:
+            receipt["xlsx"]["workloads"][name] = {
+                "executed": False,
+                "status": "NOT_MEASURED",
+                "correctness": "NOT_MEASURED",
+                "limitation": "workload not selected",
+            }
+    assert _validate_measurement_receipt(receipt) == []
+
+
+def test_release_validator_keeps_scenario_only_workloads_out_of_deterministic_requirements():
+    receipt = _profiled_receipt("release")
+    receipt["xlsx"]["timing_paths"].pop("selected_sheet_stress")
+    receipt["xlsx"]["workloads"].pop("synthesis_cancellation")
+    receipt["xlsx"]["scenario_workloads"]["synthesis_cancellation"] = {
+        "executed": False,
+        "status": "NOT_MEASURED",
+        "correctness": "NOT_MEASURED",
+        "limitation": "synthesis cancellation is outside deterministic workbook scope",
+    }
+
+    assert "synthesis_cancellation" in SCENARIO_ONLY_XLSX_WORKLOADS
+    assert _validate_measurement_receipt(receipt) == []
+
+
+def test_comparator_rejects_nonrelease_profiles():
+    baseline = _profiled_receipt("smoke")
+    release = _profiled_receipt("targeted")
+    release["revision"]["commit"] = "release-commit"
+
+    result = compare(baseline, release)
+
+    assert not result["accepted"]
+    assert result["mismatched_comparison_inputs"] == ["profile", "profile=release_required", "workload"]
+
+
+def test_smoke_probe_imports_without_optional_provider_runtime():
+    repo_root = Path(__file__).parents[1]
+    script = """
+import importlib.abc
+import sys
+
+class BlockAgentFramework(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "agent_framework" or fullname.startswith("agent_framework."):
+            raise ImportError("agent_framework is blocked for smoke import validation")
+        return None
+
+sys.meta_path.insert(0, BlockAgentFramework())
+import evaluation.probes.run_optimization_probe
+assert not any(name == "agent_framework" or name.startswith("agent_framework.") for name in sys.modules)
+print("VERIFIED")
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=repo_root,
+        env={**os.environ, "PYTHONPATH": os.pathsep.join((str(repo_root), str(repo_root / "src")))},
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.stdout.strip() == "VERIFIED"
 
 
 def _receipt() -> dict:

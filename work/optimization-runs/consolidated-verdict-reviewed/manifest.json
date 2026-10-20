@@ -1,0 +1,422 @@
+{
+  "artifacts": {
+    "baseline_receipt": {
+      "dirty": false,
+      "evidence": {
+        "allocation": {
+          "limitation": null,
+          "status": "VERIFIED"
+        },
+        "correctness": {
+          "limitation": null,
+          "status": "VERIFIED"
+        },
+        "latency": {
+          "limitation": null,
+          "status": "VERIFIED"
+        },
+        "optimization_demonstrated": {
+          "limitation": "no optimization claim is made by a single receipt",
+          "status": "NOT_MEASURED"
+        },
+        "regression_threshold": {
+          "limitation": "requires baseline/release comparison",
+          "status": "NOT_MEASURED"
+        },
+        "soak": {
+          "limitation": null,
+          "status": "VERIFIED"
+        }
+      },
+      "path": "work/optimization-runs/consolidated-verdict-reviewed/clean-baseline-release.json",
+      "profile": "release",
+      "revision": "bb318d466e1f4d093e424c8b39e877a1470d9f86",
+      "sha256": "c5962fd06152ac524317061249630da04a9c4bed5aed916281d83b8b1d165ae3"
+    },
+    "comparison": {
+      "accepted": false,
+      "failed_metrics": [
+        "xlsx.p95_ms"
+      ],
+      "failed_timing_paths": [],
+      "gate": "FAILED",
+      "outcomes": {
+        "correctness": {
+          "limitation": null,
+          "status": "VERIFIED"
+        },
+        "optimization_demonstrated": {
+          "candidate": "public_workflow_context_reuse",
+          "limitation": "selected candidate did not reduce every measured duplicate count",
+          "measurements": {
+            "capture_count": {
+              "baseline": 1.0,
+              "delta": 0.0,
+              "pct": 0.0,
+              "release": 1.0
+            },
+            "xlsx_parse_count": {
+              "baseline": 1.0,
+              "delta": 0.0,
+              "pct": 0.0,
+              "release": 1.0
+            }
+          },
+          "status": "NOT_MEASURED"
+        },
+        "regression_threshold": {
+          "limitation": "one or more regression thresholds failed",
+          "samples": {
+            "baseline": {
+              "canonical_workloads": [
+                "cold_workbook",
+                "same_view_repeat",
+                "different_selection",
+                "analyst_validator_reuse",
+                "repeated_investigation",
+                "large_retained_context",
+                "multi_workbook",
+                "blocking_cancellation",
+                "approved_changed_brief",
+                "selected_sheet_stress",
+                "history-10",
+                "history-100",
+                "synthesis_cancellation",
+                "persistence_phases"
+              ],
+              "deterministic_workloads": [
+                "cold_workbook",
+                "same_view_repeat",
+                "different_selection",
+                "analyst_validator_reuse",
+                "repeated_investigation",
+                "large_retained_context",
+                "multi_workbook",
+                "blocking_cancellation",
+                "public_workflow_context_reuse"
+              ],
+              "fixture": "analyst_multisheet.xlsx",
+              "fixture_sha256": "3f381b148ab6f2d0942061964b3851b26e4a66c224dd0866d431cc3c9d52d123",
+              "limits": {
+                "max_bytes": 25000000,
+                "max_cells": 250000,
+                "max_expanded_bytes": 100000000,
+                "max_merged_cells_per_range": 100000,
+                "max_merged_ranges": 10000,
+                "max_result_rows": 10000,
+                "max_rows": 50000,
+                "max_total_merged_cells": 500000
+              },
+              "measured_runs": 10,
+              "parameters": {
+                "cold_sample_count": 10,
+                "history_sizes": [
+                  10,
+                  100,
+                  1000
+                ],
+                "timing_sample_count": 10
+              },
+              "patterns": [
+                "ANALYZE",
+                "CHALLENGE_RECOMMENDATION",
+                "CONCURRENT",
+                "DIRECT",
+                "HANDOFF"
+              ],
+              "samples_per_process_run": 10,
+              "scenario_workloads": [
+                "approved_changed_brief",
+                "changed_brief",
+                "changed_selection",
+                "selected_sheet_stress",
+                "history-10",
+                "history-100",
+                "history-1000",
+                "correction",
+                "workbook_cancellation",
+                "synthesis_cancellation",
+                "persistence_phases"
+              ],
+              "warmups": 2
+            },
+            "release": {
+              "canonical_workloads": [
+                "cold_workbook",
+                "same_view_repeat",
+                "different_selection",
+                "analyst_validator_reuse",
+                "repeated_investigation",
+                "large_retained_context",
+                "multi_workbook",
+                "blocking_cancellation",
+                "approved_changed_brief",
+                "selected_sheet_stress",
+                "history-10",
+                "history-100",
+                "synthesis_cancellation",
+                "persistence_phases"
+              ],
+              "deterministic_workloads": [
+                "cold_workbook",
+                "same_view_repeat",
+                "different_selection",
+                "analyst_validator_reuse",
+                "repeated_investigation",
+                "large_retained_context",
+                "multi_workbook",
+                "blocking_cancellation",
+                "public_workflow_context_reuse"
+              ],
+              "fixture": "analyst_multisheet.xlsx",
+              "fixture_sha256": "3f381b148ab6f2d0942061964b3851b26e4a66c224dd0866d431cc3c9d52d123",
+              "limits": {
+                "max_bytes": 25000000,
+                "max_cells": 250000,
+                "max_expanded_bytes": 100000000,
+                "max_merged_cells_per_range": 100000,
+                "max_merged_ranges": 10000,
+                "max_result_rows": 10000,
+                "max_rows": 50000,
+                "max_total_merged_cells": 500000
+              },
+              "measured_runs": 10,
+              "parameters": {
+                "cold_sample_count": 10,
+                "history_sizes": [
+                  10,
+                  100,
+                  1000
+                ],
+                "timing_sample_count": 10
+              },
+              "patterns": [
+                "ANALYZE",
+                "CHALLENGE_RECOMMENDATION",
+                "CONCURRENT",
+                "DIRECT",
+                "HANDOFF"
+              ],
+              "samples_per_process_run": 10,
+              "scenario_workloads": [
+                "approved_changed_brief",
+                "changed_brief",
+                "changed_selection",
+                "selected_sheet_stress",
+                "history-10",
+                "history-100",
+                "history-1000",
+                "correction",
+                "workbook_cancellation",
+                "synthesis_cancellation",
+                "persistence_phases"
+              ],
+              "warmups": 2
+            }
+          },
+          "status": "FAILED",
+          "thresholds": {
+            "gate_cold_noise_floor": true,
+            "gate_pattern_latency": false,
+            "gate_reader_metrics": true,
+            "gate_timing_paths": true,
+            "p95_regression_pct": 20,
+            "peak_allocation_regression_pct": 15,
+            "soak_runs": 100,
+            "tool_calls_per_finding_increase": 0
+          }
+        }
+      },
+      "path": "work/optimization-runs/consolidated-verdict-reviewed/comparison.json",
+      "regression": {
+        "cold_p95_pct": -54.272,
+        "economics_per_accepted_finding_delta": {
+          "external_http_requests": 0.0,
+          "input_tokens": 0.0,
+          "local_tool_calls": 0.0,
+          "mcp_tool_calls": 0.0,
+          "model_calls": 0.0,
+          "output_tokens": 0.0,
+          "tool_calls_total": 0.0
+        },
+        "p95_pct": 27.781,
+        "pattern_p95_pct": {
+          "ANALYZE": -0.54,
+          "CHALLENGE_RECOMMENDATION": -0.743,
+          "CONCURRENT": 0.198,
+          "DIRECT": 0.645,
+          "HANDOFF": 0.623
+        },
+        "peak_allocation_pct": 0.006,
+        "rss_pct": 0.126,
+        "timing_paths_pct": {
+          "analyst_validator_reuse": -15.8,
+          "approved_changed_brief": -0.285,
+          "cold_workbook": -54.272,
+          "history-10": -55.962,
+          "history-100": -60.629,
+          "repeated_investigation": -5.973,
+          "same_view_repeat": -9.885
+        }
+      },
+      "sha256": "042c826d67b905839039df64de3c035cced80ae116bbf45aa08b3b64b7518ae4"
+    },
+    "final_release_receipt": {
+      "dirty": false,
+      "evidence": {
+        "allocation": {
+          "limitation": null,
+          "status": "VERIFIED"
+        },
+        "correctness": {
+          "limitation": null,
+          "status": "VERIFIED"
+        },
+        "latency": {
+          "limitation": null,
+          "status": "VERIFIED"
+        },
+        "optimization_demonstrated": {
+          "limitation": "no optimization claim is made by a single receipt",
+          "status": "NOT_MEASURED"
+        },
+        "regression_threshold": {
+          "limitation": "requires baseline/release comparison",
+          "status": "NOT_MEASURED"
+        },
+        "soak": {
+          "limitation": null,
+          "status": "VERIFIED"
+        }
+      },
+      "path": "work/optimization-runs/consolidated-verdict-reviewed/final-release.json",
+      "profile": "release",
+      "revision": "2283ef3dd307a96385b0a7d0abcce2a3d9b1bc41",
+      "sha256": "7709b77293bd1cda43357a71ac5903d410838922df853921fc1cb629bb077412"
+    }
+  },
+  "commands": {
+    "baseline": "python evaluation/probes/run_optimization_probe.py --mode baseline --profile release --output work/optimization-runs/consolidated-verdict-reviewed/clean-baseline-release.json",
+    "comparison": "python evaluation/probes/compare_optimization_receipts.py --baseline work/optimization-runs/consolidated-verdict-reviewed/clean-baseline-release.json --release work/optimization-runs/consolidated-verdict-reviewed/final-release.json --output work/optimization-runs/consolidated-verdict-reviewed/comparison.json",
+    "release": "python evaluation/probes/run_optimization_probe.py --mode release --profile release --output work/optimization-runs/consolidated-verdict-reviewed/final-release.json",
+    "repository_checks": [
+      "python -m pytest -q",
+      "python -m compileall -q src tests evaluation",
+      "python scripts/check_markdown_links.py README.md AGENTS.md docs/architecture.md docs/evidence-and-evaluation.md evaluation/README.md --tracked-docs",
+      "git diff --check"
+    ]
+  },
+  "environment": {
+    "fixture_limits": {
+      "max_bytes": 25000000,
+      "max_cells": 250000,
+      "max_expanded_bytes": 100000000,
+      "max_merged_cells_per_range": 100000,
+      "max_merged_ranges": 10000,
+      "max_result_rows": 10000,
+      "max_rows": 50000,
+      "max_total_merged_cells": 500000
+    },
+    "identity": "58050f548e117ff639ddb96da06fb962a100ea3d77829a6db0d3206f37ef6483",
+    "python_executable": "C:\\Users\\HOANG PHI LONG DANG\\AppData\\Local\\Programs\\Python\\Python313\\python.exe"
+  },
+  "generated_at": "2026-10-20T19:50:39.851476+00:00",
+  "harness": {
+    "paths": [
+      "evaluation/probes/optimization_measurement.py",
+      "evaluation/probes/run_optimization_probe.py",
+      "evaluation/probes/compare_optimization_receipts.py"
+    ],
+    "profile": "release",
+    "profile_schema_version": 1,
+    "source_tree_sha256": "f3176f357b1bf0a757f07a27c0670c93eea9d14de4910e2af9d847ad5008320e",
+    "version": "optimization-harness-v1"
+  },
+  "limitations": [
+    "The release receipt is structurally VERIFIED, but the baseline/release regression comparator returned FAILED on this local run because the top-level workbook p95 regression exceeded the configured 20% gate; no optimization claim is made.",
+    "The optional native MCP fixture was NOT_MEASURED because the synthetic fixture raised NameError; this does not invalidate local provider-free evidence.",
+    "Synthesis cancellation remains NOT_MEASURED by design because it is outside the deterministic workbook scope.",
+    "Correction and history-1000 scenarios remain bounded non-release measurements and are not release-gate requirements."
+  ],
+  "name": "foresight-os-consolidated-verdict-reviewed",
+  "persistence": {
+    "limitation": "Persistence phases were measured, but no implementation candidate was retained because a material end-to-end benefit was not established.",
+    "measured_receipt": "work/optimization-runs/consolidated-verdict-reviewed/final-release.json",
+    "phases": [
+      "lock_wait",
+      "raw_read",
+      "json_decode",
+      "hydration",
+      "merge",
+      "validation",
+      "serialization",
+      "write",
+      "fsync",
+      "pending_write",
+      "committed_write"
+    ],
+    "status": "DEFERRED"
+  },
+  "schema_version": 1,
+  "secrets_policy": {
+    "statement": "The retained bounded artifacts contain no credentials, authorization headers, raw provider payloads, or customer data.",
+    "status": "VERIFIED"
+  },
+  "source": {
+    "base_code_commit": "8668c2a439ebb2d748a042e92cdbd5e238b2f299",
+    "baseline_receipt_commit": "bb318d466e1f4d093e424c8b39e877a1470d9f86",
+    "final_release_commit": "2283ef3dd307a96385b0a7d0abcce2a3d9b1bc41",
+    "final_release_dirty": false,
+    "harness_fix_commit": "2283ef3dd307a96385b0a7d0abcce2a3d9b1bc41"
+  },
+  "warnings": [
+    "The release probe emitted non-fatal Agent Framework warnings for missing participant-2 handoff configuration and max rounds; receipts still completed with VERIFIED core evidence.",
+    "The clean baseline receipt uses a temporary clean commit that applies the measurement-only harness fix to base code commit 8668c2a, keeping the harness digest identical to the final release receipt."
+  ],
+  "workload": {
+    "canonical_workloads": [
+      "cold_workbook",
+      "same_view_repeat",
+      "different_selection",
+      "analyst_validator_reuse",
+      "repeated_investigation",
+      "large_retained_context",
+      "multi_workbook",
+      "blocking_cancellation",
+      "approved_changed_brief",
+      "selected_sheet_stress",
+      "history-10",
+      "history-100",
+      "synthesis_cancellation",
+      "persistence_phases"
+    ],
+    "fixture": "analyst_multisheet.xlsx",
+    "fixture_sha256": "3f381b148ab6f2d0942061964b3851b26e4a66c224dd0866d431cc3c9d52d123",
+    "limits": {
+      "max_bytes": 25000000,
+      "max_cells": 250000,
+      "max_expanded_bytes": 100000000,
+      "max_merged_cells_per_range": 100000,
+      "max_merged_ranges": 10000,
+      "max_result_rows": 10000,
+      "max_rows": 50000,
+      "max_total_merged_cells": 500000
+    },
+    "parameters": {
+      "cold_sample_count": 10,
+      "history_sizes": [
+        10,
+        100,
+        1000
+      ],
+      "timing_sample_count": 10
+    },
+    "patterns": [
+      "ANALYZE",
+      "CHALLENGE_RECOMMENDATION",
+      "CONCURRENT",
+      "DIRECT",
+      "HANDOFF"
+    ]
+  }
+}

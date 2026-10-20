@@ -5,8 +5,6 @@ import json
 from typing import Any
 
 from foresight_os.controller.profiles import Profile
-from foresight_os.runtime.capabilities import DEFAULT_CAPABILITIES
-from foresight_os.runtime.maf_probe import vertical_slice_guardrail
 
 
 class RecipeName(StrEnum):
@@ -259,6 +257,8 @@ def _role_capability_ids(role: object) -> tuple[str, ...]:
 
 
 def _uses_runtime_capability(values: object) -> bool:
+    from foresight_os.runtime.capabilities import DEFAULT_CAPABILITIES
+
     return any(str(item) in DEFAULT_CAPABILITIES for item in values or ())
 
 
@@ -358,6 +358,8 @@ def minimum_agent_call_budget(recipe: ExecutionRecipe) -> int:
 
 
 def make_recipe(name: RecipeName) -> ExecutionRecipe:
+    from foresight_os.runtime.maf_probe import vertical_slice_guardrail
+
     guardrail = vertical_slice_guardrail()
     roles = [{"purpose": "execute", "profile": Profile.NORMAL.value}]
     pattern = "direct"

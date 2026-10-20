@@ -370,8 +370,15 @@ class AnalysisStore:
                     path.unlink(missing_ok=True)
                 else:
                     self._atomic_write(path, content.decode("utf-8"))
-            if consumed_tokens:
-                self._atomic_write(self.pending_tokens_path, json.dumps(sorted(consumed_tokens), indent=2) + "\n")
+            if snapshot.get("pending_tokens") is not None or consumed_tokens:
+                revision = (
+                    self._revision_from_bytes(snapshot.get("analysis"))
+                    or self._revision_from_bytes(snapshot.get("pending"))
+                    or self._revision_from_bytes(current.get("analysis"))
+                    or self._revision_from_bytes(current.get("pending"))
+                    or 0
+                )
+                self._write_consumed_pending_tokens(revision, consumed_tokens)
             return True
 
     def save_pending_if_unchanged(
@@ -733,6 +740,9 @@ class AnalysisStore:
             return
         tokens = self._load_consumed_pending_tokens(revision)
         tokens.add(token)
+        self._write_consumed_pending_tokens(revision, tokens)
+
+    def _write_consumed_pending_tokens(self, revision: int, tokens: set[str]) -> None:
         self._atomic_write(
             self.pending_tokens_path,
             json.dumps({"revision": revision, "tokens": sorted(tokens)}, indent=2) + "\n",
