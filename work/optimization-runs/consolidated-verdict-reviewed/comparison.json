@@ -1,0 +1,1230 @@
+{
+  "absolute": {
+    "economics_per_accepted_finding": {
+      "external_http_requests": {
+        "baseline": 1.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 1.0
+      },
+      "input_tokens": {
+        "baseline": 0.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 0.0
+      },
+      "local_tool_calls": {
+        "baseline": 41.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 41.0
+      },
+      "mcp_tool_calls": {
+        "baseline": 0.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 0.0
+      },
+      "model_calls": {
+        "baseline": 80.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 80.0
+      },
+      "output_tokens": {
+        "baseline": 0.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 0.0
+      },
+      "tool_calls_total": {
+        "baseline": 1.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 1.0
+      }
+    },
+    "maf_patterns": {
+      "ANALYZE": {
+        "baseline": 16.1,
+        "delta": -0.087,
+        "pct": -0.54,
+        "release": 16.013
+      },
+      "CHALLENGE_RECOMMENDATION": {
+        "baseline": 16.153,
+        "delta": -0.12,
+        "pct": -0.743,
+        "release": 16.033
+      },
+      "CONCURRENT": {
+        "baseline": 16.198,
+        "delta": 0.032,
+        "pct": 0.198,
+        "release": 16.23
+      },
+      "DIRECT": {
+        "baseline": 15.967,
+        "delta": 0.103,
+        "pct": 0.645,
+        "release": 16.07
+      },
+      "HANDOFF": {
+        "baseline": 16.044,
+        "delta": 0.1,
+        "pct": 0.623,
+        "release": 16.144
+      }
+    },
+    "resource": {
+      "rss_bytes": {
+        "baseline": 168869888.0,
+        "delta": 212992.0,
+        "pct": 0.126,
+        "release": 169082880.0
+      }
+    },
+    "xlsx": {
+      "cold_noise_floor": {
+        "absolute_delta_ms": -22.129,
+        "baseline": 40.774,
+        "baseline_noise_floor_ms": 24.039,
+        "candidate_noise_floor_ms": 1.506,
+        "delta": -22.129,
+        "noise_floor_gate": true,
+        "pct": -54.272,
+        "release": 18.645
+      },
+      "p95_ms": {
+        "baseline": 14.456,
+        "delta": 4.016,
+        "pct": 27.781,
+        "release": 18.472
+      },
+      "peak_allocation_bytes": {
+        "baseline": 1065514.0,
+        "delta": 68.0,
+        "pct": 0.006,
+        "release": 1065582.0
+      },
+      "timing_paths": {
+        "analyst_validator_reuse": {
+          "absolute_delta_ms": -0.076,
+          "baseline": 0.481,
+          "baseline_noise_floor_ms": 0.06,
+          "candidate_noise_floor_ms": 0.03,
+          "delta": -0.076,
+          "noise_floor_gate": true,
+          "pct": -15.8,
+          "release": 0.405
+        },
+        "approved_changed_brief": {
+          "absolute_delta_ms": -3.391,
+          "baseline": 1191.634,
+          "baseline_noise_floor_ms": 40.845,
+          "candidate_noise_floor_ms": 70.857,
+          "delta": -3.391,
+          "noise_floor_gate": true,
+          "pct": -0.285,
+          "release": 1188.243
+        },
+        "cold_workbook": {
+          "absolute_delta_ms": -22.129,
+          "baseline": 40.774,
+          "baseline_noise_floor_ms": 24.039,
+          "candidate_noise_floor_ms": 1.506,
+          "delta": -22.129,
+          "noise_floor_gate": true,
+          "pct": -54.272,
+          "release": 18.645
+        },
+        "history-10": {
+          "absolute_delta_ms": -61.669,
+          "baseline": 110.198,
+          "baseline_noise_floor_ms": 41.304,
+          "candidate_noise_floor_ms": 8.101,
+          "delta": -61.669,
+          "noise_floor_gate": true,
+          "pct": -55.962,
+          "release": 48.529
+        },
+        "history-100": {
+          "absolute_delta_ms": -261.174,
+          "baseline": 430.771,
+          "baseline_noise_floor_ms": 262.598,
+          "candidate_noise_floor_ms": 67.801,
+          "delta": -261.174,
+          "noise_floor_gate": true,
+          "pct": -60.629,
+          "release": 169.597
+        },
+        "repeated_investigation": {
+          "absolute_delta_ms": -5.212,
+          "baseline": 87.259,
+          "baseline_noise_floor_ms": 11.549,
+          "candidate_noise_floor_ms": 11.263,
+          "delta": -5.212,
+          "noise_floor_gate": true,
+          "pct": -5.973,
+          "release": 82.047
+        },
+        "same_view_repeat": {
+          "absolute_delta_ms": -0.043,
+          "baseline": 0.435,
+          "baseline_noise_floor_ms": 0.06,
+          "candidate_noise_floor_ms": 0.032,
+          "delta": -0.043,
+          "noise_floor_gate": true,
+          "pct": -9.885,
+          "release": 0.392
+        }
+      }
+    }
+  },
+  "accepted": false,
+  "accepted_finding_count": {
+    "baseline": 1,
+    "release": 1
+  },
+  "baseline": {
+    "economics_per_accepted_finding": {
+      "external_http_requests": 1.0,
+      "input_tokens": 0.0,
+      "local_tool_calls": 41.0,
+      "mcp_tool_calls": 0.0,
+      "model_calls": 80.0,
+      "output_tokens": 0.0,
+      "tool_calls_total": 1.0
+    },
+    "p95_ms": 14.456,
+    "peak_allocation_bytes": 1065514,
+    "timing_paths": {
+      "analyst_validator_reuse": {
+        "noise_floor_ms": 0.06,
+        "p50_ms": 0.421,
+        "p95_ms": 0.481,
+        "sample_count": 10,
+        "samples_ms": [
+          0.498,
+          0.432,
+          0.419,
+          0.416,
+          0.481,
+          0.459,
+          0.421,
+          0.434,
+          0.417,
+          0.413
+        ],
+        "wall_time_ms": 0.481
+      },
+      "approved_changed_brief": {
+        "noise_floor_ms": 40.845,
+        "p50_ms": 1150.789,
+        "p95_ms": 1191.634,
+        "sample_count": 10,
+        "samples_ms": [
+          1150.789,
+          1189.377,
+          1124.34,
+          1170.112,
+          1191.42,
+          1191.634,
+          1225.096,
+          1085.257,
+          1119.544,
+          1033.715
+        ],
+        "wall_time_ms": 1191.634
+      },
+      "cold_workbook": {
+        "noise_floor_ms": 24.039,
+        "p50_ms": 16.735,
+        "p95_ms": 40.774,
+        "sample_count": 10,
+        "samples_ms": [
+          15.717,
+          16.314,
+          16.735,
+          15.883,
+          15.995,
+          17.572,
+          85.892,
+          40.774,
+          29.157,
+          19.374
+        ],
+        "wall_time_ms": 40.774
+      },
+      "direct_workbook": {
+        "p50_ms": 13.93,
+        "p90_ms": 14.456,
+        "p95_ms": 14.456,
+        "sample_count": 10
+      },
+      "history-10": {
+        "noise_floor_ms": 41.304,
+        "p50_ms": 68.894,
+        "p95_ms": 110.198,
+        "sample_count": 10,
+        "samples_ms": [
+          39.765,
+          28.37,
+          36.668,
+          39.1,
+          82.028,
+          110.198,
+          68.894,
+          120.191,
+          104.668,
+          103.441
+        ],
+        "wall_time_ms": 110.198
+      },
+      "history-100": {
+        "noise_floor_ms": 262.598,
+        "p50_ms": 168.173,
+        "p95_ms": 430.771,
+        "sample_count": 100,
+        "samples_ms": [
+          104.599,
+          83.722,
+          80.283,
+          70.587,
+          85.719,
+          92.394,
+          93.249,
+          95.932,
+          95.735,
+          113.424,
+          127.002,
+          132.233,
+          188.096,
+          115.433,
+          242.362,
+          128.253,
+          120.304,
+          132.562,
+          125.274,
+          129.403,
+          140.407,
+          137.469,
+          133.157,
+          135.286,
+          254.797,
+          278.832,
+          220.354,
+          249.611,
+          237.129,
+          183.884,
+          163.505,
+          169.022,
+          176.114,
+          163.028,
+          197.859,
+          172.901,
+          229.637,
+          203.307,
+          166.872,
+          190.571,
+          132.47,
+          116.538,
+          136.381,
+          159.81,
+          125.438,
+          119.292,
+          113.295,
+          119.653,
+          117.402,
+          145.409,
+          157.44,
+          147.649,
+          168.173,
+          146.552,
+          159.243,
+          152.84,
+          137.59,
+          149.189,
+          138.833,
+          144.966,
+          394.966,
+          199.492,
+          230.063,
+          197.997,
+          216.556,
+          169.144,
+          192.658,
+          199.97,
+          182.179,
+          149.273,
+          164.024,
+          159.328,
+          162.545,
+          149.786,
+          171.711,
+          406.813,
+          467.064,
+          366.38,
+          434.84,
+          438.268,
+          372.326,
+          399.542,
+          519.413,
+          510.244,
+          430.771,
+          380.637,
+          365.242,
+          383.595,
+          309.426,
+          322.766,
+          289.76,
+          218.963,
+          202.823,
+          206.179,
+          194.389,
+          211.6,
+          203.562,
+          218.909,
+          221.678,
+          236.969
+        ],
+        "wall_time_ms": 430.771
+      },
+      "repeated_investigation": {
+        "noise_floor_ms": 11.549,
+        "p50_ms": 75.71,
+        "p95_ms": 87.259,
+        "sample_count": 10,
+        "samples_ms": [
+          88.059,
+          78.879,
+          87.259,
+          75.71,
+          71.501,
+          75.899,
+          70.721,
+          75.862,
+          73.266,
+          73.891
+        ],
+        "wall_time_ms": 87.259
+      },
+      "same_view_repeat": {
+        "noise_floor_ms": 0.06,
+        "p50_ms": 0.375,
+        "p95_ms": 0.435,
+        "sample_count": 17,
+        "samples_ms": [
+          0.415,
+          0.392,
+          0.377,
+          0.379,
+          0.375,
+          0.372,
+          0.379,
+          0.374,
+          0.368,
+          0.378,
+          0.372,
+          0.368,
+          0.368,
+          0.375,
+          0.487,
+          0.367,
+          0.435
+        ],
+        "wall_time_ms": 0.435
+      },
+      "selected_sheet_stress": {
+        "noise_floor_ms": 0,
+        "sample_count": 0,
+        "samples_ms": [],
+        "wall_time_ms": 0
+      },
+      "warm_1": {
+        "wall_time_ms": 0.415
+      },
+      "warm_2_plus": {
+        "p95_ms": 0.379,
+        "sample_count": 10
+      }
+    }
+  },
+  "evidence": {
+    "release": {
+      "allocation": {
+        "limitation": null,
+        "status": "VERIFIED"
+      },
+      "correctness": {
+        "limitation": null,
+        "status": "VERIFIED"
+      },
+      "latency": {
+        "limitation": null,
+        "status": "VERIFIED"
+      },
+      "optimization_demonstrated": {
+        "limitation": "no optimization claim is made by a single receipt",
+        "status": "NOT_MEASURED"
+      },
+      "regression_threshold": {
+        "limitation": "requires baseline/release comparison",
+        "status": "NOT_MEASURED"
+      },
+      "soak": {
+        "limitation": null,
+        "status": "VERIFIED"
+      }
+    },
+    "unavailable_dimensions": []
+  },
+  "gate": "FAILED",
+  "instrumentation": {
+    "available": true,
+    "persistence": {
+      "committed_write_bytes": {
+        "baseline": 10459.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 10459.0
+      },
+      "committed_write_time_ms": {
+        "baseline": 5.262,
+        "delta": -0.616,
+        "pct": -11.707,
+        "release": 4.646
+      },
+      "fsync_count": {
+        "baseline": 6.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 6.0
+      },
+      "fsync_time_ms": {
+        "baseline": 9.11,
+        "delta": -0.761,
+        "pct": -8.353,
+        "release": 8.349
+      },
+      "hydration_count": {
+        "baseline": 4.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 4.0
+      },
+      "hydration_time_ms": {
+        "baseline": 0.21,
+        "delta": -0.015,
+        "pct": -7.143,
+        "release": 0.195
+      },
+      "json_decode_count": {
+        "baseline": 4.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 4.0
+      },
+      "json_decode_time_ms": {
+        "baseline": 0.203,
+        "delta": -0.03,
+        "pct": -14.778,
+        "release": 0.173
+      },
+      "lock_wait_count": {
+        "baseline": 4.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 4.0
+      },
+      "lock_wait_time_ms": {
+        "baseline": 1.914,
+        "delta": -0.131,
+        "pct": -6.844,
+        "release": 1.783
+      },
+      "merge_count": {
+        "baseline": 2.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 2.0
+      },
+      "merge_time_ms": {
+        "baseline": 0.041,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 0.041
+      },
+      "pending_write_bytes": {
+        "baseline": 8203.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 8203.0
+      },
+      "pending_write_time_ms": {
+        "baseline": 5.439,
+        "delta": -0.967,
+        "pct": -17.779,
+        "release": 4.472
+      },
+      "raw_read_count": {
+        "baseline": 4.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 4.0
+      },
+      "raw_read_time_ms": {
+        "baseline": 13.67,
+        "delta": -0.949,
+        "pct": -6.942,
+        "release": 12.721
+      },
+      "serialization_count": {
+        "baseline": 4.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 4.0
+      },
+      "serialization_time_ms": {
+        "baseline": 0.22,
+        "delta": -0.028,
+        "pct": -12.727,
+        "release": 0.192
+      },
+      "validation_count": {
+        "baseline": 8.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 8.0
+      },
+      "validation_time_ms": {
+        "baseline": 11.321,
+        "delta": -0.926,
+        "pct": -8.179,
+        "release": 10.395
+      },
+      "write_count": {
+        "baseline": 6.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 6.0
+      },
+      "write_time_ms": {
+        "baseline": 0.53,
+        "delta": 0.011,
+        "pct": 2.075,
+        "release": 0.541
+      }
+    },
+    "reader": {
+      "archive_sheets_scanned": {
+        "baseline": 3.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 3.0
+      },
+      "capture_count": {
+        "baseline": 1.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 1.0
+      },
+      "capture_hash_count": {
+        "baseline": 1.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 1.0
+      },
+      "formula_count": {
+        "baseline": 2.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 2.0
+      },
+      "openpyxl_load_count": {
+        "baseline": 2.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 2.0
+      },
+      "selected_cell_count": {
+        "baseline": 32.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 32.0
+      },
+      "selected_row_count": {
+        "baseline": 8.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 8.0
+      },
+      "selected_sheet_count": {
+        "baseline": 3.0,
+        "delta": 0.0,
+        "pct": 0.0,
+        "release": 3.0
+      }
+    }
+  },
+  "native_mcp": {
+    "baseline": "NOT_MEASURED",
+    "release": "NOT_MEASURED"
+  },
+  "outcomes": {
+    "correctness": {
+      "limitation": null,
+      "status": "VERIFIED"
+    },
+    "optimization_demonstrated": {
+      "candidate": "public_workflow_context_reuse",
+      "limitation": "selected candidate did not reduce every measured duplicate count",
+      "measurements": {
+        "capture_count": {
+          "baseline": 1.0,
+          "delta": 0.0,
+          "pct": 0.0,
+          "release": 1.0
+        },
+        "xlsx_parse_count": {
+          "baseline": 1.0,
+          "delta": 0.0,
+          "pct": 0.0,
+          "release": 1.0
+        }
+      },
+      "status": "NOT_MEASURED"
+    },
+    "regression_threshold": {
+      "limitation": "one or more regression thresholds failed",
+      "samples": {
+        "baseline": {
+          "canonical_workloads": [
+            "cold_workbook",
+            "same_view_repeat",
+            "different_selection",
+            "analyst_validator_reuse",
+            "repeated_investigation",
+            "large_retained_context",
+            "multi_workbook",
+            "blocking_cancellation",
+            "approved_changed_brief",
+            "selected_sheet_stress",
+            "history-10",
+            "history-100",
+            "synthesis_cancellation",
+            "persistence_phases"
+          ],
+          "deterministic_workloads": [
+            "cold_workbook",
+            "same_view_repeat",
+            "different_selection",
+            "analyst_validator_reuse",
+            "repeated_investigation",
+            "large_retained_context",
+            "multi_workbook",
+            "blocking_cancellation",
+            "public_workflow_context_reuse"
+          ],
+          "fixture": "analyst_multisheet.xlsx",
+          "fixture_sha256": "3f381b148ab6f2d0942061964b3851b26e4a66c224dd0866d431cc3c9d52d123",
+          "limits": {
+            "max_bytes": 25000000,
+            "max_cells": 250000,
+            "max_expanded_bytes": 100000000,
+            "max_merged_cells_per_range": 100000,
+            "max_merged_ranges": 10000,
+            "max_result_rows": 10000,
+            "max_rows": 50000,
+            "max_total_merged_cells": 500000
+          },
+          "measured_runs": 10,
+          "parameters": {
+            "cold_sample_count": 10,
+            "history_sizes": [
+              10,
+              100,
+              1000
+            ],
+            "timing_sample_count": 10
+          },
+          "patterns": [
+            "ANALYZE",
+            "CHALLENGE_RECOMMENDATION",
+            "CONCURRENT",
+            "DIRECT",
+            "HANDOFF"
+          ],
+          "samples_per_process_run": 10,
+          "scenario_workloads": [
+            "approved_changed_brief",
+            "changed_brief",
+            "changed_selection",
+            "selected_sheet_stress",
+            "history-10",
+            "history-100",
+            "history-1000",
+            "correction",
+            "workbook_cancellation",
+            "synthesis_cancellation",
+            "persistence_phases"
+          ],
+          "warmups": 2
+        },
+        "release": {
+          "canonical_workloads": [
+            "cold_workbook",
+            "same_view_repeat",
+            "different_selection",
+            "analyst_validator_reuse",
+            "repeated_investigation",
+            "large_retained_context",
+            "multi_workbook",
+            "blocking_cancellation",
+            "approved_changed_brief",
+            "selected_sheet_stress",
+            "history-10",
+            "history-100",
+            "synthesis_cancellation",
+            "persistence_phases"
+          ],
+          "deterministic_workloads": [
+            "cold_workbook",
+            "same_view_repeat",
+            "different_selection",
+            "analyst_validator_reuse",
+            "repeated_investigation",
+            "large_retained_context",
+            "multi_workbook",
+            "blocking_cancellation",
+            "public_workflow_context_reuse"
+          ],
+          "fixture": "analyst_multisheet.xlsx",
+          "fixture_sha256": "3f381b148ab6f2d0942061964b3851b26e4a66c224dd0866d431cc3c9d52d123",
+          "limits": {
+            "max_bytes": 25000000,
+            "max_cells": 250000,
+            "max_expanded_bytes": 100000000,
+            "max_merged_cells_per_range": 100000,
+            "max_merged_ranges": 10000,
+            "max_result_rows": 10000,
+            "max_rows": 50000,
+            "max_total_merged_cells": 500000
+          },
+          "measured_runs": 10,
+          "parameters": {
+            "cold_sample_count": 10,
+            "history_sizes": [
+              10,
+              100,
+              1000
+            ],
+            "timing_sample_count": 10
+          },
+          "patterns": [
+            "ANALYZE",
+            "CHALLENGE_RECOMMENDATION",
+            "CONCURRENT",
+            "DIRECT",
+            "HANDOFF"
+          ],
+          "samples_per_process_run": 10,
+          "scenario_workloads": [
+            "approved_changed_brief",
+            "changed_brief",
+            "changed_selection",
+            "selected_sheet_stress",
+            "history-10",
+            "history-100",
+            "history-1000",
+            "correction",
+            "workbook_cancellation",
+            "synthesis_cancellation",
+            "persistence_phases"
+          ],
+          "warmups": 2
+        }
+      },
+      "status": "FAILED",
+      "thresholds": {
+        "gate_cold_noise_floor": true,
+        "gate_pattern_latency": false,
+        "gate_reader_metrics": true,
+        "gate_timing_paths": true,
+        "p95_regression_pct": 20,
+        "peak_allocation_regression_pct": 15,
+        "soak_runs": 100,
+        "tool_calls_per_finding_increase": 0
+      }
+    }
+  },
+  "regression": {
+    "cold_p95_pct": -54.272,
+    "economics_per_accepted_finding_delta": {
+      "external_http_requests": 0.0,
+      "input_tokens": 0.0,
+      "local_tool_calls": 0.0,
+      "mcp_tool_calls": 0.0,
+      "model_calls": 0.0,
+      "output_tokens": 0.0,
+      "tool_calls_total": 0.0
+    },
+    "p95_pct": 27.781,
+    "pattern_p95_pct": {
+      "ANALYZE": -0.54,
+      "CHALLENGE_RECOMMENDATION": -0.743,
+      "CONCURRENT": 0.198,
+      "DIRECT": 0.645,
+      "HANDOFF": 0.623
+    },
+    "peak_allocation_pct": 0.006,
+    "rss_pct": 0.126,
+    "timing_paths_pct": {
+      "analyst_validator_reuse": -15.8,
+      "approved_changed_brief": -0.285,
+      "cold_workbook": -54.272,
+      "history-10": -55.962,
+      "history-100": -60.629,
+      "repeated_investigation": -5.973,
+      "same_view_repeat": -9.885
+    }
+  },
+  "release": {
+    "economics_per_accepted_finding": {
+      "external_http_requests": 1.0,
+      "input_tokens": 0.0,
+      "local_tool_calls": 41.0,
+      "mcp_tool_calls": 0.0,
+      "model_calls": 80.0,
+      "output_tokens": 0.0,
+      "tool_calls_total": 1.0
+    },
+    "p95_ms": 18.472,
+    "peak_allocation_bytes": 1065582,
+    "timing_paths": {
+      "analyst_validator_reuse": {
+        "noise_floor_ms": 0.03,
+        "p50_ms": 0.375,
+        "p95_ms": 0.405,
+        "sample_count": 10,
+        "samples_ms": [
+          0.435,
+          0.392,
+          0.405,
+          0.4,
+          0.374,
+          0.375,
+          0.372,
+          0.375,
+          0.373,
+          0.372
+        ],
+        "wall_time_ms": 0.405
+      },
+      "approved_changed_brief": {
+        "noise_floor_ms": 70.857,
+        "p50_ms": 1117.386,
+        "p95_ms": 1188.243,
+        "sample_count": 10,
+        "samples_ms": [
+          1155.39,
+          1050.276,
+          1204.603,
+          1148.502,
+          1188.243,
+          1090.8,
+          1118.194,
+          1109.583,
+          1117.386,
+          1058.962
+        ],
+        "wall_time_ms": 1188.243
+      },
+      "cold_workbook": {
+        "noise_floor_ms": 1.506,
+        "p50_ms": 17.139,
+        "p95_ms": 18.645,
+        "sample_count": 10,
+        "samples_ms": [
+          15.862,
+          16.197,
+          15.498,
+          19.869,
+          18.092,
+          17.389,
+          17.139,
+          15.856,
+          18.645,
+          17.165
+        ],
+        "wall_time_ms": 18.645
+      },
+      "direct_workbook": {
+        "p50_ms": 14.217,
+        "p90_ms": 18.472,
+        "p95_ms": 18.472,
+        "sample_count": 10
+      },
+      "history-10": {
+        "noise_floor_ms": 8.101,
+        "p50_ms": 40.428,
+        "p95_ms": 48.529,
+        "sample_count": 10,
+        "samples_ms": [
+          40.428,
+          29.31,
+          37.13,
+          37.35,
+          47.304,
+          45.515,
+          34.471,
+          49.875,
+          48.529,
+          47.577
+        ],
+        "wall_time_ms": 48.529
+      },
+      "history-100": {
+        "noise_floor_ms": 67.801,
+        "p50_ms": 101.796,
+        "p95_ms": 169.597,
+        "sample_count": 100,
+        "samples_ms": [
+          37.808,
+          30.467,
+          34.568,
+          36.83,
+          41.122,
+          44.009,
+          45.639,
+          45.369,
+          46.413,
+          48.904,
+          48.167,
+          51.172,
+          51.093,
+          55.036,
+          57.495,
+          57.654,
+          58.462,
+          65.106,
+          63.577,
+          65.199,
+          65.799,
+          64.867,
+          67.853,
+          66.808,
+          69.129,
+          71.415,
+          70.147,
+          70.145,
+          70.898,
+          75.911,
+          79.452,
+          94.094,
+          76.885,
+          81.295,
+          85.95,
+          85.97,
+          91.348,
+          94.78,
+          86.53,
+          87.804,
+          90.507,
+          90.551,
+          90.465,
+          95.307,
+          92.938,
+          95.203,
+          100.484,
+          99.699,
+          104.57,
+          101.796,
+          113.709,
+          91.192,
+          105.25,
+          105.143,
+          108.072,
+          112.24,
+          109.211,
+          115.307,
+          114.723,
+          112.69,
+          113.7,
+          120.348,
+          116.787,
+          121.686,
+          147.14,
+          119.485,
+          125.958,
+          130.929,
+          124.045,
+          125.726,
+          128.275,
+          146.477,
+          138.419,
+          132.516,
+          134.708,
+          141.331,
+          204.333,
+          138.196,
+          137.897,
+          142.279,
+          139.893,
+          140.702,
+          145.291,
+          158.376,
+          151.747,
+          166.849,
+          151.666,
+          153.366,
+          156.321,
+          170.292,
+          159.832,
+          156.457,
+          164.971,
+          171.969,
+          158.746,
+          164.56,
+          170.76,
+          171.464,
+          167.482,
+          169.597
+        ],
+        "wall_time_ms": 169.597
+      },
+      "repeated_investigation": {
+        "noise_floor_ms": 11.263,
+        "p50_ms": 70.784,
+        "p95_ms": 82.047,
+        "sample_count": 10,
+        "samples_ms": [
+          112.725,
+          82.047,
+          77.689,
+          77.821,
+          70.932,
+          70.698,
+          67.733,
+          70.784,
+          68.948,
+          67.322
+        ],
+        "wall_time_ms": 82.047
+      },
+      "same_view_repeat": {
+        "noise_floor_ms": 0.032,
+        "p50_ms": 0.36,
+        "p95_ms": 0.392,
+        "sample_count": 17,
+        "samples_ms": [
+          0.392,
+          0.373,
+          0.375,
+          0.367,
+          0.411,
+          0.359,
+          0.359,
+          0.361,
+          0.359,
+          0.36,
+          0.357,
+          0.36,
+          0.36,
+          0.367,
+          0.35,
+          0.348,
+          0.351
+        ],
+        "wall_time_ms": 0.392
+      },
+      "selected_sheet_stress": {
+        "noise_floor_ms": 0,
+        "sample_count": 0,
+        "samples_ms": [],
+        "wall_time_ms": 0
+      },
+      "warm_1": {
+        "wall_time_ms": 0.392
+      },
+      "warm_2_plus": {
+        "p95_ms": 0.375,
+        "sample_count": 10
+      }
+    }
+  },
+  "reused_stage_new_calls": [],
+  "workload": {
+    "canonical_workloads": [
+      "cold_workbook",
+      "same_view_repeat",
+      "different_selection",
+      "analyst_validator_reuse",
+      "repeated_investigation",
+      "large_retained_context",
+      "multi_workbook",
+      "blocking_cancellation",
+      "approved_changed_brief",
+      "selected_sheet_stress",
+      "history-10",
+      "history-100",
+      "synthesis_cancellation",
+      "persistence_phases"
+    ],
+    "deterministic_workloads": [
+      "cold_workbook",
+      "same_view_repeat",
+      "different_selection",
+      "analyst_validator_reuse",
+      "repeated_investigation",
+      "large_retained_context",
+      "multi_workbook",
+      "blocking_cancellation",
+      "public_workflow_context_reuse"
+    ],
+    "fixture": "analyst_multisheet.xlsx",
+    "fixture_sha256": "3f381b148ab6f2d0942061964b3851b26e4a66c224dd0866d431cc3c9d52d123",
+    "limits": {
+      "max_bytes": 25000000,
+      "max_cells": 250000,
+      "max_expanded_bytes": 100000000,
+      "max_merged_cells_per_range": 100000,
+      "max_merged_ranges": 10000,
+      "max_result_rows": 10000,
+      "max_rows": 50000,
+      "max_total_merged_cells": 500000
+    },
+    "measured_runs": 10,
+    "parameters": {
+      "cold_sample_count": 10,
+      "history_sizes": [
+        10,
+        100,
+        1000
+      ],
+      "timing_sample_count": 10
+    },
+    "patterns": [
+      "ANALYZE",
+      "CHALLENGE_RECOMMENDATION",
+      "CONCURRENT",
+      "DIRECT",
+      "HANDOFF"
+    ],
+    "samples_per_process_run": 10,
+    "scenario_workloads": [
+      "approved_changed_brief",
+      "changed_brief",
+      "changed_selection",
+      "selected_sheet_stress",
+      "history-10",
+      "history-100",
+      "history-1000",
+      "correction",
+      "workbook_cancellation",
+      "synthesis_cancellation",
+      "persistence_phases"
+    ],
+    "warmups": 2
+  }
+}
